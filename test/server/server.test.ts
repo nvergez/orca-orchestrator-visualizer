@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer } from '../../src/server/server.ts';
+import { tempDir } from '../fixtures/temp-dir.ts';
 
 /**
  * The server is driven over real HTTP against a stand-in for the built bundle. The JSON
@@ -11,7 +11,7 @@ import { createServer } from '../../src/server/server.ts';
  * owes is a process that serves the frontend out of the package's own dist/.
  */
 
-const clientDir = mkdtempSync(join(tmpdir(), 'orca-viz-client-'));
+const clientDir = tempDir();
 mkdirSync(join(clientDir, 'assets'));
 writeFileSync(join(clientDir, 'index.html'), '<!doctype html><title>orca-viz</title>');
 writeFileSync(join(clientDir, 'assets', 'index.js'), 'console.log("orca-viz")');
@@ -53,5 +53,13 @@ describe('the web server', () => {
     const response = await fetch(`${origin}/assets/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd`);
 
     expect(response.status).toBe(403);
+  });
+
+  it('survives a malformed percent-escape rather than taking the process down', async () => {
+    const response = await fetch(`${origin}/%`);
+
+    expect(response.status).toBe(403);
+    // …and the server is still up to answer the next request.
+    expect((await fetch(`${origin}/`)).status).toBe(200);
   });
 });

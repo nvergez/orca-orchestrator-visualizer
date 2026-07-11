@@ -137,7 +137,11 @@ export class FixtureBuilder {
     coordinator_runs: [],
   };
 
-  constructor(private readonly schema: SchemaOptions = {}) {}
+  private readonly schema: SchemaOptions;
+
+  constructor(schema: SchemaOptions = {}) {
+    this.schema = schema;
+  }
 
   task(input: TaskInput): this {
     const id = input.id ?? syntheticId('task', `task:${this.rows.tasks.length}`);

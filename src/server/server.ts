@@ -26,7 +26,12 @@ const CONTENT_TYPES: Record<string, string> = {
  * the bundle directory (`..`, absolute paths, encoded traversal).
  */
 function resolveAsset(clientDir: string, urlPath: string): string | null {
-  const decoded = decodeURIComponent(urlPath);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return null; // A malformed escape (`/%`) — decodeURIComponent throws on it.
+  }
   const candidate = normalize(join(clientDir, decoded));
   if (candidate !== clientDir && !candidate.startsWith(clientDir + sep)) return null;
   return candidate;

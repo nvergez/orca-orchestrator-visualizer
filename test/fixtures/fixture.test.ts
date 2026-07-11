@@ -1,6 +1,6 @@
-import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { FixtureBuilder, handleFor } from './builder.ts';
+import { closeFixtures, count, openFixture, rows } from './read.ts';
 import { tempDbPath } from './temp-dir.ts';
 
 /**
@@ -13,28 +13,21 @@ import { tempDbPath } from './temp-dir.ts';
  * instead of shipping a permanently empty panel.
  */
 
-function openFixture(builder: FixtureBuilder): DatabaseSync {
-  return new DatabaseSync(builder.write(tempDbPath()), { readOnly: true });
-}
-
-function rowsOf(db: DatabaseSync, sql: string): Record<string, unknown>[] {
-  return db.prepare(sql).all() as Record<string, unknown>[];
-}
-
-function countOf(db: DatabaseSync, sql: string): number {
-  return (db.prepare(sql).get() as { n: number }).n;
-}
+afterEach(closeFixtures);
 
 const AT = new Date('2026-07-08T12:32:13Z');
 const LATER = new Date('2026-07-08T12:38:28.374Z');
 const CODER = handleFor('coder');
 const COORDINATOR = handleFor('coordinator');
 
+const columnsOfTable = (db: Parameters<typeof rows>[0], table: string) =>
+  rows(db, `PRAGMA table_info(${table})`).map((column) => column.name);
+
 describe('the fixture database', () => {
   it('creates Orca schema v5 — all five tables, user_version 5', () => {
     const db = openFixture(new FixtureBuilder());
 
-    const tables = rowsOf(
+    const tables = rows(
       db,
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
     ).map((row) => row.name);
@@ -43,11 +36,11 @@ describe('the fixture database', () => {
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 5 });
   });
 
-  it('is byte-for-byte reproducible from the same inputs', () => {
+  it('is reproducible: the same inputs make the same rows', () => {
     const build = () => new FixtureBuilder().task({ createdAt: AT, handle: CODER, title: 'ship it' });
 
-    const [first] = rowsOf(openFixture(build()), 'SELECT * FROM tasks');
-    const [second] = rowsOf(openFixture(build()), 'SELECT * FROM tasks');
+    const [first] = rows(openFixture(build()), 'SELECT * FROM tasks');
+    const [second] = rows(openFixture(build()), 'SELECT * FROM tasks');
 
     expect(first).toEqual(second);
     expect(first?.id).toMatch(/^task_[0-9a-f]{12}$/);
@@ -67,8 +60,8 @@ describe('the traps (SPEC §4.2)', () => {
       })
     );
 
-    expect(countOf(db, `SELECT COUNT(*) AS n FROM messages WHERE type = 'decision_gate'`)).toBe(1);
-    expect(countOf(db, 'SELECT COUNT(*) AS n FROM decision_gates')).toBe(0);
+    expect(count(db, `SELECT COUNT(*) AS n FROM messages WHERE type = 'decision_gate'`)).toBe(1);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM decision_gates')).toBe(0);
   });
 
   it('trap 1 (additive): decision_gates rows can still be written, for the merge case', () => {
@@ -76,7 +69,7 @@ describe('the traps (SPEC §4.2)', () => {
       new FixtureBuilder().gate({ taskId: 'task_abc', question: 'Which driver?', options: ['a', 'b'], createdAt: AT })
     );
 
-    expect(rowsOf(db, 'SELECT task_id, question, options, status FROM decision_gates')).toEqual([
+    expect(rows(db, 'SELECT task_id, question, options, status FROM decision_gates')).toEqual([
       { task_id: 'task_abc', question: 'Which driver?', options: '["a","b"]', status: 'pending' },
     ]);
   });
@@ -92,10 +85,10 @@ describe('the traps (SPEC §4.2)', () => {
 
     // The SQL side: 'YYYY-MM-DD HH:MM:SS', UTC, no zone marker.
     const SQL_FORMAT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
-    const task = rowsOf(db, 'SELECT created_at, completed_at FROM tasks')[0]!;
-    const dispatch = rowsOf(db, 'SELECT dispatched_at, completed_at, last_heartbeat_at FROM dispatch_contexts')[0]!;
-    const message = rowsOf(db, 'SELECT created_at, delivered_at FROM messages')[0]!;
-    const run = rowsOf(db, 'SELECT created_at, completed_at FROM coordinator_runs')[0]!;
+    const task = rows(db, 'SELECT created_at, completed_at FROM tasks')[0]!;
+    const dispatch = rows(db, 'SELECT dispatched_at, completed_at, last_heartbeat_at FROM dispatch_contexts')[0]!;
+    const message = rows(db, 'SELECT created_at, delivered_at FROM messages')[0]!;
+    const run = rows(db, 'SELECT created_at, completed_at FROM coordinator_runs')[0]!;
 
     expect(task.created_at).toBe('2026-07-08 12:32:13');
     expect(dispatch.dispatched_at).toMatch(SQL_FORMAT);
@@ -115,7 +108,7 @@ describe('the traps (SPEC §4.2)', () => {
       new FixtureBuilder().task({ createdAt: AT, handle: null }).task({ createdAt: AT, handle: CODER })
     );
 
-    expect(countOf(db, 'SELECT COUNT(*) AS n FROM tasks WHERE created_by_terminal_handle IS NULL')).toBe(1);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM tasks WHERE created_by_terminal_handle IS NULL')).toBe(1);
   });
 
   it('trap 8: a message payload.taskId can point at a task that no longer exists', () => {
@@ -131,9 +124,10 @@ describe('the traps (SPEC §4.2)', () => {
     );
 
     // No foreign keys: the reference survives the task. Any message → task join must miss.
-    const referenced = rowsOf(db, `SELECT json_extract(payload, '$.taskId') AS task_id FROM messages`);
-    expect(referenced).toEqual([{ task_id: 'task_wiped_by_a_reset' }]);
-    expect(countOf(db, `SELECT COUNT(*) AS n FROM tasks WHERE id = 'task_wiped_by_a_reset'`)).toBe(0);
+    expect(rows(db, `SELECT json_extract(payload, '$.taskId') AS task_id FROM messages`)).toEqual([
+      { task_id: 'task_wiped_by_a_reset' },
+    ]);
+    expect(count(db, `SELECT COUNT(*) AS n FROM tasks WHERE id = 'task_wiped_by_a_reset'`)).toBe(0);
   });
 
   it('one task can have several dispatch_contexts rows — the retry and circuit-breaker story', () => {
@@ -151,20 +145,15 @@ describe('the traps (SPEC §4.2)', () => {
         })
     );
 
-    const attempts = rowsOf(
-      db,
-      `SELECT status, failure_count FROM dispatch_contexts WHERE task_id = 'task_flaky' ORDER BY rowid`
-    );
-
-    expect(attempts).toEqual([
+    expect(
+      rows(db, `SELECT status, failure_count FROM dispatch_contexts WHERE task_id = 'task_flaky' ORDER BY rowid`)
+    ).toEqual([
       { status: 'failed', failure_count: 1 },
       { status: 'failed', failure_count: 2 },
       { status: 'circuit_broken', failure_count: 3 },
     ]);
     // The latest attempt is MAX(rowid) — the source's own queries do this (SPEC §4.1).
-    expect(rowsOf(db, `SELECT failure_count AS n FROM dispatch_contexts ORDER BY rowid DESC LIMIT 1`)).toEqual([
-      { n: 3 },
-    ]);
+    expect(count(db, 'SELECT failure_count AS n FROM dispatch_contexts ORDER BY rowid DESC LIMIT 1')).toBe(3);
   });
 
   it('an orchestration reset leaves a gap between sqlite_sequence and the surviving messages', () => {
@@ -178,9 +167,9 @@ describe('the traps (SPEC §4.2)', () => {
       })
     );
 
-    expect(countOf(db, 'SELECT MIN(sequence) AS n FROM messages')).toBe(407);
-    expect(countOf(db, `SELECT seq AS n FROM sqlite_sequence WHERE name = 'messages'`)).toBe(407);
-    expect(countOf(db, 'SELECT COUNT(*) AS n FROM messages')).toBe(1);
+    expect(count(db, 'SELECT MIN(sequence) AS n FROM messages')).toBe(407);
+    expect(count(db, `SELECT seq AS n FROM sqlite_sequence WHERE name = 'messages'`)).toBe(407);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM messages')).toBe(1);
   });
 });
 
@@ -190,28 +179,27 @@ describe('schema drift (SPEC §5)', () => {
       new FixtureBuilder({ userVersion: 4 }).task({ createdAt: AT, handle: CODER, title: 'dropped on the floor' })
     );
 
-    const columns = rowsOf(db, 'PRAGMA table_info(tasks)').map((column) => column.name);
-    expect(columns).not.toContain('task_title');
-    expect(columns).not.toContain('display_name');
-    expect(columns).toContain('created_by_terminal_handle');
+    expect(columnsOfTable(db, 'tasks')).not.toContain('task_title');
+    expect(columnsOfTable(db, 'tasks')).not.toContain('display_name');
+    expect(columnsOfTable(db, 'tasks')).toContain('created_by_terminal_handle');
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 4 });
-    expect(countOf(db, 'SELECT COUNT(*) AS n FROM tasks')).toBe(1);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM tasks')).toBe(1);
   });
 
   it('user_version 3: created_by_terminal_handle is absent too, so every task is unattributed', () => {
     const db = openFixture(new FixtureBuilder({ userVersion: 3 }).task({ createdAt: AT, handle: CODER }));
 
-    const columns = rowsOf(db, 'PRAGMA table_info(tasks)').map((column) => column.name);
-    expect(columns).not.toContain('created_by_terminal_handle');
-    expect(rowsOf(db, 'PRAGMA table_info(messages)').map((c) => c.name)).toContain('delivered_at');
+    expect(columnsOfTable(db, 'tasks')).not.toContain('created_by_terminal_handle');
+    expect(columnsOfTable(db, 'messages')).toContain('delivered_at');
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 3 });
   });
 
-  it('user_version 6: a newer Orca, rendering normally under a banner', () => {
+  it('user_version 6: a newer Orca, whose data still reads', () => {
     const db = openFixture(new FixtureBuilder({ userVersion: 6 }).task({ createdAt: AT, handle: CODER }));
 
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 6 });
-    expect(rowsOf(db, 'PRAGMA table_info(tasks)').map((c) => c.name)).toContain('task_title');
+    expect(columnsOfTable(db, 'tasks')).toContain('task_title');
+    expect(count(db, 'SELECT COUNT(*) AS n FROM tasks')).toBe(1);
   });
 
   it('unknown task statuses and message types survive in the file', () => {
@@ -221,13 +209,25 @@ describe('schema drift (SPEC §5)', () => {
         .message({ type: 'gossip', fromHandle: CODER, toHandle: COORDINATOR, subject: 'psst', createdAt: AT })
     );
 
-    expect(rowsOf(db, 'SELECT status FROM tasks')).toEqual([{ status: 'quarantined' }]);
-    expect(rowsOf(db, 'SELECT type FROM messages')).toEqual([{ type: 'gossip' }]);
+    expect(rows(db, 'SELECT status FROM tasks')).toEqual([{ status: 'quarantined' }]);
+    expect(rows(db, 'SELECT type FROM messages')).toEqual([{ type: 'gossip' }]);
   });
 
   it('rejects an unknown status at v5, because the real v5 CHECK constraint would', () => {
     expect(() =>
       new FixtureBuilder().task({ createdAt: AT, handle: CODER, status: 'quarantined' }).write(tempDbPath())
     ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('can drop the DAG core: a tasks table with no deps column at all', () => {
+    // SPEC §5's one legal hard-fail — the tool may refuse a database it cannot read the
+    // graph out of. Without a fixture that has no `deps`, that path cannot be tested.
+    const db = openFixture(
+      new FixtureBuilder({ omitColumns: { tasks: ['deps'] } }).task({ createdAt: AT, handle: CODER })
+    );
+
+    expect(columnsOfTable(db, 'tasks')).not.toContain('deps');
+    expect(columnsOfTable(db, 'tasks')).toContain('status');
+    expect(count(db, 'SELECT COUNT(*) AS n FROM tasks')).toBe(1);
   });
 });

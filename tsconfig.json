@@ -17,16 +17,18 @@
     "isolatedModules": true,
     "skipLibCheck": true,
 
-    // Source imports carry the real `.ts` extension so `node src/server/main.ts` runs
-    // them directly (native type stripping); tsc rewrites them to `.js` on emit.
+    // Source imports carry the real `.ts` extension so Node can run them directly under
+    // native type stripping; tsc rewrites them to `.js` on emit. `erasableSyntaxOnly`
+    // keeps that true — it bans the TypeScript syntax (enums, parameter properties,
+    // namespaces) that stripping cannot erase.
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
 
     "noEmit": true
   },
   "include": [
     "src/server",
-    "src/shared",
     "test/fixtures",
     "test/server",
     "vite.config.ts",

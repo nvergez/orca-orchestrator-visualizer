@@ -10,5 +10,5 @@
     "rootDir": "src",
     "sourceMap": true
   },
-  "include": ["src/server", "src/shared"]
+  "include": ["src/server"]
 }

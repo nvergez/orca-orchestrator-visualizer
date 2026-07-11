@@ -62,6 +62,8 @@ const UNATTRIBUTED_TASK_COUNT = 4;
 
 const MESSAGE_TOTAL = 466;
 const HEARTBEAT_TOTAL = 302;
+/** Heartbeats every dispatched task gets; the rest of the 302 go to the earliest tasks. */
+const HEARTBEATS_EACH = 4;
 const GATE_MESSAGE_TOTAL = 53;
 const GATES_WITH_A_TASK = 21;
 const OPEN_GATES = 13;
@@ -189,9 +191,11 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
     const coordinator = task.handle ?? coordinatorOf(task.runIndex);
     const attempts = attemptsFor(task, retriedTaskId);
 
-    // Heartbeats: 302 of 466 messages. The last one of the latest attempt is what the
-    // dispatch row's last_heartbeat_at carries, and what drives the "last seen" badge.
-    const heartbeats = 4 + (taskIndex < HEARTBEAT_TOTAL - 4 * dispatchedTasks.length ? 1 : 0);
+    // Heartbeats: 302 of 466 messages. Every dispatched task gets a base four, and the
+    // remainder is handed out one apiece to the earliest tasks until 302 is exact. The
+    // last beat of the latest attempt is what the dispatch row's last_heartbeat_at
+    // carries, and what drives the node's "last seen" badge.
+    const heartbeats = HEARTBEATS_EACH + (taskIndex < HEARTBEAT_TOTAL - HEARTBEATS_EACH * dispatchedTasks.length ? 1 : 0);
     const dispatchedAt = new Date(task.createdAt.getTime() + 0.5 * MINUTE);
     const finishedAt = task.completedAt ?? new Date(dispatchedAt.getTime() + 30 * MINUTE);
     const beat = (n: number) =>

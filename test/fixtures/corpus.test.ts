@@ -1,7 +1,7 @@
-import { DatabaseSync } from 'node:sqlite';
-import { beforeAll, describe, expect, it } from 'vitest';
+import type { DatabaseSync } from 'node:sqlite';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { liveShapeCorpus } from './corpus.ts';
-import { tempDbPath } from './temp-dir.ts';
+import { closeFixtures, count as countIn, openFixture, rows as rowsIn } from './read.ts';
 
 /**
  * The corpus reproduces the live database's shape, so "it works on the real thing" is a
@@ -12,16 +12,13 @@ import { tempDbPath } from './temp-dir.ts';
 let db: DatabaseSync;
 
 beforeAll(() => {
-  db = new DatabaseSync(liveShapeCorpus().write(tempDbPath()), { readOnly: true });
+  db = openFixture(liveShapeCorpus());
 });
 
-function count(sql: string): number {
-  return (db.prepare(sql).get() as { n: number }).n;
-}
+afterAll(closeFixtures);
 
-function rows<T = Record<string, unknown>>(sql: string): T[] {
-  return db.prepare(sql).all() as T[];
-}
+const count = (sql: string) => countIn(db, sql);
+const rows = <T = Record<string, unknown>>(sql: string) => rowsIn<T>(db, sql);
 
 describe('the live-shape corpus', () => {
   it('holds ~76 tasks, 4 of them with no terminal handle', () => {
@@ -30,20 +27,27 @@ describe('the live-shape corpus', () => {
   });
 
   it('groups into 13 runs: 12 handles plus the one unattributed bucket', () => {
-    const handles = count('SELECT COUNT(DISTINCT created_by_terminal_handle) AS n FROM tasks');
-    expect(handles).toBe(12);
-    expect(handles + 1).toBe(13);
+    // Run inference buckets by handle, and the null-handle tasks collect into one
+    // synthetic run rather than vanishing (SPEC §4.3). That is 13 buckets, and no handle
+    // bucket splits, because no run has an internal gap over 6h.
+    const buckets = rows<{ handle: string | null; n: number }>(
+      `SELECT created_by_terminal_handle AS handle, COUNT(*) AS n FROM tasks GROUP BY created_by_terminal_handle`
+    );
+
+    expect(buckets).toHaveLength(13);
+    expect(buckets.filter((bucket) => bucket.handle === null)).toEqual([{ handle: null, n: 4 }]);
   });
 
   it('leaves 4 of those 13 runs entirely edgeless', () => {
-    const withEdges = new Set(
+    const bucketsWithEdges = new Set(
       rows<{ handle: string | null }>(
-        `SELECT created_by_terminal_handle AS handle FROM tasks WHERE deps != '[]'`
+        `SELECT DISTINCT created_by_terminal_handle AS handle FROM tasks WHERE deps != '[]'`
       ).map((row) => row.handle)
     );
 
-    // The unattributed bucket has no edges either, and is the fourth edgeless run.
-    expect(12 - withEdges.size + 1).toBe(4);
+    expect(13 - bucketsWithEdges.size).toBe(4);
+    // The unattributed bucket is one of the four: none of its tasks has a dependency.
+    expect(bucketsWithEdges.has(null)).toBe(false);
   });
 
   it('leaves ~50 tasks as isolated singletons — no deps in, no deps out', () => {
@@ -55,11 +59,10 @@ describe('the live-shape corpus', () => {
   });
 
   it('spans 4 days, and holds one run overnight without a >6h gap between its tasks', () => {
-    const days = rows<{ day: string }>(`SELECT DISTINCT date(created_at) AS day FROM tasks ORDER BY day`);
-    expect(days.length).toBeGreaterThanOrEqual(4);
+    expect(rows(`SELECT DISTINCT date(created_at) AS day FROM tasks`).length).toBeGreaterThanOrEqual(4);
 
-    // The 13-task run that runs 20:10 → 06:58. A time-first clustering with a short idle
-    // threshold would shred it; the 6h rule holds it together.
+    // The 13-task run that runs 20:10 → 06:58. A short idle threshold would shred it;
+    // the 6h rule holds it together (SPEC §4.3 step 3).
     const overnight = rows<{ created_at: string }>(
       `SELECT created_at FROM tasks
        WHERE created_by_terminal_handle = (
@@ -71,10 +74,12 @@ describe('the live-shape corpus', () => {
 
     const gaps = overnight.slice(1).map((time, i) => time - overnight[i]!);
     expect(Math.max(...gaps)).toBeLessThan(6 * 60 * 60 * 1000);
-    expect(overnight[overnight.length - 1]! - overnight[0]!).toBeGreaterThan(10 * 60 * 60 * 1000);
+    expect(overnight.at(-1)! - overnight[0]!).toBeGreaterThan(10 * 60 * 60 * 1000);
   });
 
   it('has two handles whose runs genuinely overlap in time', () => {
+    // Which is why handle is the run key and time is only the tiebreaker: a time-first
+    // clustering would merge these two unrelated orchestrations into one.
     const spans = rows<{ handle: string; from: string; to: string }>(
       `SELECT created_by_terminal_handle AS handle, MIN(created_at) AS "from", MAX(created_at) AS "to"
        FROM tasks WHERE created_by_terminal_handle IS NOT NULL
@@ -99,12 +104,16 @@ describe('the live-shape corpus', () => {
     expect(count(`SELECT COUNT(*) AS n FROM messages WHERE type = 'decision_gate'`)).toBe(53);
     expect(count('SELECT COUNT(*) AS n FROM decision_gates')).toBe(0);
     // 21 of the 53 name a task; the rest can only attach to a run.
-    expect(count(`SELECT COUNT(*) AS n FROM messages
-                  WHERE type = 'decision_gate' AND json_extract(payload, '$.taskId') IS NOT NULL`)).toBe(21);
+    expect(
+      count(`SELECT COUNT(*) AS n FROM messages
+             WHERE type = 'decision_gate' AND json_extract(payload, '$.taskId') IS NOT NULL`)
+    ).toBe(21);
     // 13 were never answered: no reply threads on the gate message's id.
-    expect(count(`SELECT COUNT(*) AS n FROM messages g
-                  WHERE g.type = 'decision_gate'
-                    AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.thread_id = g.id)`)).toBe(13);
+    expect(
+      count(`SELECT COUNT(*) AS n FROM messages g
+             WHERE g.type = 'decision_gate'
+               AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.thread_id = g.id)`)
+    ).toBe(13);
   });
 
   it('leaves coordinator_runs empty, as it is in practice', () => {
@@ -112,7 +121,9 @@ describe('the live-shape corpus', () => {
   });
 
   it('carries payload.taskId on ~83% of messages', () => {
-    const withTaskId = count(`SELECT COUNT(*) AS n FROM messages WHERE json_extract(payload, '$.taskId') IS NOT NULL`);
+    const withTaskId = count(
+      `SELECT COUNT(*) AS n FROM messages WHERE json_extract(payload, '$.taskId') IS NOT NULL`
+    );
     const share = withTaskId / count('SELECT COUNT(*) AS n FROM messages');
 
     expect(share).toBeGreaterThan(0.8);
@@ -133,12 +144,12 @@ describe('the live-shape corpus', () => {
     expect(count('SELECT COUNT(DISTINCT task_id) AS n FROM dispatch_contexts')).toBe(66);
     expect(count('SELECT COUNT(*) AS n FROM dispatch_contexts')).toBe(71);
 
-    const retried = rows<{ task_id: string; attempts: number }>(
+    const retried = rows(
       'SELECT task_id, COUNT(*) AS attempts FROM dispatch_contexts GROUP BY task_id HAVING attempts > 1'
     );
     expect(retried).toHaveLength(3);
 
-    // Two tasks burned all three attempts and tripped the breaker (SPEC: it trips at 3).
+    // Two tasks burned all three attempts and tripped the breaker (it trips at 3).
     expect(count(`SELECT COUNT(*) AS n FROM dispatch_contexts WHERE status = 'circuit_broken'`)).toBe(2);
     expect(count('SELECT MAX(failure_count) AS n FROM dispatch_contexts')).toBe(3);
   });
@@ -149,15 +160,19 @@ describe('the live-shape corpus', () => {
     expect(count(`SELECT COUNT(*) AS n FROM tasks WHERE created_at NOT ${sqlFormat}`)).toBe(0);
     expect(count(`SELECT COUNT(*) AS n FROM messages WHERE created_at NOT ${sqlFormat}`)).toBe(0);
     expect(count(`SELECT COUNT(*) AS n FROM dispatch_contexts WHERE dispatched_at NOT ${sqlFormat}`)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS n FROM dispatch_contexts WHERE last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at NOT ${sqlFormat}`)).toBe(0);
 
     // tasks.completed_at is the odd one out: written from JS, so ISO-8601.
-    expect(count(`SELECT COUNT(*) AS n FROM tasks WHERE completed_at IS NOT NULL AND completed_at NOT LIKE '%T%Z'`)).toBe(0);
+    expect(
+      count(`SELECT COUNT(*) AS n FROM tasks WHERE completed_at IS NOT NULL AND completed_at NOT LIKE '%T%Z'`)
+    ).toBe(0);
     expect(count('SELECT COUNT(*) AS n FROM tasks WHERE completed_at IS NOT NULL')).toBe(57);
+
     // …and no task completed before it was created, once both are read as instants.
-    const completed = rows<{ created_at: string; completed_at: string }>(
+    for (const task of rows<{ created_at: string; completed_at: string }>(
       'SELECT created_at, completed_at FROM tasks WHERE completed_at IS NOT NULL'
-    );
-    for (const task of completed) {
+    )) {
       expect(Date.parse(`${task.created_at.replace(' ', 'T')}Z`)).toBeLessThan(Date.parse(task.completed_at));
     }
   });
@@ -174,7 +189,7 @@ describe('the live-shape corpus', () => {
   });
 
   it('is reproducible: the same corpus twice is the same database', () => {
-    const again = new DatabaseSync(liveShapeCorpus().write(tempDbPath()), { readOnly: true });
+    const again = openFixture(liveShapeCorpus());
 
     const digest = (handle: DatabaseSync) =>
       JSON.stringify([

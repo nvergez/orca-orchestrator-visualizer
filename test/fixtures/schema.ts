@@ -50,6 +50,12 @@ export type SchemaOptions = {
    * like — so this models drift rather than inventing an impossible database.
    */
   allowUnknownEnums?: boolean;
+  /**
+   * Columns to leave out beyond the ones the version already decides. The case this
+   * exists for is the DAG core: a `tasks` table with no `deps` is the one database SPEC
+   * §5 says the tool may refuse to open, and a fixture is the only way to test that.
+   */
+  omitColumns?: Partial<Record<TableName, string[]>>;
 };
 
 type Column = { name: string; type: string; constraints?: string };
@@ -58,8 +64,9 @@ function check(column: string, values: string[], allowUnknownEnums: boolean): st
   return allowUnknownEnums ? '' : `\n    CHECK(${column} IN (${values.map((v) => `'${v}'`).join(', ')}))`;
 }
 
-function tableColumns(table: string, options: Required<SchemaOptions>): Column[] {
+function tableColumns(table: TableName, options: Required<SchemaOptions>): Column[] {
   const { userVersion, allowUnknownEnums } = options;
+  const omitted = new Set(options.omitColumns[table] ?? []);
   const columns: Record<string, Column[]> = {
     tasks: [
       { name: 'id', type: 'TEXT', constraints: 'PRIMARY KEY' },
@@ -146,9 +153,10 @@ function tableColumns(table: string, options: Required<SchemaOptions>): Column[]
     ],
   };
 
-  const table_ = columns[table];
-  if (!table_) throw new Error(`unknown table: ${table}`);
-  return table_.filter((column) => (COLUMN_ADDED_AT[`${table}.${column.name}`] ?? 1) <= userVersion);
+  return (columns[table] ?? []).filter(
+    (column) =>
+      (COLUMN_ADDED_AT[`${table}.${column.name}`] ?? 1) <= userVersion && !omitted.has(column.name)
+  );
 }
 
 /** The tables a fixture creates, in the order Orca's own `db.ts` creates them. */
@@ -165,6 +173,7 @@ function withDefaults(options: SchemaOptions): Required<SchemaOptions> {
   return {
     userVersion: options.userVersion ?? CURRENT_SCHEMA_VERSION,
     allowUnknownEnums: options.allowUnknownEnums ?? false,
+    omitColumns: options.omitColumns ?? {},
   };
 }
 
