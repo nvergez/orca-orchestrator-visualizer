@@ -1,0 +1,14 @@
+{
+  // The only config that emits: the server, compiled to dist/server. The frontend is
+  // bundled into dist/client by Vite, and the tests never ship.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    // rootDir src + outDir dist puts the server at dist/server/ beside Vite's
+    // dist/client/, which is the layout server.ts resolves the bundle through.
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true
+  },
+  "include": ["src/server", "src/shared"]
+}
