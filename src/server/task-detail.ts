@@ -1,8 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Dispatch, TaskDetail } from '../shared/types.ts';
+import { parsePayload, taskIdOf } from '../shared/payload.ts';
+import { mergeReceipts, receiptOfResult, receiptOfWorkerDone } from '../shared/receipt.ts';
+import type { Completion, Dispatch, TaskDetail } from '../shared/types.ts';
 import { type Columns, selectWhere, text } from './rows.ts';
-import { DISPATCH_TASK_ID, hasColumn } from './schema.ts';
+import { COMPLETION_COLUMNS, DISPATCH_TASK_ID, hasColumn, MESSAGE_SEQUENCE } from './schema.ts';
 import { DISPATCH_COLUMNS, toDispatch } from './tasks.ts';
+import { isoInstant } from './time.ts';
 
 /**
  * The whole story of one task — what `GET /api/task/:id` reads, and the only place in this
@@ -49,12 +52,62 @@ export function readTaskDetail(db: DatabaseSync, columns: Columns, id: string): 
   const [row] = selectWhere(db, 'tasks', columns.tasks, TASK_BODY_COLUMNS, 'WHERE id = ? LIMIT 1', [id]);
   if (row === undefined) return null;
 
+  const result = text(row.result);
+  const completions = readCompletions(db, columns, id);
+
   return {
     id,
     spec: text(row.spec),
-    result: text(row.result),
+    result,
     attempts: readAttempts(db, columns, id),
+    // The whole receipt, merged across both evidence sources with provenance (#67): agreement
+    // deduplicates into one fact wearing two sources; conflict stays two facts. The compact,
+    // capped reading of the same evidence is the conversation's (`conversation.ts`).
+    receipt: mergeReceipts(receiptOfResult(result), ...completions.map((done) => receiptOfWorkerDone(done.payload))),
+    completions,
   };
+}
+
+/**
+ * Every `worker_done` message that named this task — the raw half of the outcome (#67).
+ *
+ * The payloads ride whole and verbatim (parsed when they parse, the string when they do not),
+ * because the recognized facts above are **additive**: whatever the readers did not recognize
+ * is still evidence, and the inspector renders it as it was written. A payload that names no
+ * task — or a task this is not — is not guessed in; it stays in the message feed where the
+ * attribution rules already place it (SPEC §4.4).
+ *
+ * Bounded the way the bodies are: read for the one clicked task, never in a snapshot.
+ */
+function readCompletions(db: DatabaseSync, columns: Columns, id: string): Completion[] {
+  // `type` finds the worker_done rows; `payload` is what they handed back. Losing either
+  // costs exactly this feature, and `meta.degraded` names it (`schema.ts`, #67).
+  if (!COMPLETION_COLUMNS.every((column) => hasColumn(columns, column))) return [];
+
+  // Sequence is the schema's one trustworthy order; an Orca too old to have it still wrote
+  // the rows in rowid order, which is the same insertion order the attempts lean on.
+  const order = hasColumn(columns, MESSAGE_SEQUENCE) ? 'sequence' : 'rowid';
+  const rows = selectWhere(
+    db,
+    'messages',
+    columns.messages,
+    ['id', 'type', 'payload', 'created_at'],
+    `WHERE type = 'worker_done' ORDER BY ${order}`
+  );
+
+  const completions: Completion[] = [];
+  for (const row of rows) {
+    const payload = parsePayload(row.payload);
+    if (taskIdOf(payload) !== id) continue;
+
+    completions.push({
+      messageId: text(row.id) ?? '',
+      at: isoInstant(row.created_at) ?? '',
+      payload,
+    });
+  }
+
+  return completions;
 }
 
 /**

@@ -264,8 +264,12 @@ describe('the messages referencing the task', () => {
     // trap 2), so they could never appear in it. `snapshot.turns` carries all four (SPEC §4.7) — so
     // the weaker list is gone rather than kept beside it, because a second copy of a truth is a
     // second copy that can disagree with the first.
+    //
+    // `completions` is not that list back again: it is the raw `worker_done` *payloads* — the
+    // outcome-receipt evidence (#67), which no turn carries — not the exchange, which stays the
+    // snapshot's alone.
     expect(detail).not.toHaveProperty('messages');
-    expect(Object.keys(detail).sort()).toEqual(['attempts', 'id', 'result', 'spec']);
+    expect(Object.keys(detail).sort()).toEqual(['attempts', 'completions', 'id', 'receipt', 'result', 'spec']);
   });
 
   it('are replaced by the task-scoped conversation, with both sides in it', async () => {

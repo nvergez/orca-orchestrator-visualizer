@@ -130,6 +130,8 @@ function detail(over: Partial<TaskDetail> = {}): TaskDetail {
     spec: 'Build the node inspector, and the route it exists for.',
     result: null,
     attempts: [],
+    receipt: [],
+    completions: [],
     ...over,
   };
 }
@@ -746,5 +748,111 @@ describe('the dependencies', () => {
 
     expect(within(panel).getByTestId('deps-in')).toHaveTextContent(/nothing/i);
     expect(within(panel).getByTestId('deps-out')).toHaveTextContent(/nothing/i);
+  });
+});
+
+/**
+ * The outcome receipts (#67, SPEC §12.4): the inspector is where the *whole* receipt lives —
+ * every recognized fact from both evidence sources, merged with its provenance on screen, and
+ * the complete raw evidence beside it. The conversation's compact summary points here.
+ */
+describe('the outcome receipts', () => {
+  const withReceipt = detail({
+    result: '{"branch":"nvergez/94-codex","filesModified":["src/a.ts"]}',
+    receipt: [
+      { kind: 'branch', value: 'nvergez/94-codex', sources: ['tasks.result · branch'] },
+      { kind: 'branch', value: 'nvergez/94-claude', sources: ['worker_done.payload · branch'] },
+      {
+        kind: 'file',
+        value: 'src/a.ts',
+        sources: ['tasks.result · filesModified', 'worker_done.payload · filesModified'],
+      },
+    ],
+    completions: [
+      {
+        messageId: 'msg_strange',
+        at: '2026-07-08T12:38:00.000Z',
+        payload: { taskId: TASK_ID, outcome: { nested: ['x'] }, score: 0.9 },
+      },
+    ],
+  });
+
+  it('shows every merged fact with its provenance on screen — a conflict stays two facts', async () => {
+    render(<App event={event()} loadTask={loaderFor(withReceipt)} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+
+    // The conflict: the result named one branch and the worker another. Both render, and
+    // each fact's caption says which column claimed it — the provenance is what makes the
+    // deduplicated file below honest, so it is on screen, not in a tooltip (#67).
+    expect(within(outcome).getByRole('button', { name: /copy the branch nvergez\/94-codex/i })).toBeInTheDocument();
+    expect(within(outcome).getByRole('button', { name: /copy the branch nvergez\/94-claude/i })).toBeInTheDocument();
+
+    const sources = within(outcome)
+      .getAllByTestId('receipt-sources')
+      .map((caption) => caption.textContent);
+    expect(sources).toContain('tasks.result · branch');
+    expect(sources).toContain('worker_done.payload · branch');
+    // The agreement: one chip, both provenances.
+    expect(sources).toContain('tasks.result · filesModified, worker_done.payload · filesModified');
+  });
+
+  it('keeps the raw completion payload verbatim — the shape nobody has seen most of all', async () => {
+    render(<App event={event()} loadTask={loaderFor(withReceipt)} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+    const raw = within(outcome).getByTestId('completion-payload');
+
+    // Schema tolerance applies to outcomes too (#67): the reader recognized none of this,
+    // and all of it reaches the screen anyway, as it was written.
+    expect(raw.textContent).toContain('"score": 0.9');
+    expect(raw.textContent).toContain('"nested"');
+    // The message id is real and Orca-written, so it is copyable (SPEC §7.9).
+    expect(within(outcome).getByRole('button', { name: /copy the message id msg_strange/i })).toBeInTheDocument();
+  });
+
+  it('renders a payload that never parsed as the string it is', async () => {
+    render(
+      <App
+        event={event()}
+        loadTask={loaderFor(
+          detail({
+            receipt: [],
+            completions: [{ messageId: 'msg_broken', at: '', payload: '{"files": [' }],
+          })
+        )}
+      />
+    );
+    await drawn(1);
+    const panel = await open();
+
+    expect(within(panel).getByTestId('completion-payload').textContent).toContain('{"files": [');
+  });
+
+  it('claims no space at all on a task with nothing recognized and no completion', async () => {
+    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    await drawn(1);
+    const panel = await open();
+
+    expect(within(panel).queryByTestId('outcome-receipts')).not.toBeInTheDocument();
+  });
+
+  it('never caps — this is where the conversation says the rest of the facts are', async () => {
+    const facts = Array.from({ length: 20 }, (_, n) => ({
+      kind: 'file' as const,
+      value: `src/generated/file-${n}.ts`,
+      sources: ['tasks.result · filesModified'],
+    }));
+    render(<App event={event()} loadTask={loaderFor(detail({ receipt: facts }))} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+    expect(within(outcome).getAllByRole('button', { name: /copy the file path/i })).toHaveLength(20);
+    expect(within(outcome).queryByTestId('receipt-omitted')).not.toBeInTheDocument();
   });
 });

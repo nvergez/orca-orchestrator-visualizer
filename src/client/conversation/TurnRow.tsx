@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { agentOfTurn, type CastMember, type Turn } from '../../shared/types.ts';
 import { agentLook } from '../canvas/theme.ts';
+import { ReceiptFacts } from '../receipt.tsx';
 import { ageOf } from '../relative-time.ts';
 import { themeOfTurn } from './theme.ts';
 
@@ -70,6 +71,14 @@ export function TurnRow({ turn, cast, now, onSelectTask }: TurnRowProps) {
       </header>
 
       <Bubble turn={turn} border={theme.border} out={out} onSelectTask={onSelectTask} />
+
+      {/* The compact receipt (#67): what this turn's evidence verifiably produced, as facts a
+          reader can act on — links open, paths copy. Outside the bubble, because the bubble
+          can be a button (a linked turn) and a link inside a button is a control inside a
+          control. Absent when nothing was recognized; the inspector holds the whole receipt. */}
+      {turn.receipt !== undefined && (
+        <ReceiptFacts facts={turn.receipt} omitted={turn.receiptOmitted} testId="turn-receipt" />
+      )}
 
       {/* The derivation, said out loud. See the note at the top of this file. */}
       <span data-testid="turn-source" className="text-muted-foreground/70 font-mono text-[10px]">

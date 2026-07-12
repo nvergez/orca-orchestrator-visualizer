@@ -24,7 +24,7 @@ import type { CastMember, FeedMessage, Meta, Run, StreamEvent, Task, Turn } from
  */
 
 /** Selecting a task swaps the dock to the inspector, and the inspector fetches. */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], receipt: [], completions: [] });
 
 const META: Meta = {
   dbPath: '/home/dev/.config/orca/orchestration.db',
@@ -493,5 +493,67 @@ describe('the empty conversation', () => {
     );
 
     expect(await screen.findByTestId('conversation-empty')).toHaveTextContent(/never attributed to a terminal/i);
+  });
+});
+
+describe('outcome receipts on a turn (#67)', () => {
+  /** A worker's completion, summarized: what it produced, as facts the panel can act on. */
+  function receiptTurn(over: Partial<Turn> = {}): Turn {
+    return turn({
+      kind: 'worker_done',
+      direction: 'in',
+      body: 'Three sentences of prose summary.',
+      receipt: [
+        {
+          kind: 'link',
+          value: 'https://gitlab.example.com/team/repo/-/merge_requests/3',
+          sources: ['worker_done.payload · prUrl'],
+        },
+        { kind: 'branch', value: 'nvergez/issue-67', sources: ['worker_done.payload · branch'] },
+        { kind: 'file', value: 'src/shared/receipt.ts', sources: ['worker_done.payload · filesModified'] },
+      ],
+      source: 'messages · #9',
+      ...over,
+    });
+  }
+
+  it('renders a validated URL as an ordinary link, whoever the provider is', async () => {
+    render(<App event={withTurns([receiptTurn()])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    const link = screen.getByTestId('receipt-link');
+
+    // Provider-neutral: the href is the URL, verbatim — no provider was consulted, and a
+    // self-hosted GitLab is exactly as much an outcome as GitHub (#67).
+    expect(link).toHaveAttribute('href', 'https://gitlab.example.com/team/repo/-/merge_requests/3');
+    // A receipt is untrusted text out of a database anyone can write to: a link out of it
+    // never gets this page's window, and never sends it a referrer.
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('renders paths and branches as copyable text, never as claims this machine can open them', async () => {
+    render(<App event={withTurns([receiptTurn()])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    // A copy affordance, not an <a href="file://…">: the path was true on the worker's
+    // machine at completion time, and copying is the one act that makes no further claim.
+    expect(screen.getByRole('button', { name: /copy the file path src\/shared\/receipt\.ts/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /copy the branch nvergez\/issue-67/i })).toBeVisible();
+    expect(screen.queryByRole('link', { name: /src\/shared\/receipt\.ts/ })).not.toBeInTheDocument();
+  });
+
+  it('says how many facts the cap cut, and that the inspector holds the rest', async () => {
+    render(<App event={withTurns([receiptTurn({ receiptOmitted: 22 })])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    expect(screen.getByTestId('receipt-omitted')).toHaveTextContent(/22 more/);
+  });
+
+  it('renders no receipt block at all on a turn that carries none', async () => {
+    render(<App event={withTurns([turn({ kind: 'worker_done', body: 'Prose only.' })])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    expect(screen.queryByTestId('turn-receipt')).not.toBeInTheDocument();
   });
 });

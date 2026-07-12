@@ -54,6 +54,16 @@ export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.id', 'messages.t
  */
 export const MESSAGE_PAYLOAD = 'messages.payload';
 
+/** What finds a message of one kind at all — the gates need it, and so do the completions (#67). */
+export const MESSAGE_TYPE = 'messages.type';
+
+/**
+ * What it takes to read an outcome receipt out of a worker's completion (#67): `type` to find
+ * the `worker_done` rows, `payload` to read what they handed back. Either alone reads nothing
+ * honest — rows that cannot be told apart, or rows with nothing in them to recognize.
+ */
+export const COMPLETION_COLUMNS = [MESSAGE_TYPE, MESSAGE_PAYLOAD] as const;
+
 /** What ties a dispatch attempt to the task it was made for — the whole retry history hangs on it. */
 export const DISPATCH_TASK_ID = 'dispatch_contexts.task_id';
 
@@ -163,6 +173,24 @@ const FEATURES: Feature[] = [
     anyOf: ['tasks.result'],
     degraded:
       'The result receipt — this Orca has no tasks.result column, so the inspector cannot show what a worker reported back.',
+  },
+  {
+    // The same column as the entry above, and a different feature (#67) — the pattern
+    // `MESSAGE_PAYLOAD` sets. Losing it costs the inspector the result body; it *also* costs
+    // the recognized facts that body would have carried, and only the facts read from this
+    // column: the worker's own completion payloads still summarize. An ordinary result the
+    // readers do not recognize is NOT this — unknown shapes render verbatim and degrade
+    // nothing (SPEC §12.4).
+    anyOf: ['tasks.result'],
+    degraded:
+      'Outcome receipts from task results — this Orca has no tasks.result column, so no files, branches, tickets or links can be recognized in what a task reported back; receipts from worker completion messages are unaffected.',
+  },
+  {
+    // The other evidence source an outcome has (#67). `type` finds the worker_done rows and
+    // `payload` is what they handed back — parts, not alternatives, so `allOf`.
+    allOf: COMPLETION_COLUMNS,
+    degraded:
+      'Outcome receipts from worker completions — this Orca is missing messages.type or messages.payload, so what a worker handed back with worker_done cannot be found or read: the inspector shows no completion payloads, and receipts come from task results alone.',
   },
   {
     // Everything a dispatch row is *for* hangs on this one column: with no `task_id`, no attempt

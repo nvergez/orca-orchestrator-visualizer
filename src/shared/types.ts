@@ -249,6 +249,34 @@ export type FeedMessage = {
 };
 
 /**
+ * One recognized outcome fact (#67, SPEC §12.4) — a thing a task verifiably produced, read out
+ * of `tasks.result` or a `worker_done` message's `payload` by the never-throw readers in
+ * `receipt.ts`.
+ *
+ * The kinds are this tool's, not Orca's: nothing anywhere validates either column, so a kind is
+ * what the reader could *recognize*, and everything it could not stays on screen verbatim (the
+ * raw result in the inspector, the raw payload beside it). Two rules are load-bearing:
+ *
+ * - **`link` is provider-neutral.** It means "a valid `http:`/`https:` URL" and nothing more —
+ *   no provider name is ever consulted, so a GitLab review link and a Jira ticket link are the
+ *   same kind of fact as a GitHub PR (#67).
+ * - **`sources` is the provenance, and it is why deduplication is allowed at all.** A fact both
+ *   columns stated is shown once with two sources; a fact they *disagree* on stays two facts.
+ *   Erasing either would be inventing a certainty the file does not hold.
+ */
+export type ReceiptFact = {
+  /**
+   * `file` and `report` are paths — copyable text, never a claim this machine can open them.
+   * `ticket` is an identifier (`ticket: 68`, `pr: 79` — the field name is in the provenance).
+   * `agent` is a completing-agent field. `link` is a validated URL, whoever hosts it.
+   */
+  kind: 'link' | 'branch' | 'ticket' | 'agent' | 'report' | 'file';
+  value: string;
+  /** The column and field it was read from — `'tasks.result · branch'` — one per source that stated it. */
+  sources: string[];
+};
+
+/**
  * One thing that was said — and **the reason this feature exists** (SPEC §4.7).
  *
  * **When the orchestrator dispatches an agent, it writes no message.** Orca injects the prompt
@@ -327,6 +355,15 @@ export type Turn = {
   beatCount?: number;
   /** The last beat of a `heartbeats` row, so the panel can say "every ~5 min". Absent elsewhere. */
   endedAt?: string;
+  /**
+   * The recognized outcome facts of a `result` or `worker_done` turn (#67) — **compact**:
+   * capped at `RECEIPT_PREVIEW_FACTS` and absent when nothing was recognized, for the same
+   * reason `truncated` exists — this object is re-sent whole every five seconds. The node
+   * inspector carries the whole receipt, merged across both sources, plus the raw evidence.
+   */
+  receipt?: ReceiptFact[];
+  /** How many recognized facts the cap cut. Absent when it cut none. */
+  receiptOmitted?: number;
 };
 
 /**
@@ -364,6 +401,23 @@ export function agentOfTurn(turn: Turn): string | null {
  * second copy that could disagree with the first — which is why the flat `messages` list that
  * used to live here is gone: it was the weaker half of a conversation the wire now carries whole.
  */
+/**
+ * One `worker_done` message that named this task — the second evidence source an outcome has
+ * (#67), kept whole and raw.
+ *
+ * `payload` is exactly what `parsePayload` made of the column: the parsed value when the text
+ * parses, the string itself when it does not. Never a lossy cast — an unknown shape reaching
+ * the screen verbatim is the entire point of carrying it.
+ */
+export type Completion = {
+  /** The message's own id — real, Orca-written, and so copyable (SPEC §7.9). */
+  messageId: string;
+  /** When it was sent. ISO, like every instant on this wire. */
+  at: string;
+  /** The payload, parsed when it parses — verbatim retained evidence either way. */
+  payload: unknown;
+};
+
 export type TaskDetail = {
   id: string;
   /** The prompt the agent was dispatched with. Null when the task has none. */
@@ -372,6 +426,15 @@ export type TaskDetail = {
   result: string | null;
   /** **Every** dispatch attempt, oldest first — never just the latest one. */
   attempts: Dispatch[];
+  /**
+   * The whole outcome receipt (#67): every recognized fact from both evidence sources —
+   * `tasks.result` and the completions below — merged with provenance. Agreement is one fact
+   * wearing two sources; conflict stays two facts. The conversation carries a capped preview
+   * of the same reading (`Turn.receipt`); this is the uncapped one.
+   */
+  receipt: ReceiptFact[];
+  /** Every `worker_done` message that named this task, oldest first, payloads raw. */
+  completions: Completion[];
 };
 
 /**

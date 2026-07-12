@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { receiptOfResult } from '../shared/receipt.ts';
 import type { Dispatch } from '../shared/types.ts';
 import { type Columns, type Row, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
@@ -54,19 +55,25 @@ const TASK_COLUMNS = [
 export const BODY_PREVIEW_CHARS = 240;
 
 /**
- * The bodies never cross the SQLite boundary in the first place.
+ * The spec never crosses the SQLite boundary whole.
  *
  * `substr` is what keeps that true now that the conversation wants the beginning of a spec:
  * SQLite slices the column and hands over 240 characters, and the other 3 KB of agent prompt
  * stays in the file. Reading the whole thing into the process to slice it here would be the
- * same waste the snapshot exists to avoid (SPEC §6.3).
+ * same waste the snapshot exists to avoid (SPEC §6.3). One character *past* the cap, so that
+ * "was there more?" is a fact about the string we hold rather than a guess: a preview longer
+ * than the cap is a body that was cut.
  *
- * One character *past* the cap, so that "was there more?" is a fact about the string we hold
- * rather than a guess: a preview longer than the cap is a body that was cut.
+ * **`result` used to be sliced here too, and no longer is** — the receipt readers (#67) parse
+ * it, and a truncated JSON receipt parses to nothing: the summary would silently vanish on
+ * exactly the results structured enough to have one. So the *result* is read whole into the
+ * process, its facts are recognized there, and what reaches the wire is still only the
+ * 240-character preview plus the compact facts. The asymmetry is the honest one: `spec` is
+ * whatever a person typed at their agents and grows without limit (the 172 KB dump was almost
+ * entirely spec text); `result` is the receipt the worker handed back.
  */
 const BODY_PREVIEW: Record<string, string> = {
   spec: `substr(spec, 1, ${BODY_PREVIEW_CHARS + 1}) AS spec`,
-  result: `substr(result, 1, ${BODY_PREVIEW_CHARS + 1}) AS result`,
 };
 
 /**
@@ -119,6 +126,10 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
         attempts: held,
         spec: preview(spec),
         result: preview(result),
+        // From the whole column (`BODY_PREVIEW` says why) — a receipt sliced at 240
+        // characters is malformed JSON, and the facts would vanish from exactly the results
+        // structured enough to carry them (#67).
+        resultReceipt: receiptOfResult(result),
         task: {
           id,
           // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
@@ -151,8 +162,9 @@ export type Preview = { text: string; truncated: boolean };
 function preview(body: string | null): Preview | null {
   if (body === null) return null;
 
-  // SQLite was asked for one character past the cap (`BODY_PREVIEW`), so a preview that is
-  // *longer* than the cap is the proof that the column held more — no second read, no guess.
+  // A string longer than the cap is the proof that the column held more — for the spec,
+  // because SQLite was asked for one character *past* the cap (`BODY_PREVIEW`); for the
+  // result, because the whole column is in hand. No second read, no guess.
   return body.length > BODY_PREVIEW_CHARS
     ? { text: body.slice(0, BODY_PREVIEW_CHARS), truncated: true }
     : { text: body, truncated: false };

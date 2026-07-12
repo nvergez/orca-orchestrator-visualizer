@@ -95,13 +95,19 @@ describe('the tasks in a snapshot', () => {
     const event = await harness.snapshot();
 
     // **A budget on the half of the payload that is re-sent on every push**, and a feature that
-    // grows it has to come here and say so. Two have.
+    // grows it has to come here and say so. Three have.
     //
     // The graph is ~74 KB of tasks, runs and the 53 gates. The conversation (SPEC §4.7) is the rest:
     // ~360 turns, and it is what this whole screen exists to show. It is bounded by the *row count*
     // of a database that holds 76 tasks and 466 messages — which is why it is allowed to be here at
     // all, and the 172 KB of `spec` text is not: that grows with how much a person typed at their
     // agents, without limit, and it is exactly what the omission in §6.3 was defending against.
+    //
+    // The third occupant is the compact outcome receipts (#67): ~24 KB of recognized facts on the
+    // corpus's 57 result and worker_done turns. Bounded twice over — by the row count like every
+    // turn, and by `RECEIPT_PREVIEW_FACTS` per turn, so a worker that names four hundred files
+    // costs eight chips and a count, never four hundred. The whole receipt stays on
+    // `GET /api/task/:id` with the bodies.
     //
     // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec and
     // says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let alone
@@ -110,13 +116,19 @@ describe('the tasks in a snapshot', () => {
     expect(event.snapshot.gates).toHaveLength(53);
     expect(event.snapshot.turns.length).toBeGreaterThan(300);
 
-    expect(JSON.stringify(event.snapshot).length).toBeLessThan(250_000);
+    expect(JSON.stringify(event.snapshot).length).toBeLessThan(275_000);
 
     // …and the ceiling means nothing without the thing it is a ceiling *against*: every spec in this
     // corpus is longer than the cap, and not one full body is on the wire.
     const specs = event.snapshot.turns.filter((turn) => turn.kind === 'dispatch');
     expect(specs.length).toBeGreaterThan(50);
     for (const turn of specs) expect(turn.body.length).toBeLessThanOrEqual(240);
+
+    // The same discipline for the receipts: the corpus really carries them, and none is over
+    // its cap — an uncapped receipt is how a file list becomes the next 172 KB.
+    const receipts = event.snapshot.turns.filter((turn) => turn.receipt !== undefined);
+    expect(receipts.length).toBeGreaterThan(50);
+    for (const turn of receipts) expect(turn.receipt!.length).toBeLessThanOrEqual(8);
   });
 });
 

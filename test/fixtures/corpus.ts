@@ -286,6 +286,11 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
 
     // worker_done: one per completed task, plus the failure receipts — a failed worker
     // still reports, it just reports a failure.
+    //
+    // A *completed* worker's payload carries the live shape verbatim: every real worker_done
+    // in the live database is `{taskId, dispatchId, filesModified, reportPath?}` — which is
+    // what makes the corpus exercise the outcome-receipt readers (#67) and what the snapshot
+    // budget in `tasks.test.ts` is priced against.
     if (task.status === 'completed' || task.status === 'failed') {
       messages.push({
         type: 'worker_done',
@@ -293,7 +298,14 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
         toHandle: coordinator,
         subject: task.status === 'completed' ? 'Done' : 'Failed: circuit breaker tripped',
         body: `Synthetic three-sentence summary for ${task.id}.`,
-        payload: { taskId: task.id, dispatchId: syntheticId('ctx', `${task.id}-attempt-0`) },
+        payload: {
+          taskId: task.id,
+          dispatchId: syntheticId('ctx', `${task.id}-attempt-0`),
+          ...(task.status === 'completed' && {
+            filesModified: [`src/${task.id}.ts`, `test/${task.id}.test.ts`],
+            reportPath: `docs/reports/${task.id}.md`,
+          }),
+        },
         createdAt: new Date(finishedAt.getTime() - 0.2 * MINUTE),
       });
     }
