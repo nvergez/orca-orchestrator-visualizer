@@ -173,7 +173,7 @@ These are the highest-value findings of the entire map. Each one, implemented na
 6. **`tasks.status` transitions are not recorded.** Six writers mutate it in place; `pending → ready` promotion is silent and untimestamped. What *is* timestamped: creation, each dispatch attempt, completion. **Do not build a status timeline that implies more than this** (#2 §3).
 7. **`tasks.result` / `completed_at` use `COALESCE(new, old)`** — a re-completion overwrites the first completion time. Don't promise "first completed at".
 8. **No foreign keys.** Every `task_id` reference is a soft string; after an `orchestration reset --tasks`, surviving messages point at tasks that no longer exist. **Any message → task join must tolerate a miss** (render the message in the feed, unattached to a node).
-9. **`GateStatus = 'timeout'` never occurs** — `timeoutGate()` has no callers outside tests.
+9. **A message-only ask timeout is not persisted.** `timeoutGate()` has no callers outside tests, and `orchestration.ask` returns `timedOut: true` without writing that fact. Therefore a reply-less message proves only **unanswered**, never timeout or blocking by itself. A `decision_gates.status = 'timeout'` row is nevertheless authoritative when present and must remain a distinct terminal state (#45).
 10. **The DB is never pruned.** It accumulates every run since the last manual reset (13 runs / 4 days in the live sample). You cannot assume the DB contains "the current run" — this is *why* run scoping exists.
 
 ### 4.3 The orchestrator, and its waves — server-side
@@ -221,7 +221,7 @@ Algorithm — recompute per tick from the tasks table:
 6. Derived per run: startedAt (min created_at), endedAt (max of completed_at /
    created_at), task count, per-status counts, the CAST (§4.3a), the WAVES,
    `live` = (meta.liveness === 'live') AND (any task is `ready` or
-   `dispatched`), `hasOpenGates` (§4.5).
+   `dispatched`), `hasBlockingGates` (§4.5).
 ```
 
 The **server owns this** — the client never re-derives it (#7 "Consequences for #9").
@@ -272,8 +272,10 @@ Per orchestrator, from its tasks' dispatch attempts:
 
 - The gate's **question and options** come from `payload` (`{question, options}`).
 - The gate's **task** is `payload.taskId` when present (21/53); a gate without one attaches to its **run** (via §4.4) but to no node.
-- **Resolution:** a gate is *resolved* when a reply message exists whose `thread_id` equals the gate message's `id` — `orchestration.ask` replies thread on the outbound message id (#2 §3). The reply's body is the resolution. No reply → the gate is **open**, which is what drives the gate strip (§7.4) and `run.hasOpenGates`.
-- *(Spec-level, strictly additive:)* if `decision_gates` rows *do* exist — Orca's built-in `Coordinator` loop and `gateCreate` write them, even though CLI-driven runs never do — merge them in, deduplicated by `(task_id, question)`. This can only add gates, never re-introduce the empty-panel failure. Never treat the table as the primary source.
+- **One gate, two records:** when a message and `decision_gates` row share `(task_id, question)`, they are a **gate twin** and must merge into one gate. Retain the message identity, attribution, question, and options; take lifecycle status and resolution from the row. The row is not discarded merely because the message was read first (#45).
+- **Lifecycle state is not blocking effect.** `Gate.status` records one of four facts: a table row's `pending`, `resolved`, or `timeout`, or `unanswered` when a message has neither a threaded reply nor a matching row. A threaded reply makes a message-only gate `resolved` and supplies its body as the resolution. Never infer `timeout` from age or the absence of a reply: `orchestration.ask` does not persist its timeout result (#45).
+- **Blocking is explicit and conservative.** A table-backed `pending` gate is blocking. `resolved` and `timeout` are terminal and non-blocking. An `unanswered` ask is non-blocking by default; it is blocking only while it names an existing task whose authoritative current `tasks.status` is `blocked`. Task-less, orphaned, and finished-run unanswered asks stay visible in history and conversation but raise no strip, node marker, run flag, or alert (#45).
+- **Table-only gates remain additive.** If a `decision_gates` row has no matching message, add it. Messages remain the primary source because CLI-driven asks may never create rows; table state is authoritative when a row exists. This preserves both real database shapes without treating either source as mutually exclusive.
 
 ### 4.6 Heartbeat → liveness (#7 §7)
 
@@ -446,7 +448,7 @@ type Run = {                                 // AN ORCHESTRATOR, and everything 
   waves: Wave[]                              // its bursts of work. Always ≥ 1 — §4.3
   statusCounts: Record<TaskStatus, number>
   live: boolean
-  hasOpenGates: boolean
+  hasBlockingGates: boolean                 // true iff any derived gate has blocking = true
   edgeCount: number                          // 0 ⇒ the edgeless empty state (§7.5)
 }
 
@@ -465,6 +467,17 @@ type Wave = {                                // the six-hour rule, made visible 
   idleGapBeforeMs: number | null             // null on the first — nothing precedes it
 }
 
+type Gate = {                                // one normalized decision gate — §4.5
+  id: string                                 // message id when present, otherwise table row id
+  messageId: string | null
+  runId: string | null; taskId: string | null
+  question: string; options: string[]
+  status: 'pending' | 'resolved' | 'timeout' | 'unanswered'
+  blocking: boolean                          // drives interruption; separate from lifecycle state
+  resolution: string | null
+  createdAt: string                          // ISO
+}
+
 type Turn = {                                // THE CONVERSATION — the four-source merge, §4.7
   id: string                                 // msg:<seq> | dispatch:<ctxId> | result:<taskId> | beats:<key>
   runId: string | null                       // null ⇒ nothing in the schema places it (§4.4 rule 3)
@@ -481,7 +494,7 @@ type Turn = {                                // THE CONVERSATION — the four-so
   // 360 turns is 27 KB of nothing:
   truncated?: boolean                        // body was cut; the inspector has the rest
   options?: string[]                         // a gate's options
-  answer?: string                            // the reply that threaded on it; absent ⇒ still open
+  answer?: string                            // the reply that threaded on it; absent ⇒ unanswered
   beatCount?: number; endedAt?: string       // a `heartbeats` row: how many, over what span
   // The AGENT side of the turn is DERIVED (`agentOfTurn`), never carried: it is always one of the
   // two handles already here, and a third copy of a uuid in an object re-sent every five seconds
@@ -503,8 +516,7 @@ type Task = {
     lastHeartbeatAt: string | null           // the last-seen badge (§4.6)
   } | null
   attemptCount: number                       // > 1 ⇒ this task was retried
-  gate: { messageId: string; question: string; options: string[]
-          status: 'open' | 'resolved'; resolution: string | null } | null   // §4.5
+  gate: Gate | null                          // a blocking gate first, otherwise latest history — §4.5
 }
 
 type FeedMessage = {
@@ -565,7 +577,7 @@ Every dependency here is bundled at build time and **none of them is a runtime d
 
 ```
 ┌──────────────────┬──────────────────────────────────────────┬─────────────────────┐
-│  ORCHESTRATORS   │  ⚠ GATE STRIP (only when open gates exist)│   RIGHT DOCK        │
+│  ORCHESTRATORS   │  ⚠ GATE STRIP (blocking gates only)       │   RIGHT DOCK        │
 │                  ├──────────────────────────────────────────┤   one panel, swaps: │
 │  ● label         │              DAG CANVAS                   │                     │
 │    term_2ffffb19 │        (exactly one orchestrator)         │   • CONVERSATION    │
@@ -581,7 +593,7 @@ Every dependency here is bundled at build time and **none of them is a runtime d
 - **Left rail** — the list of **orchestrators**, with **the cast nested under the open one** (§7.2).
 - **Centre** — the DAG canvas, showing **exactly one orchestrator**, in **waves** (§7.5).
 - **Right dock** — **one** panel that *swaps*: the **conversation** (default, §7.7) ⇄ the **node inspector** (on node selection, §7.8). Not both stacked — at this node count the canvas deserves the width.
-- **Gate strip** — above the canvas, appearing **only** when the selected orchestrator has unresolved gates. Gates *block* an orchestration; they must interrupt, not sit in a tab you forget to open. It is not a standing panel.
+- **Gate strip** — above the canvas, appearing **only** when the selected orchestrator has blocking decision gates. A proven block must interrupt, not sit in a tab you forget to open; an unanswered historical ask is not enough evidence to interrupt. It is not a standing panel.
 - **Agent roster — no longer cut, and no longer a roster.** #7 cut it because everything it would show was already on the node badge. What it could not see then is that the *agent* is the pivot the whole screen turns on, and that "which of these nodes are A2's" is a question the badges could never answer without you reading eight hex on every card. So it is not a panel: it is the **cast**, nested under the orchestrator that spawned it, and clicking a member re-scopes the canvas *and* the dock at once.
 
 ### 7.2 The orchestrator rail, and the cast (#7 §1, §3; §4.3, §4.3a)
@@ -623,9 +635,9 @@ The DB never prunes; 13 runs across 4 days sit in it right now. There is **no "h
 
 ### 7.4 The gate strip (#7 §4, §8)
 
-Appears above the canvas **only** when the selected run has open gates (§4.5). Each entry shows the question, the options, and the task it blocks (clicking selects that node). **Read-only** — it displays the gate; it never offers to resolve it (#1).
+Appears above the canvas **only** when the selected run has gates whose `blocking` flag is true (§4.5). Each entry shows the question, the options, and the task it blocks (clicking selects that node). **Read-only** — it displays the gate; it never offers to resolve it (#1).
 
-**Derived from `decision_gate` messages, never the `decision_gates` table** (§4.2 trap 1). This is load-bearing: the table has 0 rows and 53 gate messages exist.
+**Derived primarily from `decision_gate` messages and enriched by `decision_gates` rows** (§4.2 trap 1, §4.5). This is load-bearing in both directions: message-only asks must not vanish, and a matching row's authoritative resolution or timeout must not be discarded (#45).
 
 ### 7.5 The canvas (#6 verdict, #7 §9)
 
@@ -668,7 +680,7 @@ Locked by #6 against the live prototype and confirmed by the dev on screen:
 
 - **The agent: a 4px stripe and a monogram** (§4.3a). Two colour systems want this card — what state the work is in, and who did it — and **they cannot both win the same pixel**. So they take different channels: the **status keeps the fill** (those six hexes were signed off on screen, and retuning them to make room is re-approval, not refactoring), and the **agent takes the left stripe and an `A1` badge**, in a palette nothing else on the card was using (four hues, cycled). A canvas legend says it in five words: *fill = status · stripe = agent*.
 
-  This **replaces** the eight-hex assignee chip. That chip was the loudest object on the card, for a value you cannot read, cannot remember and would not act on — and, worse, it was the agent's *only* name, so "the failed node and the open gate are the same agent" was a fact you had to work out by comparing two strings of hex. `A2` is one glance, it is the *same* `A2` in the rail and in the conversation, and the handle rides in the tooltip in full. `✗N` stays, at the end of the row, when `failureCount > 0` (the breaker trips at 3): the monogram is *who*, and that is *how badly it is going*.
+  This **replaces** the eight-hex assignee chip. That chip was the loudest object on the card, for a value you cannot read, cannot remember and would not act on — and, worse, it was the agent's *only* name, so "the failed node and the blocking gate are the same agent" was a fact you had to work out by comparing two strings of hex. `A2` is one glance, it is the *same* `A2` in the rail and in the conversation, and the handle rides in the tooltip in full. `✗N` stays, at the end of the row, when `failureCount > 0` (the breaker trips at 3): the monogram is *who*, and that is *how badly it is going*.
 
   A task with **no agent** wears a faint stripe and no badge. Three true things come out the same way and all three are right: it was never dispatched, its dispatch names no assignee, or the orchestrator worked it itself — and in none of them was an *agent* spawned for the work.
 
@@ -676,7 +688,7 @@ Locked by #6 against the live prototype and confirmed by the dev on screen:
 
 - **Waves — the six-hour rule, made visible** (§4.3). When an orchestrator worked in more than one burst, each is drawn in its own dashed region, captioned *"Wave 2 · after 14h idle"*. **The layout is partitioned, not merely captioned:** elkjs lays a graph out by its *dependencies*, so asking it to lay out both waves at once interleaves their nodes and a border round the result is a border round the whole canvas. Each wave is laid out on its own and the blocks are set down left to right in time order — which is the axis a wave actually means. A dependency crossing from one wave into the next still draws, as a long line between two blocks: that is exactly what "we picked the work up again 14 hours later, from where we stopped" looks like. **One wave ⇒ no region at all** — there is no boundary to point at, and a box round everything is furniture.
 - **Last-seen badge** — `"last seen 12s ago"` from `dispatch.lastHeartbeatAt`, **going stale-amber past a threshold** (#7 §7). *Spec-level default: 10 minutes*, i.e. 2× the 5-minute heartbeat cadence Orca instructs its workers to keep; make it a constant, not a magic number. Shown only while the dispatch is `dispatched`.
-- **Gate marker** — orange `⛔ gate` badge when the task has an open gate (§4.5).
+- **Gate marker** — orange `⛔ gate` badge when the task has a gate whose `blocking` flag is true (§4.5).
 - **Retry marker** — surface `attemptCount > 1`; it is the only visible sign of a retry, and no task has retried in real data yet, so it must be right the first time it happens.
 
 **Edges:** dep edges from `deps`, arrowheads, **dashed + animated into `dispatched` nodes**. These are a **status affordance, never message flow** (#7 §6) — keeping them is what makes the message-flow rejection safe, because the canvas still moves when work is in flight.
@@ -702,7 +714,7 @@ So instead:
 
 - **The orchestrator on one side, its agents on the other.** `out` right, `in` left. That layout *is* the argument: put the two speakers on two sides and "who is talking to whom" is legible without being read.
 - **Oldest first.** A conversation is a *story*; the feed read newest-first because it answered "what just happened", and that question is now the canvas's — a node flashes when it does (§7.6).
-- **A gate and its answer sit together**, threaded on `thread_id` (§4.5). The options show, and the one the answer names is ticked; an unanswered gate says **"waiting for an answer"**, which is why the run is stopped.
+- **A gate and its answer sit together**, threaded on `thread_id` (§4.5). The options show, and the one the answer names is ticked. An unanswered ask says **"no answer recorded"**; it says **"blocking — waiting for an answer"** only when its separate `blocking` fact is true (#45).
 - **Every turn carries its `source`** — the columns it was reconstructed from, in small grey type under the bubble. Four of these turns are not messages, and a bubble that pretended otherwise would be a lie. This is not a footnote; it is the point.
 - **Heartbeats collapse to one line per task** — 302 of 466 messages, all saying "alive". *"18 heartbeats · every ~5 min"*, with the cadence **measured** from two instants and a count rather than read off Orca's documentation. There is no "show heartbeats" toggle any more, and nothing is hidden: the two hundred rows the line replaces all say the same word, and their value — *liveness* — already reached the screen as the last-seen badge (§4.6).
 - **Scope: "This orchestrator" (default) / "All."** An agent selected in the rail narrows it further. "All" is not a convenience: a turn the server could not place belongs to no orchestrator (§4.4, rule 3), and it must still **appear, attached to nobody**, rather than be guessed into somebody's thread.
@@ -739,7 +751,7 @@ Which buys exactly three gestures, and forbids a fourth:
 |---|---|---|
 | **A conic ring, turning** | *An agent is inside this node right now* | The `dispatched` node, and **nothing else in the tool** — a second spinning thing would make this one read as "decorated" instead of "working" (`ALIVE_STATUS`, `.orca-alive`) |
 | **A radar ping** | *This is not finished* | The liveness pill, and a live run on the rail — one `RadarDot`, so learning it in one panel teaches it in the other. Not on the node: the node says it by *spinning*, and a card that pinged **and** spun would be shouting the same word twice |
-| **An aurora, drifting** | *A question is unanswered* | The gate strip, and only the gate strip. Slow (19–25 s), because it must stay bearable for as long as the gate stays open, which on a real database is hours |
+| **An aurora, drifting** | *A question is blocking work* | The gate strip, and only the gate strip. Slow (19–25 s), because it must stay bearable for as long as the gate blocks, which on a real database is hours |
 
 Everything else on the page **holds perfectly still**, which is what makes those three worth looking at. A glow is the static half of the same budget: only `dispatched` and `failed` nodes carry one, because they are the two a person scanning 76 nodes is actually hunting for, and a canvas where every node glows is a canvas with a haze on it.
 
@@ -790,7 +802,7 @@ The MVP ships when, against a real `orchestration.db`:
 4. The canvas renders that orchestrator's DAG — elkjs, TB, status colours, **agent stripe + monogram**, last-seen badges, dep edges animated into `dispatched` — handles an **edgeless run** with the ordered grid and its one-liner, and draws a **captioned wave region** wherever the terminal went quiet for more than six hours (§4.3).
 5. **The conversation shows both sides** (§4.7): the orchestrator's dispatch prompt, the agent's replies, a gate and the answer threaded on it, and the final result — each turn naming the columns it was reconstructed from, and heartbeats collapsed to one line.
 6. Clicking a node opens the inspector with the full spec, the result, **every** dispatch attempt, **that task's exchange**, and any gate.
-7. A run with an open gate shows the gate strip — **populated from `decision_gate` messages**.
+7. A run with a blocking gate shows the gate strip — **populated from message-derived gates, enriched by authoritative matching table state**.
 8. Closing Orca flips the badge to **stale** with an honest "last-known state from …" line, and **everything else keeps working**.
 9. Pointing it at a DB with a different `user_version` does not crash it — and a missing column costs **exactly** the feature that needed it, by name (§5): the cast, the orchestrator's side of the conversation and the waves each have their own entry in the degradation contract.
 
@@ -806,4 +818,4 @@ The MVP ships when, against a real `orchestration.db`:
 - Poll/transport/payload/config/install/OSS → #8 (all six sub-decisions).
 - The two graduated fog items — **history browsing** and **message-flow animation** — were both resolved in #7 (§5, §6).
 
-Three places in this document fill a mechanical gap the tickets did not need to reach, each marked **spec-level** inline and none of them re-litigating a ruling: the message-attribution tie rule (§4.4), the additive merge of `decision_gates` rows when they exist (§4.5), and the concrete numbers for the heartbeat-stale threshold and pulse duration (§7.5, §7.6). An implementer may change these without reopening a ticket. **Everything else is locked.**
+Three places in this document originally filled a mechanical gap the tickets did not need to reach: the message-attribution tie rule (§4.4), the additive merge of `decision_gates` rows when they exist (§4.5), and the concrete numbers for the heartbeat-stale threshold and pulse duration (§7.5, §7.6). Issue #45 supersedes the old additive-only gate merge and the locked "no reply means open/blocking" rule with the evidence-backed state/blocking contract in §4.5; the other locked decisions remain unchanged.

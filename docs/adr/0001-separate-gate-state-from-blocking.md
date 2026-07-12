@@ -1,0 +1,3 @@
+# Separate gate lifecycle state from blocking effect
+
+Orca records decision gates through two paths with different evidence: messages preserve questions and threaded answers, while `decision_gates` records preserve authoritative `pending`, `resolved`, and `timeout` state. orca-viz will merge a matching message and record into one gate, expose lifecycle state as `pending | resolved | timeout | unanswered`, and derive a separate `blocking` fact; an unanswered message-only ask is non-blocking unless it names an existing task whose current authoritative status is `blocked`. This deliberately prefers a visible unanswered historical question over a false claim that a finished orchestration is still blocked, while retaining the task-status cross-check for a current block.
