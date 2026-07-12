@@ -774,13 +774,7 @@ This is the payoff from the `node:sqlite` driver decision (#5 §2): **zero nativ
 
 - **License: MIT.** Maximally permissive, zero friction for anyone (Stably included) to pick it up.
 - **CI: one minimal GitHub Actions workflow** on push/PR — install → typecheck → lint → test → build, matrix on **Node 22 + 24** (nothing below 22.5 can run this at all). Explicitly **not** MVP: publish-on-tag, coverage gates, release-please. Publish by hand with `npm publish` until there is a second contributor or a second release.
-- **Versioning: independent semver, pinned to nothing, starting at `0.x`.** We are an outside observer and do not track Orca's version numbers. A hand-maintained **compatibility table** in the README records what we have actually verified:
-
-  | orca-viz | Orca `SCHEMA_VERSION` tested against | Orca app version |
-  |---|---|---|
-  | 0.1.x | 5 | 1.4.128 |
-
-  This is the *documentation* half of render-what-parses (#5 §3): the runtime banner tells the user when they are past what we verified; the table tells them what that verification was.
+- **Versioning: independent semver, pinned to nothing, starting at `0.x`.** We are an outside observer and do not track Orca's version numbers. **There is no compatibility table.** The README used to carry one, hand-maintained, a row per orca-viz release — and every row said the same thing, because the fact only changes when *Orca's* schema moves. A table that grows on every publish while restating one unchanged fact is a maintenance tax on the author and noise for the reader, and the reader it was written for does not exist: the README says `npx orca-viz@latest`, so nobody is sitting on an old build wondering what it supports. Compatibility is a **runtime** answer, not a documented one — render-what-parses (#5 §3) already introspects the columns and banners exactly what this build could not find in *your* database, which is more precise than any row we could have written in advance.
 
 - **The README must say, up front and unambiguously:** this is an **unofficial, third-party, read-only** tool, **not affiliated with Stably or Orca**, that **never writes to the database**; it reads Orca's **internal, undocumented** schema, so **a minor bump may be required after an Orca update**. *"Some npm package touches my app's database"* deserves an honest paragraph on day one rather than an apology later.
 

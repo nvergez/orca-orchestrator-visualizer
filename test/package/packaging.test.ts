@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { HELP } from '../../src/server/cli.ts';
 import { MINIMUM_NODE } from '../../src/server/node-support.ts';
-import { BUILT_FOR_SCHEMA_VERSION } from '../../src/server/schema.ts';
 
 /**
  * The package is the deliverable of #22, so the package is the thing under test.
@@ -14,8 +13,8 @@ import { BUILT_FOR_SCHEMA_VERSION } from '../../src/server/schema.ts';
  * that ships a binding.gyp. So it is asserted here, where it can be broken.
  *
  * The README is tested for the same reason: the promises it makes to a stranger about their
- * database are load-bearing, and the compatibility table is a *claim about the code* that
- * would otherwise rot silently the first time the schema floor moves.
+ * database — unofficial, read-only, never writes — are load-bearing, and they have to be
+ * unmissable rather than merely present, so their *position* is asserted too.
  */
 
 function repoFile(name: string): string {
@@ -48,12 +47,6 @@ function readmeBefore(heading: string): string {
   const at = readme.indexOf(heading);
   if (at < 0) throw new Error(`the README must have a "${heading}" section — the section order is the test`);
   return readme.slice(0, at);
-}
-
-function readmeFrom(heading: string): string {
-  const at = readme.indexOf(heading);
-  if (at < 0) throw new Error(`the README must have a "${heading}" section — the section order is the test`);
-  return readme.slice(at);
 }
 
 describe('the npx claim: nothing to install, nothing to compile', () => {
@@ -128,17 +121,6 @@ describe('the README, before a stranger points this at their machine', () => {
     expect(opening).toMatch(/internal/i);
     expect(opening).toMatch(/undocumented/i);
     expect(opening).toMatch(/bump/i);
-  });
-
-  it('records, in the compatibility table, the Orca schema version this build was verified against', () => {
-    // The table is the documentation half of render-what-parses: the banner tells a user they
-    // are past what we verified, and the table says what that verification was. Bump the
-    // schema floor in code and this test makes you say so out loud.
-    const table = readmeFrom('## Compatibility');
-    const [major = '0', minor = '0'] = manifest.version.split('.');
-
-    expect(table).toContain(`${major}.${minor}.x`);
-    expect(table).toMatch(new RegExp(`\\|\\s*${BUILT_FOR_SCHEMA_VERSION}\\s*\\|`));
   });
 
   it('documents every flag the CLI actually accepts', () => {

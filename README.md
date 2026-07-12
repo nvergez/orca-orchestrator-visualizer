@@ -4,10 +4,12 @@ See what your Orca agents are doing — the task DAG, who is working what, the d
 blocking the run, and the messages the agents are sending each other.
 
 ```sh
-npx orca-viz
+npx orca-viz@latest
 ```
 
 It finds Orca's orchestration database, starts on `127.0.0.1:4269`, and opens a browser.
+
+![The orchestrator rail on the left, the task DAG in the middle with two agents dispatched, and the inspector on the right showing a task's spec, its dispatch attempts and the exchange it was rebuilt from](https://raw.githubusercontent.com/nvergez/orca-orchestrator-visualizer/main/docs/screenshot.png)
 
 ## Read this before you point it at your machine
 
@@ -24,9 +26,9 @@ nothing to challenge that assumption.
 **It reads Orca's internal, undocumented schema.** That schema is Orca's private business, it
 carries no compatibility promise to anyone outside the app, and it changes between Orca
 releases. So **a minor bump of orca-viz may be required after an Orca update.** This is an
-expectation, not an apology — see [Compatibility](#compatibility) for exactly which Orca
-schema each release was verified against, and [Surviving an Orca
-update](#surviving-an-orca-update) for what happens when you get ahead of the table.
+expectation, not an apology — see [Surviving an Orca update](#surviving-an-orca-update) for
+what the tool does when it meets a schema it was not built for, which is never to crash and
+never to lie about it.
 
 It binds to loopback only. Your task specs, agent prompts and message bodies are in that
 database, and they are not served to the network.
@@ -45,10 +47,10 @@ flag `orca.orchestration.enabled`), and at least one orchestration run in its hi
 ## Usage
 
 ```sh
-npx orca-viz                      # find the database, serve it, open a browser
-npx orca-viz --list-dbs           # every database it can find, and which it would choose
-npx orca-viz --db ./copy.db       # read a specific database — a copy, a backup, a colleague's
-npx orca-viz --port 8080 --no-open
+npx orca-viz@latest                   # find the database, serve it, open a browser
+npx orca-viz@latest --list-dbs        # every database it can find, and which it would choose
+npx orca-viz@latest --db ./copy.db    # read a specific database — a copy, a backup, a colleague's
+npx orca-viz@latest --port 8080 --no-open
 ```
 
 | Flag | |
@@ -184,21 +186,10 @@ exist, and builds its queries from those:
 | A status or message type it has never seen | Rendered in a neutral style with its raw name. Never dropped. |
 | No readable task table at all | This, and only this, is a hard error. |
 
-## Compatibility
-
-Hand-maintained: each release records the Orca schema it was actually verified against.
-orca-viz is on its own semver and tracks no Orca version number.
-
-| orca-viz | Orca `SCHEMA_VERSION` verified against | Orca app version |
-|---|---|---|
-| 0.4.x | 5 | 1.4.128 |
-| 0.3.x | 5 | 1.4.128 |
-| 0.2.x | 5 | 1.4.128 |
-| 0.1.x | 5 | 1.4.128 |
-
-If your Orca is newer than the last row, orca-viz will most likely still work — the schema's
-history so far is purely additive — and the banner will tell you that you are past what was
-verified. If something is genuinely missing, that is a bug worth filing.
+So an Orca ahead of this build will most likely still work — the schema's history so far is
+purely additive — and the banner will say you are past what was verified rather than leaving
+you to guess. If a feature is genuinely missing, first make sure you are not a cached npx away
+from the fix (`npx orca-viz@latest`); after that, it is a bug worth filing.
 
 ## Development
 
@@ -223,11 +214,9 @@ A release is a pull request labelled `release`. package.json is the source of tr
 version, so the bump is a reviewable line in the diff and not something CI decides on its own:
 
 1. Bump `version` in `package.json` in the PR.
-2. Add the row for it to the [compatibility table](#compatibility) — the packaging test fails
-   until the table has a row for the new `major.minor`.
-3. Label the PR `release`. CI now also checks that the version is one npm does not already have,
+2. Label the PR `release`. CI now also checks that the version is one npm does not already have,
    so a forgotten bump fails on the PR rather than after the merge.
-4. Merge. The [release workflow](.github/workflows/release.yml) re-runs the full check suite on
+3. Merge. The [release workflow](.github/workflows/release.yml) re-runs the full check suite on
    the merge commit, publishes to npm, pushes the `v<version>` tag, and cuts a GitHub Release
    with generated notes.
 

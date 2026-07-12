@@ -73,9 +73,6 @@ jobs:
   # to be one npm does not already have. The failure mode without this job is silent — the merge
   # succeeds, the release workflow skips the publish, and nobody looks at a green run. Asked here
   # instead, the answer is still "edit the PR".
-  #
-  # That the compatibility table talks about the new version is checked by the packaging test,
-  # which asserts the table has a row for the manifest's major.minor.
   release-preflight:
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
