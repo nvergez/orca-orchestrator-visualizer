@@ -89,6 +89,7 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
         // task in the one synthetic `run_unattributed` rather than losing it (SPEC §4.3).
         handle: text(row.created_by_terminal_handle),
         name,
+        assignees: attempt?.assignees ?? [],
         task: {
           id,
           // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
@@ -113,7 +114,12 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
     .sort(byCreation);
 }
 
-type Attempts = { latest: Row; count: number };
+type Attempts = {
+  latest: Row;
+  count: number;
+  /** Every terminal that has held this task, oldest attempt first, deduplicated. */
+  assignees: string[];
+};
 
 /**
  * The dispatch attempts, folded per task.
@@ -122,6 +128,11 @@ type Attempts = { latest: Row; count: number };
  * attempt count falls out of the same pass. Ordering by `dispatched_at` instead would be
  * the bug: a re-dispatch can carry an earlier timestamp than the attempt it follows, and
  * the node would then report a circuit-broken task as freshly dispatched.
+ *
+ * The same pass collects **every** attempt's assignee, not just the surviving one. The node
+ * badge only ever shows the latest, but a run's handle set is built of all of them
+ * (`attribution.ts`), and a retry is dispatched to a *new* terminal — so dropping the earlier
+ * attempts here would silently unattribute every message the first worker ever sent.
  */
 function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Attempts> {
   const attempts = new Map<string, Attempts>();
@@ -129,7 +140,13 @@ function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Attempts>
   for (const row of selectPresent(db, 'dispatch_contexts', columns.dispatch_contexts, DISPATCH_COLUMNS)) {
     const taskId = text(row.task_id);
     if (!taskId) continue; // A dispatch context belonging to no task belongs to no node.
-    attempts.set(taskId, { latest: row, count: (attempts.get(taskId)?.count ?? 0) + 1 });
+
+    const previous = attempts.get(taskId);
+    const assignees = previous?.assignees ?? [];
+    const assignee = text(row.assignee_handle);
+    if (assignee !== null && !assignees.includes(assignee)) assignees.push(assignee);
+
+    attempts.set(taskId, { latest: row, count: (previous?.count ?? 0) + 1, assignees });
   }
 
   return attempts;

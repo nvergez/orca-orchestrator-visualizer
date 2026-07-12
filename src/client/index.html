@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>orca-viz</title>
+    <style>
+      /*
+       * The one thing an inline style cannot express: the ~1 s flash a message triggers on the
+       * node it refers to (#18, SPEC §7.6). The colour is the message type's, handed in as a
+       * custom property by the node itself, so the keyframes stay ignorant of what happened.
+       */
+      @keyframes orca-pulse {
+        from {
+          box-shadow: 0 0 0 3px var(--orca-pulse);
+        }
+        to {
+          box-shadow: 0 0 0 10px transparent;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

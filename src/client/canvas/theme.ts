@@ -19,6 +19,13 @@ export const NODE_HEIGHT = 84;
  */
 export const STALE_HEARTBEAT_MS = 10 * 60 * 1000;
 
+/**
+ * The one colour on the canvas that is not a status: the outline on the node you selected —
+ * or that a feed row sent you to (#18). It is the blue the rail already marks the selected run
+ * with, because it means the same thing: *this is the one you are looking at*.
+ */
+export const SELECTED_OUTLINE = '#3b82f6';
+
 export type StatusColor = { bg: string; border: string; text: string };
 
 /** Verbatim from the approved prototype (SPEC §7.5, and the colour table locked in #12). */

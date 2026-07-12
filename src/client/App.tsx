@@ -1,14 +1,16 @@
-import { useMemo } from 'react';
-import type { Meta, Run, StreamEvent, Task } from '../shared/types.ts';
+import { useMemo, useState } from 'react';
+import type { FeedMessage, Meta, Run, StreamEvent, Task } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { STATUS_COLORS } from './canvas/theme.ts';
+import { useFeed, usePulses } from './feed/feed.ts';
+import { Feed } from './feed/Feed.tsx';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
 /**
- * The shell — the run rail on the left, the canvas in the middle, and above both of them the
- * truth about what is being read.
+ * The shell — the run rail on the left, the canvas in the middle, the feed on the right, and
+ * above all of them the truth about what is being read.
  *
  * The rail is what makes the canvas mean anything (#16). Before it, every task in the
  * database rendered as one graph: 76 nodes, 13 unrelated orchestrations, four days of
@@ -17,7 +19,21 @@ import { useRunSelection } from './rail/selection.ts';
  * path as today's — there is no history mode, there is a list, and one of them happens to
  * be live.
  *
- * The gate strip, feed and inspector arrive with their own tickets (#18–#20).
+ * **The link between the feed and the canvas is owned here** (#18), because it is the one
+ * thing neither of them can own: a feed row knows a task id, and a node knows it was clicked,
+ * and only the shell knows which run is on screen. So the shell holds the selected task, and
+ * both directions of the link are one state change:
+ *
+ * - **A feed row → its node.** The canvas highlights and centres it. If the message belongs to
+ *   another run, the rail follows: the row *is* the user asking to go there, and leaving them
+ *   staring at a canvas that does not contain the task they just clicked would be the worse
+ *   surprise. (The rule this does not break is the *automatic* one — a run starting on its own
+ *   never moves the canvas; it gets a chip, and the chip is the rail's, from #16.)
+ * - **A node → its story.** The feed filters to that task's messages, end to end. Clicking the
+ *   same node again clears the filter, so the way out is where the way in was.
+ *
+ * The gate strip (#19) and the node inspector (#20) are still to come; the dock the inspector
+ * will swap into is this one, and until it does, the feed is what it shows.
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
@@ -28,12 +44,42 @@ export function App({ event }: { event: StreamEvent | null }) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
   const { selected, select, newRunId } = useRunSelection(runs);
 
+  // The feed remembers; `event.messages` is only ever the delta after the client's cursor.
+  const { messages, arrived } = useFeed(event);
+  const pulses = usePulses(arrived);
+
+  // The one piece of panel state that is *not* a panel's: the task the canvas outlines and the
+  // task the feed is filtered to are the same task, and neither panel can see the other.
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
   // The scoping, in one line. Every task carries the run the server inferred for it, so the
   // client never re-derives the grouping — it only picks which one to draw.
   const tasks = useMemo(
     () => (event && selected ? event.snapshot.tasks.filter((task) => task.runId === selected.id) : NO_TASKS),
     [event, selected]
   );
+
+  // Only ever a task on the canvas: a selection is cleared whenever the run changes, and a run
+  // whose tasks a reset deleted takes its selection with it.
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
+
+  /** The rail. A different run is a different canvas, so the task selection does not survive it. */
+  function selectRun(runId: string): void {
+    select(runId);
+    setSelectedTaskId(null);
+  }
+
+  /** A feed row. The task it names is the destination — its run is merely how to get there. */
+  function selectMessage(message: FeedMessage): void {
+    if (message.taskId === null) return; // An unlinked row is not a link (SPEC §4.2, trap 8).
+    if (message.runId !== null && message.runId !== selected?.id) select(message.runId);
+    setSelectedTaskId(message.taskId);
+  }
+
+  /** A node. Clicking it again is how you let go of it. */
+  function selectTask(taskId: string): void {
+    setSelectedTaskId((current) => (current === taskId ? null : taskId));
+  }
 
   if (!event) {
     return (
@@ -58,13 +104,26 @@ export function App({ event }: { event: StreamEvent | null }) {
           runs={runs}
           coordinatorRuns={event.snapshot.coordinatorRuns}
           selectedId={selected?.id ?? null}
-          onSelect={select}
+          onSelect={selectRun}
           newRunId={newRunId}
         />
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <Canvas tasks={tasks} />
+          <Canvas
+            tasks={tasks}
+            selectedTaskId={selectedTask?.id ?? null}
+            onSelectTask={selectTask}
+            pulses={pulses}
+          />
         </div>
+
+        <Feed
+          messages={messages}
+          runId={selected?.id ?? null}
+          selectedTask={selectedTask}
+          onClearTask={() => setSelectedTaskId(null)}
+          onSelectMessage={selectMessage}
+        />
       </div>
     </main>
   );

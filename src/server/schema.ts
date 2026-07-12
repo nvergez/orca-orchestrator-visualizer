@@ -60,6 +60,14 @@ const FEATURES: { anyOf: string[]; degraded: string }[] = [
     degraded: 'The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.',
   },
   {
+    // The feed is ordered by `sequence` and resumed from it. A feed with no order is not a
+    // feed, so this column is the one the whole panel rests on — the message *rows* can all
+    // be there and it still cannot be built.
+    anyOf: [MESSAGE_SEQUENCE],
+    degraded:
+      'The message feed — this Orca has no messages.sequence column, so there is no cursor to order the feed by or resume it from.',
+  },
+  {
     anyOf: [MESSAGE_SEQUENCE],
     degraded:
       'Reset detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
