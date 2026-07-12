@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
@@ -26,6 +27,10 @@ export default defineConfig({
       },
       {
         plugins: [react()],
+        // The same `@` the app is built with (`vite.config.ts`) — the components under test
+        // import shadcn's primitives through it, and a suite that resolved them differently
+        // would not be testing the bundle that ships.
+        resolve: { alias: { '@': fileURLToPath(new URL('./src/client', import.meta.url)) } },
         test: {
           name: 'client',
           environment: 'jsdom',

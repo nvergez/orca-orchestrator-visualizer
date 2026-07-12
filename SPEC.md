@@ -399,7 +399,11 @@ CLI surface:
 
 ## 7. Frontend
 
-Stack: **React + Vite + TypeScript**, **React Flow (`@xyflow/react`)** for the canvas, **elkjs** for layout. React Flow is **locked** (#6): 76 custom nodes plus a minimap pan and zoom smoothly at real scale; it is not a bottleneck and needs no perf work. Dev runs Vite with a proxy to the server; the shipped artifact is the pre-built `dist/` the server serves (#8 §4).
+Stack: **React + Vite + TypeScript**, **React Flow (`@xyflow/react`)** for the canvas, **elkjs** for layout, **Tailwind + shadcn/ui** for everything that is not the canvas. React Flow is **locked** (#6): 76 custom nodes plus a minimap pan and zoom smoothly at real scale; it is not a bottleneck and needs no perf work. Dev runs Vite with a proxy to the server; the shipped artifact is the pre-built `dist/` the server serves (#8 §4).
+
+Every dependency here is bundled at build time and **none of them is a runtime dependency** — `dependencies` is empty and stays empty, because `npx orca-viz` promises nothing to install and nothing to compile (§8). A shadcn component is *this repo's source file* (`src/client/components/ui/`), not an import, which is the entire reason it is allowed in a package that ships zero deps.
+
+**The palette is CSS, not TypeScript** (`src/client/index.css`). The six status colours of §7.5 are the signed-off hexes, verbatim, as custom properties — and `.dark` redefines the *fill* and the *ink* of each while keeping the **accent**, so a green node is one green in both themes and the canvas, the feed chips and the inspector cannot drift into two palettes. `canvas/theme.ts` is the only seam that hands them out: Tailwind class strings for anything Tailwind can paint, and a `var(--…)` value for the two places that need a colour and not a class — React Flow's minimap fill, and the box-shadow of a message pulse (§7.6).
 
 ### 7.1 Layout composition: three zones, four panels (#7 §4)
 

@@ -1,3 +1,7 @@
+import { useId } from 'react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+
 /**
  * "Show heartbeats" — the one control the heartbeat ruling needs, wherever messages are shown.
  *
@@ -20,15 +24,26 @@ export type HeartbeatToggleProps = {
 };
 
 export function HeartbeatToggle({ showHeartbeats, onChange, hidden }: HeartbeatToggleProps) {
+  // Both panels can be mounted in one page in a test, and a duplicated `id` would hand the
+  // wrong box to the wrong label.
+  const id = useId();
+
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3f3f46' }}>
-      <input type="checkbox" checked={showHeartbeats} onChange={(changed) => onChange(changed.target.checked)} />
-      Show heartbeats
-      {hidden > 0 && (
-        <span style={{ color: '#71717a', fontSize: 11 }}>
-          · {hidden} {hidden === 1 ? 'heartbeat' : 'heartbeats'} hidden
-        </span>
-      )}
-    </label>
+    <div className="flex items-center gap-2">
+      <Checkbox
+        id={id}
+        checked={showHeartbeats}
+        onCheckedChange={(checked) => onChange(checked === true)}
+        className="size-3.5"
+      />
+      <Label htmlFor={id} className="text-muted-foreground cursor-pointer gap-1.5 text-xs font-normal">
+        Show heartbeats
+        {hidden > 0 && (
+          <span className="text-muted-foreground/70">
+            · {hidden} {hidden === 1 ? 'heartbeat' : 'heartbeats'} hidden
+          </span>
+        )}
+      </Label>
+    </div>
   );
 }

@@ -1,5 +1,7 @@
+import { OctagonAlert } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { Gate, Task } from '../../shared/types.ts';
-import { GATE_COLOR } from '../canvas/theme.ts';
+import { GATE_THEME } from '../canvas/theme.ts';
 
 /**
  * The decision blocking your orchestration, above the canvas, in your way.
@@ -46,19 +48,15 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
       // region would interrupt a screen reader mid-sentence every time a run got blocked.
       role="status"
       aria-label={`${gates.length} open decision ${gates.length === 1 ? 'gate' : 'gates'}`}
-      style={{
-        flexShrink: 0,
-        borderBottom: `1px solid ${GATE_COLOR.border}`,
-        background: GATE_COLOR.bg,
-        color: GATE_COLOR.text,
-        padding: '8px 12px',
+      className={cn(
+        'shrink-0 overflow-y-auto border-b px-4 py-2.5',
         // Several open gates in one run is a real shape (13 open across the live database), and
         // an unbounded strip would eat the canvas it is supposed to be pointing at.
-        maxHeight: 160,
-        overflowY: 'auto',
-      }}
+        'max-h-40',
+        GATE_THEME.surface
+      )}
     >
-      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <ul className="flex flex-col gap-1.5">
         {gates.map((gate) => {
           // Bound once, so the narrowing survives into the callback — and so the two branches
           // are visibly the same question asked of the same value: is there a node to go to?
@@ -72,7 +70,7 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
                 <button
                   type="button"
                   onClick={() => onSelectTask(taskId)}
-                  style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
+                  className="hover:bg-gate/10 focus-visible:ring-gate/50 block w-full cursor-pointer rounded-md px-1.5 py-0.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
                 >
                   <GateEntry gate={gate} blocks={titleOf(taskId)} />
                 </button>
@@ -91,8 +89,8 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
  */
 function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
   return (
-    <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
-      <span aria-hidden>⛔</span>
+    <span className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[13px]">
+      <OctagonAlert aria-hidden className="size-4 shrink-0 translate-y-0.5" />
 
       {/*
         Clamped, and not because a question is unimportant — because on the real database a
@@ -100,38 +98,20 @@ function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
         strip would swallow the canvas it exists to point at. The whole of it is one hover away,
         and the message that raised it is in the feed, in full, where a body belongs.
       */}
-      <b
-        title={gate.question}
-        style={{
-          flex: '1 1 240px',
-          minWidth: 0,
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: 'vertical',
-          whiteSpace: 'pre-line',
-          lineHeight: 1.35,
-        }}
-      >
+      <b title={gate.question} className="line-clamp-3 min-w-0 flex-[1_1_240px] leading-snug font-semibold whitespace-pre-line">
         {gate.question}
       </b>
 
       {gate.options.map((option) => (
         <span
           key={option}
-          style={{
-            padding: '1px 7px',
-            borderRadius: 999,
-            border: `1px solid ${GATE_COLOR.border}`,
-            background: '#ffffff',
-            fontSize: 11,
-          }}
+          className="border-gate/60 bg-background/70 rounded-full border px-2 py-px text-[11px] font-medium"
         >
           {option}
         </span>
       ))}
 
-      <span style={{ fontSize: 11, opacity: 0.85 }}>
+      <span className="text-[11px] opacity-80">
         {blocks === null ? 'blocks this run — no task named' : `blocks ${blocks}`}
       </span>
     </span>

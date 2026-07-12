@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import { STATUS_COLORS } from '../../src/client/canvas/theme.ts';
+import { STATUS_THEME } from '../../src/client/canvas/theme.ts';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type { FeedMessage, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
@@ -191,10 +191,11 @@ describe('the message feed', () => {
     const chip = (type: string) =>
       within(rows().find((row) => row.dataset.type === type)!).getByTestId('type-chip');
 
-    // One palette for the page: a green row and a green node mean the same thing.
-    expect(chip('worker_done')).toHaveStyle({ background: STATUS_COLORS.completed.bg });
-    expect(chip('escalation')).toHaveStyle({ background: STATUS_COLORS.failed.bg });
-    expect(chip('decision_gate')).toHaveStyle({ background: STATUS_COLORS.dispatched.bg });
+    // One palette for the page: a green row and a green node mean the same thing — literally
+    // the same class string, taken from the node's own theme (`canvas/theme.ts`).
+    expect(chip('worker_done')).toHaveClass(...STATUS_THEME.completed.surface.split(' '));
+    expect(chip('escalation')).toHaveClass(...STATUS_THEME.failed.surface.split(' '));
+    expect(chip('decision_gate')).toHaveClass(...STATUS_THEME.dispatched.surface.split(' '));
   });
 
   it('expands to the body and the payload, and hides them until asked', async () => {
@@ -484,7 +485,7 @@ describe('the node pulse', () => {
     );
 
     await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'worker_done'));
-    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_COLORS.completed.border}` });
+    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.completed.accent}` });
   });
 
   it('flashes an escalation red', async () => {
@@ -494,7 +495,7 @@ describe('the node pulse', () => {
     );
 
     await waitFor(() =>
-      expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_COLORS.failed.border}` })
+      expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.failed.accent}` })
     );
   });
 
@@ -507,7 +508,7 @@ describe('the node pulse', () => {
     );
 
     await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'decision_gate'));
-    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_COLORS.dispatched.border}` });
+    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.dispatched.accent}` });
   });
 
   it('does not flash a plain status message — three colours were agreed, and only three', async () => {

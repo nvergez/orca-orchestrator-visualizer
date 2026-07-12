@@ -1,13 +1,14 @@
-import { STATUS_COLORS, type StatusColor, UNKNOWN_STATUS_COLOR } from '../canvas/theme.ts';
+import { STATUS_THEME, type StatusTheme, UNKNOWN_STATUS_THEME } from '../canvas/theme.ts';
 
 /**
  * How a message *looks* — and it looks like the canvas, on purpose.
  *
- * The feed and the DAG are two views of one orchestration, so they are one palette: the
- * colours below are the node colours (`canvas/theme.ts`), reused rather than re-picked. A
- * green `worker_done` chip and a green `completed` node mean the same thing, an amber
- * `decision_gate` and an amber `dispatched` node mean the same thing, and a red row and a red
- * node mean the same thing. Two palettes on one screen would be two vocabularies.
+ * The feed and the DAG are two views of one orchestration, so they are one palette: the entries
+ * below are the *node* themes (`canvas/theme.ts`), reused rather than re-picked — the same class
+ * string, so the two cannot drift. A green `worker_done` chip and a green `completed` node mean
+ * the same thing, an amber `decision_gate` and an amber `dispatched` node mean the same thing,
+ * and a red row and a red node mean the same thing. Two palettes on one screen would be two
+ * vocabularies.
  *
  * Only the types the spec names get a colour. Anything else — `handoff`, `merge_ready`, a type
  * an Orca we have never seen invents — is rendered neutral with its raw name, which is the
@@ -15,7 +16,7 @@ import { STATUS_COLORS, type StatusColor, UNKNOWN_STATUS_COLOR } from '../canvas
  */
 
 /** What a message type looks like, and whether something *happening* is worth a flash. */
-type MessageStyle = { color: StatusColor; pulses: boolean };
+type MessageStyle = { theme: StatusTheme; pulses: boolean };
 
 /**
  * One table, because "which colour" and "which types pulse" are one question asked twice —
@@ -32,22 +33,22 @@ type MessageStyle = { color: StatusColor; pulses: boolean };
  *   would be a fourth meaning nobody has agreed to.
  */
 const MESSAGE_STYLES: Record<string, MessageStyle> = {
-  worker_done: { color: STATUS_COLORS.completed, pulses: true },
-  escalation: { color: STATUS_COLORS.failed, pulses: true },
-  decision_gate: { color: STATUS_COLORS.dispatched, pulses: true },
-  status: { color: STATUS_COLORS.pending, pulses: false },
+  worker_done: { theme: STATUS_THEME.completed, pulses: true },
+  escalation: { theme: STATUS_THEME.failed, pulses: true },
+  decision_gate: { theme: STATUS_THEME.dispatched, pulses: true },
+  status: { theme: STATUS_THEME.pending, pulses: false },
   // Only ever on screen when the toggle asks for it. Blue: it means "still here", nothing more.
-  heartbeat: { color: STATUS_COLORS.ready, pulses: false },
+  heartbeat: { theme: STATUS_THEME.ready, pulses: false },
 };
 
-const UNKNOWN_MESSAGE_STYLE: MessageStyle = { color: UNKNOWN_STATUS_COLOR, pulses: false };
+const UNKNOWN_MESSAGE_STYLE: MessageStyle = { theme: UNKNOWN_STATUS_THEME, pulses: false };
 
 function styleOf(type: string): MessageStyle {
   return MESSAGE_STYLES[type] ?? UNKNOWN_MESSAGE_STYLE;
 }
 
-export function colorOfMessage(type: string): StatusColor {
-  return styleOf(type).color;
+export function themeOfMessage(type: string): StatusTheme {
+  return styleOf(type).theme;
 }
 
 /**
@@ -61,5 +62,5 @@ export type Pulse = { type: string; color: string };
 /** The flash a message leaves on its node — or null when its type is not worth flashing. */
 export function pulseOf(type: string): Pulse | null {
   const style = styleOf(type);
-  return style.pulses ? { type, color: style.color.border } : null;
+  return style.pulses ? { type, color: style.theme.accent } : null;
 }

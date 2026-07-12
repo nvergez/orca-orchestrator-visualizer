@@ -7,11 +7,4 @@
  * must not be able to disagree about how wide they are or which edge they draw — a dock that
  * changed width on selection would jolt the canvas it is beside every time you clicked a node.
  */
-export const DOCK_STYLE = {
-  width: 360,
-  flexShrink: 0,
-  borderLeft: '1px solid #e4e4e7',
-  display: 'flex',
-  flexDirection: 'column' as const,
-  minHeight: 0,
-} as const;
+export const DOCK_CLASS = 'flex w-[22rem] min-h-0 shrink-0 flex-col border-l bg-card';

@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import './index.css';
 import { Live } from './Live.tsx';
 
 /** The mount point, and nothing else. What the page *does* is `<Live>` (#17). */
