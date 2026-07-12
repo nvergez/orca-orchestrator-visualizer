@@ -27,7 +27,16 @@ class ResizeObserverShim {
     // Deferred: the observer is created during render, and calling back into React from
     // inside its own render pass is a warning at best.
     queueMicrotask(() => {
-      this.notify([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      // Both the size *and* the rect: a node is measured through `offsetWidth`, but the
+      // pan-zoom extent reads `contentRect` off the entry itself.
+      const width = (target as HTMLElement).offsetWidth;
+      const height = (target as HTMLElement).offsetHeight;
+      const contentRect = { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height };
+
+      this.notify(
+        [{ target, contentRect } as ResizeObserverEntry],
+        this as unknown as ResizeObserver
+      );
     });
   }
 
