@@ -38,17 +38,17 @@ export function shouldOpenBrowser({ open, isTTY, env, platform }: BrowserContext
  * user nothing. Failing the boot over it would be absurd.
  */
 export function openBrowser(url: string, platform: NodeJS.Platform = process.platform): void {
-  const [command, args] =
+  const [command, args]: [string, string[]] =
     platform === 'darwin'
       ? ['open', [url]]
       : platform === 'win32'
-        ? // `start` is a cmd builtin; its first quoted argument is the window title, which
-          // is why the empty string has to be there before the URL.
+        ? // `start` is a cmd builtin, and its first quoted argument is the window title —
+          // which is why the empty string has to sit there before the URL.
           ['cmd', ['/c', 'start', '', url]]
         : ['xdg-open', [url]];
 
   try {
-    const child = spawn(command as string, args as string[], { stdio: 'ignore', detached: true });
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
     child.on('error', () => {}); // No browser, no opener, no problem — the URL is on screen.
     child.unref();
   } catch {

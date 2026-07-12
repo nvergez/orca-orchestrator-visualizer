@@ -98,6 +98,7 @@ describe('<App>', () => {
     expect(screen.queryByText(/isn't running/i)).toBeNull();
   });
 
+
   it('says it is connecting before the first snapshot arrives', () => {
     render(<App event={null} />);
 

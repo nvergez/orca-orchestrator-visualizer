@@ -57,7 +57,7 @@ export type Run = {
   startedAt: string;
   endedAt: string;
   taskCount: number;
-  statusCounts: Record<string, number>;
+  statusCounts: Record<TaskStatus, number>;
   live: boolean;
   hasOpenGates: boolean;
   /** 0 ⇒ the edgeless empty state (SPEC §7.5). */

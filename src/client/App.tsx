@@ -1,4 +1,5 @@
 import type { Meta, StreamEvent } from '../shared/types.ts';
+import { livenessSentence } from '../shared/wording.ts';
 
 /**
  * The shell the MVP panels get hung off — the run rail, gate strip, canvas, feed and
@@ -22,6 +23,7 @@ export function App({ event }: { event: StreamEvent | null }) {
   return (
     <main>
       <h1>orca-viz</h1>
+      <Status meta={event.meta} />
       <Notices meta={event.meta} />
       <Source meta={event.meta} />
     </main>
@@ -29,21 +31,26 @@ export function App({ event }: { event: StreamEvent | null }) {
 }
 
 /**
- * The things worth knowing, in the order they change what you should believe about the
+ * Live, or last-known — the one thing that is always worth saying, said in the words the
+ * spec pins down (SPEC §6.1). `src/shared/wording.ts` owns the sentence, so this and the
+ * line the terminal prints at boot are the same sentence and cannot drift apart.
+ */
+function Status({ meta }: { meta: Meta }) {
+  return (
+    <p role="status" data-state={meta.liveness}>
+      {livenessSentence(meta, formatTime)}.
+    </p>
+  );
+}
+
+/**
+ * The things that are *wrong*, in the order they change what you should believe about the
  * screen. Nothing renders when there is nothing to say: a banner that is always there is
  * furniture, and furniture stops being read.
  */
 function Notices({ meta }: { meta: Meta }) {
   return (
     <>
-      {meta.liveness !== 'live' && (
-        // `unknown` — we could not read orca-runtime.json — degrades to exactly this
-        // wording (SPEC §6.1). We do not know that Orca is running, so we do not say it is.
-        <p role="status" data-state="stale">
-          Orca isn&apos;t running; showing last-known state from {formatTime(meta.dbMtime)}.
-        </p>
-      )}
-
       {meta.schemaSupport === 'newer' && (
         <p role="status" data-state="schema-newer">
           This database is from a newer Orca schema (v{meta.schemaVersion}) — some data may be missing or mislabeled.
@@ -70,7 +77,7 @@ function Notices({ meta }: { meta: Meta }) {
   );
 }
 
-/** Always on screen, always true: the file, and whether anything is writing to it. */
+/** Always on screen, always true: the file, and the schema it turned out to be. */
 function Source({ meta }: { meta: Meta }) {
   return (
     <dl>
@@ -82,12 +89,8 @@ function Source({ meta }: { meta: Meta }) {
       <dt>Schema</dt>
       <dd>v{meta.schemaVersion}</dd>
 
-      <dt>Orca</dt>
-      <dd>
-        {meta.liveness === 'live'
-          ? `connected to a running Orca${meta.orcaPid === null ? '' : ` (pid ${meta.orcaPid})`}`
-          : `not running — last wrote to this database ${formatTime(meta.dbMtime)}`}
-      </dd>
+      <dt>Last write</dt>
+      <dd>{formatTime(meta.dbMtime)}</dd>
     </dl>
   );
 }

@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { homedir } from 'node:os';
+import { livenessSentence } from '../shared/wording.ts';
 import { openBrowser as launchBrowser, shouldOpenBrowser } from './browser.ts';
 import { HELP, type Options, parseOptions } from './cli.ts';
 import { OrcaDatabase } from './database.ts';
-import { type Candidate, listCandidates, resolveDatabase } from './discovery.ts';
+import { type Candidate, discoveryContext, listCandidates, resolveDatabase } from './discovery.ts';
 import { StartupError } from './errors.ts';
-import { type ProcessProbe, probeProcess } from './liveness.ts';
+import type { ProcessProbe } from './liveness.ts';
+import type { ReadMounts } from './network-fs.ts';
 import { createServer } from './server.ts';
 
 /**
@@ -25,7 +26,7 @@ export type BootOptions = {
   platform?: NodeJS.Platform;
   home?: string;
   probe?: ProcessProbe;
-  readMounts?: () => string | null;
+  readMounts?: ReadMounts;
   /** Is stdout a terminal? Decides whether a browser was implicitly asked for. */
   isTTY?: boolean;
   print?: (line: string) => void;
@@ -36,20 +37,15 @@ export type BootOptions = {
 export type Booted = { url: string; close(): Promise<void> } | null;
 
 export async function boot(options: BootOptions): Promise<Booted> {
-  const {
-    argv,
-    env = process.env,
-    platform = process.platform,
-    home = homedir(),
-    probe = probeProcess,
-    readMounts,
-    isTTY = process.stdout.isTTY ?? false,
-    print = console.log,
-    openBrowser = (url: string) => launchBrowser(url, platform),
-  } = options;
+  const { argv, isTTY = process.stdout.isTTY ?? false, print = console.log } = options;
 
   const cli = parseOptions(argv);
-  const discovery = { db: cli.db, env, platform, home, probe, readMounts };
+
+  // One resolved view of the environment for the whole boot: discovery reads the same
+  // process table and mount table that the browser decision reads the terminal from.
+  const context = discoveryContext({ ...options, db: cli.db });
+  const { env, platform, probe } = context;
+  const openBrowser = options.openBrowser ?? ((url: string) => launchBrowser(url, platform));
 
   if (cli.help) {
     print(HELP);
@@ -60,11 +56,11 @@ export async function boot(options: BootOptions): Promise<Booted> {
     return null;
   }
   if (cli.listDbs) {
-    for (const line of describeCandidates(listCandidates(discovery))) print(line);
+    for (const line of describeCandidates(listCandidates(context))) print(line);
     return null;
   }
 
-  const dbPath = resolveDatabase(discovery);
+  const dbPath = resolveDatabase(context);
   const database = new OrcaDatabase(dbPath, { probe });
 
   try {
@@ -123,18 +119,23 @@ function listen(server: Server, { port, host }: Options): Promise<void> {
 
 /** A summary of what the user is about to look at: live, or the last-known state. */
 function describeState(database: OrcaDatabase): string {
-  const { liveness, schemaVersion, schemaSupport, dbMtime, degraded, resetDetected } = database.snapshot().meta;
+  const meta = database.snapshot().meta;
+  const { schemaVersion, schemaSupport, degraded, resetDetected } = meta;
 
-  const state =
-    liveness === 'live'
-      ? 'connected to a running Orca'
-      : `Orca isn't running; showing last-known state from ${dbMtime}`;
   const schema =
     schemaSupport === 'supported'
       ? `schema v${schemaVersion}`
       : `schema v${schemaVersion} (${schemaSupport} than this build — ${degraded.length} feature(s) degraded)`;
 
-  return [state, schema, resetDetected ? 'a reset has wiped part of the history' : null].filter(Boolean).join(' · ');
+  return [
+    // The same sentence the page shows — written once, in src/shared/wording.ts, so the
+    // terminal and the browser cannot drift into telling the user different things.
+    livenessSentence(meta),
+    schema,
+    resetDetected ? 'a reset has wiped part of the history' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /** `0.0.0.0` is not somewhere a browser can go; `localhost` is. */
@@ -142,15 +143,27 @@ function displayHost(host: string): string {
   return host === '0.0.0.0' || host === '::' ? 'localhost' : host;
 }
 
-/** `--list-dbs`: every candidate, with the two facts you need to pick between them. */
+/**
+ * `--list-dbs`: every candidate, with the facts you need to pick between them — and, when
+ * a candidate is unusable, *why*.
+ *
+ * The problem has to win over the liveness/schema line. A file that exists but that SQLite
+ * cannot open still has an mtime and a liveness, and printing those while swallowing the
+ * reason would report a corrupt database as a healthy one — which is precisely the case a
+ * person runs `--list-dbs` to understand.
+ */
 function describeCandidates(candidates: Candidate[]): string[] {
   return [
     'orca-viz  databases it can find, in the order it would choose them:',
     '',
     ...candidates.map((candidate) => {
-      const state = candidate.exists
-        ? `${candidate.liveness}${candidate.orcaPid ? ` (pid ${candidate.orcaPid})` : ''} · schema v${candidate.schemaVersion} · ${candidate.mtime?.toISOString()}`
-        : (candidate.problem ?? 'unusable');
+      const state =
+        candidate.problem ??
+        [
+          candidate.liveness + (candidate.orcaPid === null ? '' : ` (pid ${candidate.orcaPid})`),
+          `schema v${candidate.schemaVersion}`,
+          candidate.mtime?.toISOString(),
+        ].join(' · ');
       return `  ${candidate.dbPath}\n    ${candidate.source} · ${state}`;
     }),
   ];

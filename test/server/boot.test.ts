@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { boot, type BootOptions, type Booted } from '../../src/server/boot.ts';
@@ -36,9 +36,7 @@ async function run(argv: string[], overrides: Partial<BootOptions> = {}): Promis
 
   booted = await boot({
     argv,
-    // Port 0 lets the OS pick, so the suite never fights over 4269. `--port` itself is
-    // still honoured exactly — see the port-in-use case below.
-    env: { ORCA_VIZ_PORT_UNUSED: '' },
+    env: {},
     platform: 'linux',
     home: tempDir(),
     probe: () => false,
@@ -86,6 +84,23 @@ describe('--list-dbs', () => {
     expect(printed).toContain('stale'); // Nothing is running in a temp directory.
     expect(printed).toContain(join(home, '.config', 'orca-dev', 'orchestration.db')); // Absent, and still listed.
   });
+
+  it('says *why* a candidate is unusable, rather than reporting it as healthy', async () => {
+    const home = tempDir();
+    const dir = join(home, '.config', 'orca');
+    mkdirSync(dir, { recursive: true });
+    // A file in exactly the right place that SQLite cannot open. It still has an mtime and
+    // a liveness — so printing those and swallowing the reason would describe a corrupt
+    // database as a fine one, which is the case you run --list-dbs to understand.
+    writeFileSync(join(dir, 'orchestration.db'), 'this is not sqlite');
+
+    const { lines } = await run(['--list-dbs'], { home, env: { XDG_CONFIG_HOME: join(home, '.config') } });
+
+    const printed = lines.join('\n');
+    expect(printed).toContain(join(dir, 'orchestration.db'));
+    expect(printed).not.toContain('schema vnull');
+    expect(printed).toMatch(/not a database|file is encrypted|malformed/i);
+  });
 });
 
 describe('booting', () => {
@@ -111,6 +126,24 @@ describe('booting', () => {
     const { lines, booted } = await run(['--db', fixtureDb(), '--port', '0']);
 
     expect(lines.join('\n')).toContain(booted!.url);
+  });
+
+  it("tells the terminal what it tells the page: Orca isn't running, and from when the data is", async () => {
+    // The same spec'd sentence the browser shows (SPEC §6.1). Asserted here as a literal,
+    // and in `app.test.tsx` as a literal, so the two sides are pinned to the same words by
+    // the tests and not merely by sharing a function.
+    const { lines } = await run(['--db', fixtureDb(), '--port', '0']);
+
+    expect(lines.join('\n')).toContain("Orca isn't running; showing last-known state from");
+  });
+
+  it('says it is connected when Orca really is running', async () => {
+    const dbPath = fixtureDb();
+    writeFileSync(join(dbPath, '..', 'orca-runtime.json'), JSON.stringify({ pid: 4242 }));
+
+    const { lines } = await run(['--db', dbPath, '--port', '0'], { probe: (pid) => pid === 4242 });
+
+    expect(lines.join('\n')).toContain('connected to a running Orca (pid 4242)');
   });
 
   it('refuses a port that is taken rather than silently hopping to another one', async () => {

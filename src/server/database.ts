@@ -1,31 +1,23 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import type { StreamEvent } from '../shared/types.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { detectReset, inspectSchema, type SchemaReport } from './schema.ts';
+import { openReadOnly } from './sqlite.ts';
 
 /**
  * The read-only view of Orca's orchestration database.
  *
- * Hard invariant #1 (SPEC §1.2): **this tool never writes.** Orca's coordinator assumes it
- * is the single writer and keeps its invariants inside its own transactions, so every
- * connection this class opens is `readOnly: true` — there is no other way in, and no way
- * to ask for one.
- *
- * The connection is deliberately *not* `immutable=1`. That flag would tell SQLite the file
- * cannot change, which is a lie whenever Orca is running, and the reads would go quietly
- * corrupt (SPEC §2.2). `busy_timeout` instead: WAL readers do not block the writer, but
- * brief locks exist around checkpoint and recovery.
+ * Hard invariant #1 (SPEC §1.2): **this tool never writes.** Every connection goes through
+ * `sqlite.ts`, which is the single place that decides what a connection *is* — read-only,
+ * with a busy timeout, and never `immutable`.
  */
 
 export type DatabaseDeps = {
   /** Injected so a test can decide what is alive without forking a process. */
   probe?: ProcessProbe;
 };
-
-/** SPEC §2.2 — brief locks exist around checkpoint/recovery windows. */
-export const BUSY_TIMEOUT_MS = 5000;
 
 export class OrcaDatabase {
   /** The file this connection is reading. Reported in `meta.dbPath` and logged at boot. */
@@ -38,7 +30,7 @@ export class OrcaDatabase {
   constructor(path: string, { probe = probeProcess }: DatabaseDeps = {}) {
     this.path = path;
     this.probe = probe;
-    this.db = openReadOnly(path);
+    this.db = open(path);
     try {
       this.schema = inspectSchema(this.db);
     } catch (error) {
@@ -92,16 +84,14 @@ export class OrcaDatabase {
   }
 }
 
-function openReadOnly(path: string): DatabaseSync {
-  let db: DatabaseSync;
+/** Same connection as everywhere else; the failure is fatal *here*, so it is worded for a user. */
+function open(path: string): DatabaseSync {
   try {
-    db = new DatabaseSync(path, { readOnly: true });
+    return openReadOnly(path);
   } catch (error) {
     throw new StartupError(
       `Could not open ${path}: ${(error as Error).message}`,
       'The database must be readable, and — because reading a WAL database recreates its -shm sibling — so must the directory it sits in.'
     );
   }
-  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-  return db;
 }

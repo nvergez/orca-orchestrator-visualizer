@@ -1,5 +1,11 @@
+import { TABLES, type TableName } from '../../src/server/schema.ts';
+
 /**
  * Orca's orchestration schema, as a SQL builder.
+ *
+ * The table list is the server's (`src/server/schema.ts`), not a copy of it: the fixture
+ * builds the tables the tool introspects, and two lists of Orca's tables would be one list
+ * too many.
  *
  * The DDL below is transcribed from a live `orchestration.db` at `user_version = 5`
  * (`SELECT sql FROM sqlite_master`), which is the schema HANDOFF.md pins as current.
@@ -159,10 +165,7 @@ function tableColumns(table: TableName, options: Required<SchemaOptions>): Colum
   );
 }
 
-/** The tables a fixture creates, in the order Orca's own `db.ts` creates them. */
-export const TABLES = ['tasks', 'dispatch_contexts', 'messages', 'decision_gates', 'coordinator_runs'] as const;
-
-export type TableName = (typeof TABLES)[number];
+export { TABLES, type TableName };
 
 /** The columns a table has at a given schema version — the fixture's own source of truth. */
 export function columnsOf(table: TableName, options: SchemaOptions = {}): string[] {
