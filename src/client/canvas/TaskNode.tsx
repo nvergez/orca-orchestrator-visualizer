@@ -11,6 +11,7 @@ import { enter, NODE_IN, nodeDelay, SPRING } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
 import {
   type AgentLook,
+  CRITICAL_PATH_COLOUR,
   GATE_THEME,
   glowOf,
   isAlive,
@@ -66,6 +67,8 @@ export type TaskNodeData = {
   selected: boolean;
   /** An agent is selected and this is not their task. Faded, never hidden (SPEC §7.5). */
   dimmed: boolean;
+  /** On the completed run's critical path (#71). A static ring of ink — it never moves. */
+  critical: boolean;
   /** A message about this task just arrived. ~1 s, in its type's colour. Never a heartbeat. */
   pulse: Pulse | null;
   /** Where it sits in the draw order — the entrance staggers by it, capped (`motion.ts`). */
@@ -74,7 +77,7 @@ export type TaskNodeData = {
 export type TaskFlowNode = Node<TaskNodeData, 'task'>;
 
 export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
-  const { task, now, agent, selected, dimmed, pulse, index } = data;
+  const { task, now, agent, selected, dimmed, critical, pulse, index } = data;
   const theme = themeOf(task.status);
   const spotlight = useSpotlight();
 
@@ -86,6 +89,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       data-task={task.id}
       data-selected={selected}
       data-dimmed={dimmed}
+      data-critical={critical}
       data-agent={agent?.monogram}
       // The *type*, not the colour: a test asserts that a `worker_done` flashed this node and
       // that a heartbeat never did, and neither of those is a question about a colour.
@@ -122,7 +126,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
         // graph against exactly these (`layout.ts`), so they cannot become a class.
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
-        boxShadow: shadowOf(task.status, pulse, dimmed),
+        boxShadow: shadowOf(task.status, pulse, dimmed, critical),
         ...(pulse && {
           // The keyframes are in `index.css` — the one rule a style attribute cannot express.
           animation: 'orca-pulse 1s ease-out',
@@ -237,13 +241,18 @@ function Monogram({ agent, handle }: { agent: AgentLook | null; handle: string |
  *    thing that would drag the eye back to it through the fade.
  * 3. **The pulse** — a message just landed here. It is transient and it *wins*: a node that kept
  *    its halo while flashing would flash a duller colour than the conversation handed it.
+ * 4. **The critical-path ring** (#71) — a static 2px of the theme's own ink, because every hue on
+ *    the canvas already means something and this highlight must claim none of them. It sits under
+ *    a pulse for the second one lasts, and a **dimmed** node drops it with its glow: the path is
+ *    the *run's* story, and the dim is the reader asking for one agent's.
  */
-function shadowOf(status: string, pulse: Pulse | null, dimmed: boolean): string {
+function shadowOf(status: string, pulse: Pulse | null, dimmed: boolean, critical: boolean): string {
   const base = 'inset 0 1px 0 0 var(--sheen), var(--lift-2)';
-  if (pulse) return `0 0 0 3px ${pulse.color}, ${base}`;
+  const ring = critical && !dimmed ? `0 0 0 2px ${CRITICAL_PATH_COLOUR}, ` : '';
+  if (pulse) return `0 0 0 3px ${pulse.color}, ${ring}${base}`;
 
   const glow = dimmed ? undefined : glowOf(status);
-  return glow ? `${glow}, ${base}` : base;
+  return glow ? `${ring}${glow}, ${base}` : `${ring}${base}`;
 }
 
 /**

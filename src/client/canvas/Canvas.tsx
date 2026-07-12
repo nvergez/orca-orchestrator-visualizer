@@ -17,12 +17,14 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { CastMember, Task, Wave } from '../../shared/types.ts';
 import type { Pulse } from '../conversation/theme.ts';
+import { formatDurationMs } from '../duration.tsx';
 import { useIsMobile } from '../viewport.tsx';
 import { PANEL_CLASS } from '../surface.ts';
-import { buildGraph, type Edge, type Graph } from './graph.ts';
+import { criticalPathOf } from './critical-path.ts';
+import { buildGraph, type Edge, edgeIdOf, type Graph } from './graph.ts';
 import { layoutGraph, type Layout, type WaveBox } from './layout.ts';
 import { TaskNode, type TaskFlowNode } from './TaskNode.tsx';
-import { agentOf, isAlive, NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
+import { agentOf, CRITICAL_PATH_COLOUR, isAlive, NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
 import { WaveRegion, type WaveFlowNode } from './WaveRegion.tsx';
 
 /**
@@ -116,18 +118,40 @@ export function Canvas({
     return member ? new Set(member.taskIds) : null;
   }, [cast, selectedAgent]);
 
+  // The critical path (#71): where this run's retained duration accumulated, derived from the
+  // same tasks the canvas is drawing. Two lookups fall out of the one result — the nodes on the
+  // road, and the edges between its consecutive stops — and both are empty whenever the analysis
+  // honestly is (`critical-path.ts`).
+  const criticalPath = useMemo(() => criticalPathOf(tasks), [tasks]);
+  const highlight = useMemo(() => {
+    const taskIds = criticalPath.kind === 'path' ? criticalPath.taskIds : [];
+    const nodes = new Set(taskIds);
+    const edges = new Set<string>();
+    for (let stop = 1; stop < taskIds.length; stop++) edges.add(edgeIdOf(taskIds[stop - 1]!, taskIds[stop]!));
+    return { nodes, edges };
+  }, [criticalPath]);
+
   const nodes = useMemo(
     () =>
       layout
         ? [
             ...toWaveNodes(layout.boxes),
-            ...toTaskNodes(graph, layout, showIsolated, { cast, agentTasks, selectedTaskId, pulses }),
+            ...toTaskNodes(graph, layout, showIsolated, {
+              cast,
+              agentTasks,
+              selectedTaskId,
+              pulses,
+              critical: highlight.nodes,
+            }),
           ]
         : [],
-    [graph, layout, showIsolated, cast, agentTasks, selectedTaskId, pulses]
+    [graph, layout, showIsolated, cast, agentTasks, selectedTaskId, pulses, highlight]
   );
 
-  const edges = useMemo(() => toEdges(graph.edges, tasks, agentTasks), [graph.edges, tasks, agentTasks]);
+  const edges = useMemo(
+    () => toEdges(graph.edges, tasks, agentTasks, highlight.edges),
+    [graph.edges, tasks, agentTasks, highlight]
+  );
 
   if (tasks.length === 0) {
     return (
@@ -190,6 +214,38 @@ export function Canvas({
             {/* `max-lg:mt-11` drops it below the isolated toggle — at 360px the two chips share a row's worth of width and would collide. */}
             <p data-testid="edgeless-note" className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs max-lg:mt-11')}>
               No dependencies in this run — {tasks.length} tasks dispatched independently.
+            </p>
+          </Panel>
+        )}
+
+        {/*
+          The critical path's one sentence (#71). A ring of ink with no caption would be
+          decoration; the caption says what the ring claims — retained duration, on the longest
+          dependency road — and the tooltip says what it does not: anything about the order work
+          actually ran, which the rows never recorded (SPEC §4.2, trap 6). It shares the edgeless
+          note's slot because the two cannot coexist: a path needs the edges the note mourns.
+        */}
+        {criticalPath.kind === 'path' && (
+          <Panel position="top-center">
+            <p
+              data-testid="critical-path-caption"
+              title="The duration-weighted longest chain of dependencies, from completed dispatch clocks and task-span fallbacks. Unknown durations weigh nothing but stay on the road. It says where retained duration accumulated — not the order work actually ran."
+              className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs max-lg:mt-11')}
+            >
+              Critical path — {criticalPath.taskIds.length} of {tasks.length} tasks ·{' '}
+              {formatDurationMs(criticalPath.ms)} of retained duration
+            </p>
+          </Panel>
+        )}
+
+        {/* …and the sentence for the shape the analysis honestly cannot support (#71). */}
+        {criticalPath.kind === 'cycle' && (
+          <Panel position="top-center">
+            <p
+              data-testid="critical-path-note"
+              className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs max-lg:mt-11')}
+            >
+              Retained dependencies form a cycle — no critical path can be derived from this shape.
             </p>
           </Panel>
         )}
@@ -452,6 +508,8 @@ function toTaskNodes(
     agentTasks: ReadonlySet<string> | null;
     selectedTaskId: string | null;
     pulses: ReadonlyMap<string, Pulse>;
+    /** The tasks on the completed run's critical path. Empty ⇒ no analysis (#71). */
+    critical: ReadonlySet<string>;
   }
 ): TaskFlowNode[] {
   const at = new Map(layout.placements.map((placement) => [placement.id, placement]));
@@ -470,6 +528,7 @@ function toTaskNodes(
       agent: agentOf(task, view.cast),
       selected: task.id === view.selectedTaskId,
       dimmed: view.agentTasks !== null && !view.agentTasks.has(task.id),
+      critical: view.critical.has(task.id),
       pulse: view.pulses.get(task.id) ?? null,
       // The draw order, so the graph resolves top-down rather than all at once (`motion.ts`).
       index,
@@ -487,13 +546,26 @@ function toTaskNodes(
  * An edge dims with the nodes it joins. It takes **both** ends to keep an edge lit — an edge that
  * stayed bright between two faded nodes would draw the eye to a relationship you did not ask to
  * see, which is the one thing the dimming exists to stop.
+ *
+ * A **critical-path** edge (#71) is drawn heavier, in the same ink its nodes wear a ring of — a
+ * static stroke, never animated, because the path is a record of where duration accumulated and
+ * not a claim that anything is moving. It cannot collide with the in-flight treatment: the path
+ * exists only on a completed run, where nothing is in flight to animate.
  */
-function toEdges(edges: Edge[], tasks: Task[], agentTasks: ReadonlySet<string> | null): FlowEdge[] {
+function toEdges(
+  edges: Edge[],
+  tasks: Task[],
+  agentTasks: ReadonlySet<string> | null,
+  criticalEdges: ReadonlySet<string>
+): FlowEdge[] {
   const status = new Map(tasks.map((task) => [task.id, task.status]));
 
   return edges.map((edge) => {
     const inFlight = isAlive(status.get(edge.target) ?? '');
     const dimmed = agentTasks !== null && !(agentTasks.has(edge.source) && agentTasks.has(edge.target));
+    // The ink drops with the dim, exactly as the node's ring does (`TaskNode.tsx`): the path is
+    // the run's story, and the dim is the reader asking for one agent's.
+    const critical = criticalEdges.has(edge.id) && !dimmed;
 
     return {
       id: edge.id,
@@ -501,14 +573,21 @@ function toEdges(edges: Edge[], tasks: Task[], agentTasks: ReadonlySet<string> |
       target: edge.target,
       animated: inFlight && !dimmed,
       style: {
-        strokeWidth: inFlight ? 2 : 1.5,
+        strokeWidth: critical ? 2.5 : inFlight ? 2 : 1.5,
         strokeDasharray: inFlight ? '6 4' : undefined,
         // The one edge with something to say says it in the colour of the thing it is saying: work
         // is in flight into this task, and `dispatched` is what that looks like everywhere else.
         ...(inFlight && { stroke: themeOf('dispatched').accent }),
+        ...(critical && { stroke: CRITICAL_PATH_COLOUR }),
         ...(dimmed && { opacity: 0.15 }),
       },
-      markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 18,
+        height: 18,
+        // The arrowhead keeps the road's ink, or the line arrives in one colour and lands in another.
+        ...(critical && { color: CRITICAL_PATH_COLOUR }),
+      },
     };
   });
 }
