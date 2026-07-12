@@ -1,0 +1,267 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/**
+ * The page's whole vocabulary of colour, in one file.
+ *
+ * Two palettes live here and they do different jobs:
+ *
+ * 1. **The shell** — background, foreground, border, muted, accent. shadcn's tokens, in a
+ *    neutral zinc. It is furniture: it should be legible and then get out of the way, because
+ *    the only colour on this screen that is allowed to *mean* something is a status.
+ * 2. **The statuses** — the six task colours the dev signed off on screen against the live
+ *    prototype (SPEC §7.5), plus the orange a decision gate wears. The light values are those
+ *    hexes **verbatim**: retuning them is re-approval, not refactoring. The dark values are new,
+ *    and they hold the one rule that matters — the *accent* is the same in both themes, because
+ *    it is the colour a node's border, a minimap dot and a pulse all wear, and a green that
+ *    changed with the theme would be two greens.
+ *
+ * They are CSS variables rather than TypeScript constants because the theme has to be able to
+ * flip under the whole page at once. `canvas/theme.ts` is the seam that hands them to the
+ * components: class names for anything Tailwind can paint, `var(--…)` values for the two places
+ * that need a colour and not a class — React Flow's minimap fill, and the pulse's box-shadow.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(0.995 0 0);
+  --foreground: oklch(0.21 0.006 285.9);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.006 285.9);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.006 285.9);
+  --primary: oklch(0.21 0.006 285.9);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.4);
+  --secondary-foreground: oklch(0.21 0.006 285.9);
+  --muted: oklch(0.973 0.001 286.4);
+  --muted-foreground: oklch(0.552 0.014 285.9);
+  --accent: oklch(0.967 0.001 286.4);
+  --accent-foreground: oklch(0.21 0.006 285.9);
+  --destructive: oklch(0.577 0.245 27.3);
+  --border: oklch(0.92 0.004 286.3);
+  --input: oklch(0.92 0.004 286.3);
+  --ring: oklch(0.62 0.19 259.8);
+
+  /* The one blue that is not a status: *this is the one you are looking at*. */
+  --selection: oklch(0.62 0.19 259.8);
+  --selection-soft: oklch(0.97 0.014 254.6);
+  --selection-ink: oklch(0.42 0.16 264.4);
+
+  --status-pending: #a1a1aa;
+  --status-pending-soft: #f4f4f5;
+  --status-pending-ink: #3f3f46;
+  --status-ready: #3b82f6;
+  --status-ready-soft: #dbeafe;
+  --status-ready-ink: #1e3a8a;
+  --status-dispatched: #f59e0b;
+  --status-dispatched-soft: #fef3c7;
+  --status-dispatched-ink: #78350f;
+  --status-completed: #22c55e;
+  --status-completed-soft: #dcfce7;
+  --status-completed-ink: #14532d;
+  --status-failed: #ef4444;
+  --status-failed-soft: #fee2e2;
+  --status-failed-ink: #7f1d1d;
+  --status-blocked: #a855f7;
+  --status-blocked-soft: #f3e8ff;
+  --status-blocked-ink: #581c87;
+
+  /* A status from an Orca newer than this build: shown, in a colour that claims nothing. */
+  --status-unknown: #71717a;
+  --status-unknown-soft: #e4e4e7;
+  --status-unknown-ink: #27272a;
+
+  /* Not the amber of `dispatched`: amber is work in flight, and a gate is the opposite of that. */
+  --gate: #f97316;
+  --gate-soft: #ffedd5;
+  --gate-ink: #9a3412;
+}
+
+.dark {
+  --background: oklch(0.165 0.004 285.8);
+  --foreground: oklch(0.96 0.001 286.4);
+  --card: oklch(0.205 0.006 285.9);
+  --card-foreground: oklch(0.96 0.001 286.4);
+  --popover: oklch(0.225 0.006 285.9);
+  --popover-foreground: oklch(0.96 0.001 286.4);
+  --primary: oklch(0.92 0.004 286.3);
+  --primary-foreground: oklch(0.21 0.006 285.9);
+  --secondary: oklch(0.27 0.006 286.0);
+  --secondary-foreground: oklch(0.96 0.001 286.4);
+  --muted: oklch(0.25 0.006 286.0);
+  --muted-foreground: oklch(0.68 0.012 286.1);
+  --accent: oklch(0.29 0.007 286.0);
+  --accent-foreground: oklch(0.96 0.001 286.4);
+  --destructive: oklch(0.66 0.2 25.3);
+  --border: oklch(0.3 0.007 286.0);
+  --input: oklch(0.32 0.008 286.0);
+  --ring: oklch(0.62 0.19 259.8);
+
+  --selection: oklch(0.62 0.19 259.8);
+  --selection-soft: oklch(0.32 0.07 258.4);
+  --selection-ink: oklch(0.93 0.03 255.5);
+
+  /* Same accents — a status is one colour, whatever the theme. Only the fill and the ink flip. */
+  --status-pending-soft: #27272a;
+  --status-pending-ink: #d4d4d8;
+  --status-ready-soft: #172554;
+  --status-ready-ink: #bfdbfe;
+  --status-dispatched-soft: #431f07;
+  --status-dispatched-ink: #fde68a;
+  --status-completed-soft: #052e16;
+  --status-completed-ink: #bbf7d0;
+  --status-failed-soft: #450a0a;
+  --status-failed-ink: #fecaca;
+  --status-blocked-soft: #2e1065;
+  --status-blocked-ink: #e9d5ff;
+
+  --status-unknown-soft: #3f3f46;
+  --status-unknown-ink: #e4e4e7;
+
+  --gate-soft: #431407;
+  --gate-ink: #fed7aa;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-selection: var(--selection);
+  --color-selection-soft: var(--selection-soft);
+  --color-selection-ink: var(--selection-ink);
+
+  --color-status-pending: var(--status-pending);
+  --color-status-pending-soft: var(--status-pending-soft);
+  --color-status-pending-ink: var(--status-pending-ink);
+  --color-status-ready: var(--status-ready);
+  --color-status-ready-soft: var(--status-ready-soft);
+  --color-status-ready-ink: var(--status-ready-ink);
+  --color-status-dispatched: var(--status-dispatched);
+  --color-status-dispatched-soft: var(--status-dispatched-soft);
+  --color-status-dispatched-ink: var(--status-dispatched-ink);
+  --color-status-completed: var(--status-completed);
+  --color-status-completed-soft: var(--status-completed-soft);
+  --color-status-completed-ink: var(--status-completed-ink);
+  --color-status-failed: var(--status-failed);
+  --color-status-failed-soft: var(--status-failed-soft);
+  --color-status-failed-ink: var(--status-failed-ink);
+  --color-status-blocked: var(--status-blocked);
+  --color-status-blocked-soft: var(--status-blocked-soft);
+  --color-status-blocked-ink: var(--status-blocked-ink);
+  --color-status-unknown: var(--status-unknown);
+  --color-status-unknown-soft: var(--status-unknown-soft);
+  --color-status-unknown-ink: var(--status-unknown-ink);
+
+  --color-gate: var(--gate);
+  --color-gate-soft: var(--gate-soft);
+  --color-gate-ink: var(--gate-ink);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* A tool, not a document: the page never scrolls — its panels do. */
+    @apply overflow-hidden;
+  }
+
+  /* A tool you scan for an hour deserves a scrollbar that is not shouting. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/**
+ * The ~1 s flash a message leaves on the node it refers to (#18, SPEC §7.6). The colour is the
+ * message type's, handed in by the node as a custom property, so the keyframes stay ignorant of
+ * what happened.
+ */
+@keyframes orca-pulse {
+  from {
+    box-shadow: 0 0 0 3px var(--orca-pulse);
+  }
+  to {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+/**
+ * React Flow paints its chrome from its own custom properties. Handing it ours is what keeps the
+ * canvas from being a white rectangle sitting in a dark page — and it is the only styling this
+ * file does on someone else's component.
+ */
+.react-flow {
+  --xy-background-color: var(--background);
+  --xy-edge-stroke: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  --xy-edge-stroke-selected: var(--selection);
+  --xy-handle-background-color: var(--muted-foreground);
+  --xy-handle-border-color: var(--background);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(in oklch, var(--muted) 65%, transparent);
+  --xy-attribution-background-color: transparent;
+}
+
+.react-flow__controls {
+  @apply overflow-hidden rounded-lg border shadow-sm;
+}
+
+.react-flow__controls-button {
+  @apply border-border border-b-[1px];
+}
+
+.react-flow__minimap {
+  @apply rounded-lg border shadow-sm;
+}
+
+.react-flow__background-pattern {
+  color: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+}
+
+.react-flow__attribution {
+  @apply hidden;
+}

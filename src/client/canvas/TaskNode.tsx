@@ -1,9 +1,12 @@
 import { Handle, type NodeProps, Position, type Node } from '@xyflow/react';
+import { OctagonAlert } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../feed/theme.ts';
 import { relativeTime } from '../relative-time.ts';
-import { colorOf, GATE_COLOR, NODE_HEIGHT, NODE_WIDTH, SELECTED_OUTLINE, STALE_HEARTBEAT_MS } from './theme.ts';
+import { GATE_THEME, NODE_HEIGHT, NODE_WIDTH, SELECTED_RING, STALE_HEARTBEAT_MS, themeOf } from './theme.ts';
 
 /**
  * A task, as it appears on the canvas — the node component the dev approved on screen
@@ -31,7 +34,7 @@ export type TaskFlowNode = Node<TaskNodeData, 'task'>;
 
 export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   const { task, now, selected, pulse } = data;
-  const color = colorOf(task.status);
+  const theme = themeOf(task.status);
 
   return (
     <div
@@ -39,70 +42,50 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       data-task={task.id}
       data-selected={selected}
       // The *type*, not the colour: a test asserts that a `worker_done` flashed this node and
-      // that a heartbeat never did, and neither of those is a question about a hex code.
+      // that a heartbeat never did, and neither of those is a question about a colour.
       data-pulse={pulse?.type}
-      style={{
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-        boxSizing: 'border-box',
-        background: color.bg,
-        border: `1.5px solid ${color.border}`,
-        borderLeft: `5px solid ${color.border}`,
-        borderRadius: 6,
-        padding: '5px 8px',
-        fontSize: 11,
-        color: color.text,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-        cursor: 'pointer',
+      className={cn(
+        'flex cursor-pointer flex-col gap-1 rounded-lg border border-l-4 px-2.5 py-2 text-[11px] shadow-sm transition-shadow hover:shadow-md',
+        theme.surface,
         // Selection is an *outline*, never the border: the border is the status, and a node
         // that changed colour when you clicked it would be a node that lied about its state.
-        outline: selected ? `2px solid ${SELECTED_OUTLINE}` : undefined,
-        outlineOffset: 2,
+        selected && SELECTED_RING
+      )}
+      style={{
+        // The one thing here that is a *number* and not a look: elkjs placed every node in the
+        // graph against exactly these (`layout.ts`), so they cannot become a class.
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
         ...(pulse && {
           boxShadow: `0 0 0 3px ${pulse.color}`,
-          // The keyframes are in `index.html` — the one rule inline styles cannot express.
+          // The keyframes are in `index.css` — the one rule a style attribute cannot express.
           animation: 'orca-pulse 1s ease-out',
           ['--orca-pulse' as string]: pulse.color,
         }),
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ opacity: 0.4 }} />
+      <Handle type="target" position={Position.Top} className="!size-1.5 !border-0 opacity-40" />
 
-      <div style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 10 }}>
-        <span
-          aria-hidden
-          style={{ width: 8, height: 8, borderRadius: 999, background: color.border, flexShrink: 0 }}
-        />
+      <div className="flex items-center gap-1.5 text-[10px]">
+        <span aria-hidden className={cn('size-2 shrink-0 rounded-full', theme.dot)} />
         {/* The raw string, whatever it is: an unknown status names a real state (SPEC §5). */}
-        <b>{task.status}</b>
+        <b className="font-semibold tracking-tight">{task.status}</b>
         <GateMarker task={task} />
         <RetryMarker attemptCount={task.attemptCount} />
         <Assignee task={task} />
       </div>
 
-      <div
-        style={{
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: 'vertical',
-          lineHeight: 1.25,
-        }}
-      >
-        {task.title}
-      </div>
+      <div className="line-clamp-3 leading-tight font-medium">{task.title}</div>
 
       <LastSeen task={task} now={now} />
 
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0.4 }} />
+      <Handle type="source" position={Position.Bottom} className="!size-1.5 !border-0 opacity-40" />
     </div>
   );
 }
 
 /**
- * ⛔ — this task is not working, it is *waiting on you* (SPEC §7.5).
+ * The octagon — this task is not working, it is *waiting on you* (SPEC §7.5).
  *
  * Only while the gate is open: an answered question is history, and history belongs in the
  * inspector, not as a warning on a node that is getting on with its work. The gate the server
@@ -116,24 +99,19 @@ function GateMarker({ task }: { task: Task }) {
   if (task.gate?.status !== 'open') return null;
 
   return (
-    <span
+    <Badge
       data-testid="gate-marker"
+      variant="outline"
       title={task.gate.question}
       // A badge, like the assignee chip beside it (SPEC §7.5) — not bare text. It is the one
       // thing on this node that means *stopped*, and on a canvas you are scanning rather than
-      // reading, a shape catches the eye before a colour does.
-      style={{
-        background: GATE_COLOR.bg,
-        border: `1px solid ${GATE_COLOR.border}`,
-        color: GATE_COLOR.text,
-        borderRadius: 4,
-        padding: '0 4px',
-        fontWeight: 700,
-        whiteSpace: 'nowrap',
-      }}
+      // reading, a shape catches the eye before a colour does. An octagon and not the ⛔ emoji,
+      // which is a tofu box on any machine without an emoji font — and this is the glyph that
+      // must never fail to draw.
+      className={cn('gap-0.5 px-1.5 py-0 text-[10px] font-bold', GATE_THEME.surface)}
     >
-      ⛔ gate
-    </span>
+      <OctagonAlert className="size-3" /> gate
+    </Badge>
   );
 }
 
@@ -149,7 +127,7 @@ function RetryMarker({ attemptCount }: { attemptCount: number }) {
     <span
       data-testid="retry-marker"
       title={`${attemptCount} dispatch attempts`}
-      style={{ color: '#b45309', fontWeight: 700 }}
+      className="font-bold text-amber-700 dark:text-amber-400"
     >
       ↻{attemptCount}
     </span>
@@ -162,22 +140,16 @@ function Assignee({ task }: { task: Task }) {
   const { assigneeHandle, failureCount } = task.dispatch;
 
   return (
-    <span style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+    <span className="ml-auto flex items-center gap-1">
       {failureCount > 0 && (
-        <span data-testid="failure-count" style={{ color: '#b91c1c', fontWeight: 700 }}>
+        <span data-testid="failure-count" className="font-bold text-red-700 dark:text-red-400">
           ✗{failureCount}
         </span>
       )}
       <span
         data-testid="assignee"
         title={assigneeHandle}
-        style={{
-          background: '#1e293b',
-          color: '#e2e8f0',
-          borderRadius: 4,
-          padding: '1px 5px',
-          fontFamily: 'ui-monospace, monospace',
-        }}
+        className="bg-foreground/85 text-background rounded px-1.5 py-px font-mono text-[10px] tracking-tight"
       >
         {shortHandle(assigneeHandle)}
       </span>
@@ -208,7 +180,7 @@ function LastSeen({ task, now }: { task: Task; now: number }) {
     <span
       data-testid="last-seen"
       data-stale={stale}
-      style={{ fontSize: 9, color: stale ? '#b45309' : 'inherit', fontWeight: stale ? 700 : 400 }}
+      className={cn('text-[9px] opacity-75', stale && 'font-bold text-amber-700 opacity-100 dark:text-amber-400')}
     >
       last seen {relativeTime(silentFor)} ago
     </span>

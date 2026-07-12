@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STATUS_COLORS } from '../../src/client/canvas/theme.ts';
+import { STATUS_THEME } from '../../src/client/canvas/theme.ts';
 import { Live } from '../../src/client/Live.tsx';
 import type { Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
@@ -159,7 +159,7 @@ describe('<Live>', () => {
     source.push(event({ tasks: [{ ...TASK, status: 'completed' }] }));
 
     await waitFor(() =>
-      expect(screen.getByTestId('task-node')).toHaveStyle({ background: STATUS_COLORS.completed.bg })
+      expect(screen.getByTestId('task-node')).toHaveClass(...STATUS_THEME.completed.surface.split(' '))
     );
   });
 

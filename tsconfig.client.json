@@ -8,7 +8,10 @@
     "moduleResolution": "bundler",
     "types": ["vite/client"],
     "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    // shadcn's alias, resolved by Vite and Vitest alike (see their configs).
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/client/*"] }
   },
   "include": ["src/client", "test/client"]
 }

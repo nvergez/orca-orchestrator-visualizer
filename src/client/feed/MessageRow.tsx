@@ -1,9 +1,12 @@
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import { taskIdOf } from '../../shared/payload.ts';
 import type { FeedMessage } from '../../shared/types.ts';
 import { ageOf } from '../relative-time.ts';
-import { colorOfMessage } from './theme.ts';
+import { themeOfMessage } from './theme.ts';
 
 /**
  * One message, as both panels that show messages render it.
@@ -32,7 +35,7 @@ export type MessageRowProps = {
 
 export function MessageRow({ message, now, onSelect }: MessageRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const color = colorOfMessage(message.type);
+  const theme = themeOfMessage(message.type);
 
   // The writer named a task and the server could not find it: the reference is broken, and the
   // row says so rather than looking like a message that never referred to anything.
@@ -45,30 +48,22 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
       data-type={message.type}
       data-sequence={message.sequence}
       data-task={message.taskId ?? undefined}
-      style={{ padding: '8px 12px', borderBottom: '1px solid #f4f4f5', fontSize: 12 }}
+      className="hover:bg-muted/40 border-b px-4 py-2.5 text-xs transition-colors last:border-b-0"
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="flex items-center gap-1.5">
         {/* The raw type string, whatever it is — an Orca that invents one still names a real
             event, and it is rendered neutral rather than dropped (SPEC §5). */}
-        <span
+        <Badge
           data-testid="type-chip"
-          style={{
-            background: color.bg,
-            border: `1px solid ${color.border}`,
-            color: color.text,
-            borderRadius: 4,
-            padding: '0 5px',
-            fontSize: 10,
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-          }}
+          variant="outline"
+          className={cn('rounded px-1.5 py-0 text-[10px] font-semibold', theme.surface)}
         >
           {message.type}
-        </span>
+        </Badge>
 
         <code
           title={`${message.fromHandle} → ${message.toHandle}`}
-          style={{ fontSize: 10, color: '#71717a', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          className="text-muted-foreground truncate font-mono text-[10px]"
         >
           {shortHandle(message.fromHandle)} → {shortHandle(message.toHandle)}
         </code>
@@ -76,21 +71,13 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
         <Age at={message.createdAt} now={now} />
       </div>
 
-      <div style={{ marginTop: 3 }}>
+      <div className="mt-1">
         {linked ? (
           <button
             type="button"
             onClick={() => onSelect(message)}
             title="Show this task on the canvas"
-            style={{
-              padding: 0,
-              border: 'none',
-              background: 'none',
-              font: 'inherit',
-              color: '#1d4ed8',
-              textAlign: 'left',
-              cursor: 'pointer',
-            }}
+            className="text-selection-ink cursor-pointer text-left font-medium hover:underline"
           >
             {message.subject}
           </button>
@@ -102,10 +89,10 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
                 ? 'This message names a task that is no longer in the database — a reset deleted it.'
                 : undefined
             }
-            style={{ color: '#3f3f46' }}
+            className="text-foreground/90"
           >
             {message.subject}
-            {dangling && <span style={{ color: '#a1a1aa' }}> · unlinked</span>}
+            {dangling && <span className="text-muted-foreground/70"> · unlinked</span>}
           </span>
         )}
       </div>
@@ -116,24 +103,20 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
             type="button"
             aria-expanded={expanded}
             onClick={() => setExpanded(!expanded)}
-            style={{
-              marginTop: 3,
-              padding: 0,
-              border: 'none',
-              background: 'none',
-              font: 'inherit',
-              fontSize: 11,
-              color: '#71717a',
-              cursor: 'pointer',
-            }}
+            className="text-muted-foreground hover:text-foreground mt-1 flex cursor-pointer items-center gap-0.5 text-[11px] transition-colors"
           >
-            {expanded ? '▾' : '▸'} details
+            {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            details
           </button>
 
           {expanded && (
-            <div data-testid="feed-details">
-              {message.body !== '' && <p style={BODY_STYLE}>{message.body}</p>}
-              {message.payload !== null && <pre style={PAYLOAD_STYLE}>{JSON.stringify(message.payload, null, 2)}</pre>}
+            <div data-testid="feed-details" className="mt-1.5">
+              {message.body !== '' && <p className="text-foreground/80 whitespace-pre-wrap">{message.body}</p>}
+              {message.payload !== null && (
+                <pre className="bg-muted text-muted-foreground mt-1.5 overflow-x-auto rounded-md p-2 font-mono text-[10px]">
+                  {JSON.stringify(message.payload, null, 2)}
+                </pre>
+              )}
             </div>
           )}
         </>
@@ -145,34 +128,21 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
 /** How long ago, with the exact instant in the tooltip for when "3m" is not enough. */
 function Age({ at, now }: { at: string; now: number }) {
   const age = ageOf(at, now);
+  const className = 'text-muted-foreground/70 ml-auto shrink-0 text-[10px] tabular-nums';
 
   // A string that is not a timestamp is not marked up as one: `<time datetime="…">` would be
   // claiming a machine-readable instant that this very row is saying it does not have.
   if (!age.readable) {
     return (
-      <span style={AGE_STYLE} title={age.title}>
+      <span className={className} title={age.title}>
         {age.label}
       </span>
     );
   }
 
   return (
-    <time dateTime={at} title={age.title} style={AGE_STYLE}>
+    <time dateTime={at} title={age.title} className={className}>
       {age.label}
     </time>
   );
 }
-
-const AGE_STYLE = { marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: '#a1a1aa' };
-
-const BODY_STYLE = { margin: '4px 0 0', whiteSpace: 'pre-wrap' as const, color: '#3f3f46' };
-
-const PAYLOAD_STYLE = {
-  margin: '4px 0 0',
-  padding: 6,
-  borderRadius: 4,
-  background: '#f4f4f5',
-  fontSize: 10,
-  overflowX: 'auto' as const,
-  color: '#3f3f46',
-};

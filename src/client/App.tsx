@@ -1,8 +1,13 @@
+import { Database, Moon, Sun, Waypoints } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 import type { FeedMessage, Gate, Meta, Run, StreamEvent, Task } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
-import { STATUS_COLORS } from './canvas/theme.ts';
+import { GATE_THEME } from './canvas/theme.ts';
 import { useFeed, usePulses } from './feed/feed.ts';
 import { Feed } from './feed/Feed.tsx';
 import { GateStrip } from './gates/GateStrip.tsx';
@@ -10,6 +15,7 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
+import { useThemeMode } from './theme-mode.ts';
 
 /**
  * The shell — the run rail on the left, the canvas in the middle, the feed on the right, and
@@ -110,9 +116,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   // that was actually made is legible.
   const taskGates = useMemo(
     () =>
-      event && selectedTask
-        ? event.snapshot.gates.filter((gate) => gate.taskId === selectedTask.id)
-        : NO_GATES,
+      event && selectedTask ? event.snapshot.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES,
     [event, selectedTask]
   );
 
@@ -156,25 +160,15 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
     setSelectedTaskId(taskId);
   }
 
-  if (!event) {
-    return (
-      <main>
-        <h1>orca-viz</h1>
-        <p>Connecting to the database…</p>
-      </main>
-    );
-  }
+  if (!event) return <Connecting />;
 
   return (
-    <main style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: 0 }}>
-      <header style={{ padding: '8px 16px', borderBottom: '1px solid #e4e4e7', flexShrink: 0 }}>
-        <h1 style={{ fontSize: 16, margin: '0 0 4px' }}>orca-viz</h1>
-        <Status meta={event.meta} />
-        <Notices meta={event.meta} />
-        <Source meta={event.meta} />
-      </header>
+    <main className="flex h-full flex-col">
+      <TopBar meta={event.meta} />
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      <Notices meta={event.meta} />
+
+      <div className="flex min-h-0 flex-1">
         <RunRail
           runs={runs}
           coordinatorRuns={event.snapshot.coordinatorRuns}
@@ -183,7 +177,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
           newRunId={newRunId}
         />
 
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <div className="flex min-w-0 flex-1 flex-col">
           {/*
             Above the canvas, and only while something is blocked (#19). It is not a panel in
             the dock and it is not a tab: a question that has stopped your orchestration has to
@@ -192,7 +186,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
           */}
           <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
 
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div className="min-h-0 flex-1">
             <Canvas
               tasks={tasks}
               selectedTaskId={selectedTask?.id ?? null}
@@ -228,15 +222,113 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
 }
 
 /**
+ * The one bar across the top, and everything on it is an answer to *what am I actually looking
+ * at*: which database, how old it is, and whether anything is still writing to it.
+ *
+ * It is not a toolbar. There is nothing to do to an Orca database from here — this tool does not
+ * write (SPEC §1.2) — so the only control on it is the one that is about the reader and not the
+ * data: the light the page is read in.
+ */
+function TopBar({ meta }: { meta: Meta }) {
+  return (
+    <header className="bg-card flex h-13 shrink-0 items-center gap-3 border-b px-4">
+      <span className="flex shrink-0 items-center gap-2">
+        <span className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md">
+          <Waypoints className="size-3.5" />
+        </span>
+        <b className="text-sm font-semibold tracking-tight whitespace-nowrap">orca-viz</b>
+      </span>
+
+      <Separator orientation="vertical" className="!h-5" />
+
+      <Status meta={meta} />
+
+      <Source meta={meta} />
+
+      <ThemeToggle />
+    </header>
+  );
+}
+
+/**
  * Live, or last-known — the one thing that is always worth saying, said in the words the
  * spec pins down (SPEC §6.1). `src/shared/wording.ts` owns the sentence, so this and the
  * line the terminal prints at boot are the same sentence and cannot drift apart.
  */
 function Status({ meta }: { meta: Meta }) {
+  const live = meta.liveness === 'live';
+
   return (
-    <p role="status" data-state={meta.liveness}>
-      {livenessSentence(meta, formatTime)}.
+    <p
+      role="status"
+      data-state={meta.liveness}
+      className={cn(
+        'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+        live
+          ? 'bg-status-completed-soft text-status-completed-ink border-status-completed/50'
+          : 'text-muted-foreground bg-muted'
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          live ? 'bg-status-completed animate-pulse' : 'bg-muted-foreground/50'
+        )}
+      />
+      {/* The sentence is the spec's, down to the word (`wording.ts`) — the capital is the
+          stylesheet's, because a sentence in a pill still starts like a sentence. */}
+      <span className="first-letter:uppercase">{livenessSentence(meta, formatTime)}.</span>
     </p>
+  );
+}
+
+/** Always on screen, always true: the file, and the schema it turned out to be. */
+function Source({ meta }: { meta: Meta }) {
+  return (
+    <dl className="text-muted-foreground ml-auto flex min-w-0 items-center gap-3 text-[11px]">
+      {/* Long, and always worth having: the whole of it is in the tooltip, because "which
+          database am I reading" is the one question this bar exists to answer. */}
+      <div className="flex min-w-0 items-center gap-1.5" title={meta.dbPath}>
+        <dt className="sr-only">Database</dt>
+        <Database aria-hidden className="size-3.5 shrink-0 opacity-70" />
+        <dd className="m-0 max-w-[26rem] min-w-0">
+          <code className="block truncate font-mono">{meta.dbPath}</code>
+        </dd>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        <dt className="sr-only">Schema</dt>
+        <dd className="m-0">
+          <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px]">
+            v{meta.schemaVersion}
+          </Badge>
+        </dd>
+      </div>
+
+      <div className="hidden shrink-0 items-center gap-1.5 lg:flex" title="When this database was last written to">
+        <dt className="opacity-70">Last write</dt>
+        <dd className="m-0 tabular-nums">{formatTime(meta.dbMtime)}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function ThemeToggle() {
+  const { mode, toggle } = useThemeMode();
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={toggle}
+      className="text-muted-foreground size-7 shrink-0 cursor-pointer"
+      aria-label={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
+      title={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
+    >
+      {mode === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+    </Button>
   );
 }
 
@@ -247,9 +339,10 @@ function Status({ meta }: { meta: Meta }) {
  */
 function Notices({ meta }: { meta: Meta }) {
   const schema = schemaSentence(meta);
+  if (schema === null && !meta.resetDetected) return null;
 
   return (
-    <>
+    <div className={cn('flex shrink-0 flex-col gap-px border-b text-xs', GATE_THEME.surface)}>
       {/*
        * The schema banner (#21) — one banner for both directions of drift, because they are
        * the same fact told from two sides: this database is not the one the build was written
@@ -258,13 +351,13 @@ function Notices({ meta }: { meta: Meta }) {
        * looking like a bug. That is the whole point of `meta.degraded` reaching the screen.
        */}
       {schema !== null && (
-        <section role="status" data-state={`schema-${meta.schemaSupport}`} style={NOTICE_STYLE}>
-          <p style={{ margin: 0 }}>
-            {schema} <span style={{ opacity: 0.75 }}>(schema v{meta.schemaVersion})</span>
+        <section role="status" data-state={`schema-${meta.schemaSupport}`} className="px-4 py-2">
+          <p>
+            {schema} <span className="opacity-70">(schema v{meta.schemaVersion})</span>
           </p>
 
           {meta.degraded.length > 0 && (
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            <ul className="mt-1 list-disc pl-5 opacity-90">
               {meta.degraded.map((feature) => (
                 <li key={feature}>{feature}</li>
               ))}
@@ -274,29 +367,25 @@ function Notices({ meta }: { meta: Meta }) {
       )}
 
       {meta.resetDetected && (
-        <p role="status" data-state="reset" style={NOTICE_STYLE}>
-          Some history is gone: an <code>orchestration reset</code> wiped messages this database once held.
+        <p role="status" data-state="reset" className="px-4 py-2">
+          Some history is gone: an <code className="font-mono font-semibold">orchestration reset</code> wiped messages
+          this database once held.
         </p>
       )}
-    </>
+    </div>
   );
 }
 
-/** Always on screen, always true: the file, and the schema it turned out to be. */
-function Source({ meta }: { meta: Meta }) {
+/** Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink. */
+function Connecting() {
   return (
-    <dl>
-      <dt>Database</dt>
-      <dd>
-        <code>{meta.dbPath}</code>
-      </dd>
-
-      <dt>Schema</dt>
-      <dd>v{meta.schemaVersion}</dd>
-
-      <dt>Last write</dt>
-      <dd>{formatTime(meta.dbMtime)}</dd>
-    </dl>
+    <main className="flex h-full flex-col items-center justify-center gap-3">
+      <span className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
+        <Waypoints className="size-5" />
+      </span>
+      <h1 className="text-sm font-semibold tracking-tight">orca-viz</h1>
+      <p className="text-muted-foreground animate-pulse text-xs">Connecting to the database…</p>
+    </main>
   );
 }
 
@@ -305,19 +394,3 @@ function formatTime(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
 }
-
-/**
- * The page's one colour for "read this before you believe the screen" — the amber a
- * `dispatched` node already wears, *taken* from `canvas/theme.ts` rather than typed out again.
- * Those colours were signed off on screen and retuning them is re-approval, not refactoring
- * (theme.ts) — a second copy of the hex here is a copy that drifts out of that quietly.
- */
-const NOTICE_STYLE = {
-  margin: '4px 0',
-  padding: '6px 10px',
-  border: `1px solid ${STATUS_COLORS.dispatched.border}`,
-  borderRadius: 4,
-  background: STATUS_COLORS.dispatched.bg,
-  color: STATUS_COLORS.dispatched.text,
-  fontSize: 12,
-};

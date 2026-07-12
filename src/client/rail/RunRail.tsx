@@ -1,6 +1,9 @@
+import { ArrowUp, OctagonAlert } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import type { CoordinatorRun, Run } from '../../shared/types.ts';
-import { CHIP_STYLE } from '../chip.ts';
+import { CHIP_CLASS } from '../chip.ts';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
 /**
@@ -28,45 +31,44 @@ export type RunRailProps = {
 
 export function RunRail({ runs, coordinatorRuns, selectedId, onSelect, newRunId }: RunRailProps) {
   return (
-    <nav
-      aria-label="Runs (inferred)"
-      style={{
-        width: 260,
-        flexShrink: 0,
-        borderRight: '1px solid #e4e4e7',
-        overflowY: 'auto',
-        padding: '12px 0',
-      }}
-    >
-      <h2 style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: '#71717a', margin: '0 12px 8px' }}>
-        Runs (inferred)
-      </h2>
+    <nav aria-label="Runs (inferred)" className="bg-card flex w-[17rem] min-h-0 shrink-0 flex-col border-r">
+      <div className="flex items-center gap-2 px-4 pt-3.5 pb-2.5">
+        <h2 className="text-muted-foreground text-[11px] font-semibold tracking-widest uppercase">
+          Runs{' '}
+          {/* The admission, and it is the header's — not a footnote you have to go and find. */}
+          <span className="text-muted-foreground/60 font-normal normal-case">(inferred)</span>
+        </h2>
+        <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">{runs.length}</span>
+      </div>
 
       {/*
         No auto-jump (SPEC §7.3). A run appearing while you read an old one is *news*, not an
         instruction: the canvas is never yanked out from under you.
       */}
       {newRunId && (
-        <button type="button" onClick={() => onSelect(newRunId)} style={{ ...CHIP_STYLE, margin: '0 12px 8px' }}>
-          new run started ↑
+        <button type="button" onClick={() => onSelect(newRunId)} className={cn(CHIP_CLASS, 'mx-3 mb-2 cursor-pointer')}>
+          <ArrowUp className="size-3" />
+          new run started
         </button>
       )}
 
-      {runs.length === 0 ? (
-        // The canvas beside it already says what an empty database means; the rail only has to
-        // say that it has nothing to list.
-        <p style={{ margin: '0 12px', fontSize: 12, color: '#71717a' }}>No runs yet.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {runs.map((run) => (
-            <li key={run.id}>
-              <RunRow run={run} selected={run.id === selectedId} onSelect={() => onSelect(run.id)} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <ScrollArea className="min-h-0 flex-1">
+        {runs.length === 0 ? (
+          // The canvas beside it already says what an empty database means; the rail only has to
+          // say that it has nothing to list.
+          <p className="text-muted-foreground px-4 text-xs">No runs yet.</p>
+        ) : (
+          <ul className="space-y-0.5 px-2 pb-2">
+            {runs.map((run) => (
+              <li key={run.id}>
+                <RunRow run={run} selected={run.id === selectedId} onSelect={() => onSelect(run.id)} />
+              </li>
+            ))}
+          </ul>
+        )}
 
-      <CoordinatorRuns runs={coordinatorRuns} />
+        <CoordinatorRuns runs={coordinatorRuns} />
+      </ScrollArea>
     </nav>
   );
 }
@@ -89,27 +91,22 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
       aria-current={selected}
       onClick={onSelect}
       title={run.handle ?? 'No terminal handle — Orca never attributed these tasks to one.'}
-      style={{
-        display: 'block',
-        width: '100%',
-        textAlign: 'left',
-        padding: '8px 12px',
-        border: 'none',
-        borderLeft: `3px solid ${selected ? '#3b82f6' : 'transparent'}`,
-        background: selected ? '#eff6ff' : 'transparent',
-        cursor: 'pointer',
-        font: 'inherit',
-      }}
+      className={cn(
+        'relative w-full cursor-pointer rounded-md py-2 pr-2.5 pl-3 text-left transition-colors',
+        'hover:bg-accent/60 focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
+        // The selected run wears the page's one blue, and a bar in it — the same "this is the
+        // one you are looking at" the canvas outlines a node with.
+        selected &&
+          'bg-selection-soft/70 before:bg-selection hover:bg-selection-soft/70 before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[3px] before:rounded-full'
+      )}
     >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span className="flex items-center gap-2">
         <LiveDot live={run.live} />
-        <b style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {run.label}
-        </b>
+        <b className="truncate text-[13px] font-semibold">{run.label}</b>
         <BlockedFlag blocked={run.hasOpenGates} />
       </span>
 
-      <span style={{ display: 'block', paddingLeft: 14, fontSize: 11, color: '#71717a' }}>
+      <span className="text-muted-foreground mt-0.5 block pl-4 text-[11px]">
         {formatRunDate(run.startedAt)} · {run.taskCount} {run.taskCount === 1 ? 'task' : 'tasks'}
         {breakdown && <> · {breakdown}</>}
       </span>
@@ -118,7 +115,7 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
 }
 
 /**
- * ⛔ — this run is sitting on a question nobody has answered (`run.hasOpenGates`, #19).
+ * The octagon — this run is sitting on a question nobody has answered (`run.hasOpenGates`, #19).
  *
  * The rail's job is to let you pick the run worth opening without opening it (SPEC §7.2), and a
  * blocked run is the most worth opening there is: it is not slow, it is *stopped*, and it will
@@ -129,15 +126,14 @@ function BlockedFlag({ blocked }: { blocked: boolean }) {
   if (!blocked) return null;
 
   return (
-    <span
+    <OctagonAlert
       data-testid="run-gate-marker"
       role="img"
       aria-label="blocked on an open decision gate"
-      title="Blocked on an open decision gate"
-      style={{ marginLeft: 'auto', fontSize: 11 }}
+      className="text-gate ml-auto size-3.5 shrink-0"
     >
-      ⛔
-    </span>
+      <title>Blocked on an open decision gate</title>
+    </OctagonAlert>
   );
 }
 
@@ -154,14 +150,15 @@ function LiveDot({ live }: { live: boolean }) {
       role="img"
       aria-label={live ? 'running now' : 'ended'}
       title={live ? 'Running now' : 'Ended'}
-      style={{
-        width: 8,
-        height: 8,
-        borderRadius: 999,
-        flexShrink: 0,
-        background: live ? '#22c55e' : '#d4d4d8',
-      }}
-    />
+      className={cn(
+        'relative size-2 shrink-0 rounded-full',
+        live ? 'bg-status-completed' : 'bg-muted-foreground/35'
+      )}
+    >
+      {/* A live run is the one thing on this rail that is *happening*, so it is the one thing
+          that moves. Everything else holds still. */}
+      {live && <span className="bg-status-completed absolute inset-0 animate-ping rounded-full opacity-60" />}
+    </span>
   );
 }
 
@@ -176,18 +173,16 @@ function CoordinatorRuns({ runs }: { runs: CoordinatorRun[] }) {
   if (runs.length === 0) return null;
 
   return (
-    <section data-testid="coordinator-runs" style={{ margin: '16px 12px 0', fontSize: 11, color: '#71717a' }}>
-      <h3 style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 4px' }}>
-        Coordinator runs
-      </h3>
-      <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+    <section data-testid="coordinator-runs" className="text-muted-foreground mt-4 border-t px-4 py-3 text-[11px]">
+      <h3 className="text-[10px] font-semibold tracking-widest uppercase">Coordinator runs</h3>
+      <ul className="mt-1.5 space-y-1">
         {runs.map((run) => (
-          <li key={run.id} title={run.coordinatorHandle}>
-            <code>{shortHandle(run.coordinatorHandle)}</code> · {run.status}
+          <li key={run.id} title={run.coordinatorHandle} className="flex items-center gap-1.5">
+            <code className="font-mono">{shortHandle(run.coordinatorHandle)}</code>
+            <span className="opacity-70">· {run.status}</span>
           </li>
         ))}
       </ul>
     </section>
   );
 }
-

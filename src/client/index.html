@@ -3,22 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>orca-viz</title>
-    <style>
+    <script>
       /*
-       * The one thing an inline style cannot express: the ~1 s flash a message triggers on the
-       * node it refers to (#18, SPEC §7.6). The colour is the message type's, handed in as a
-       * custom property by the node itself, so the keyframes stay ignorant of what happened.
+       * The theme, before the first paint — and it belongs here, in the document, rather than in
+       * React: a page that mounted light and flipped to dark a frame later would flash white at
+       * someone who has chosen not to be flashed at. Same key and same fallback as
+       * `theme-mode.ts`, which owns the choice from here on.
        */
-      @keyframes orca-pulse {
-        from {
-          box-shadow: 0 0 0 3px var(--orca-pulse);
-        }
-        to {
-          box-shadow: 0 0 0 10px transparent;
-        }
+      try {
+        var stored = localStorage.getItem('orca-viz-theme');
+        var dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.classList.add('dark');
+      } catch (ignored) {
+        // No storage and no media query is not a reason to fail to render.
       }
-    </style>
+    </script>
   </head>
   <body>
     <div id="root"></div>

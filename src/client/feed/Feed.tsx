@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/utils';
 import type { FeedMessage } from '../../shared/types.ts';
-import { SELECTED_OUTLINE } from '../canvas/theme.ts';
-import { DOCK_STYLE } from '../dock.ts';
+import { DOCK_CLASS } from '../dock.ts';
 import { HeartbeatToggle } from './HeartbeatToggle.tsx';
 import { MessageRow } from './MessageRow.tsx';
 import { viewOf } from './select.ts';
@@ -51,47 +52,44 @@ export function Feed({ messages, runId, onSelectMessage }: FeedProps) {
   );
 
   return (
-    <aside data-testid="feed" aria-label="Message feed" style={DOCK_STYLE}>
-      <header style={{ padding: '12px 12px 8px', borderBottom: '1px solid #e4e4e7', flexShrink: 0 }}>
-        <h2 style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: '#71717a', margin: '0 0 8px' }}>
-          Feed
-        </h2>
+    <aside data-testid="feed" aria-label="Message feed" className={DOCK_CLASS}>
+      <header className="flex shrink-0 flex-col gap-2.5 border-b px-4 py-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-muted-foreground text-[11px] font-semibold tracking-widest uppercase">Feed</h2>
+          <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">
+            {shown.length} {shown.length === 1 ? 'message' : 'messages'}
+          </span>
+        </div>
 
-        <div role="group" aria-label="Feed scope" style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+        {/* A segmented control, not two buttons in a row: the scope is one choice with two sides. */}
+        <div role="group" aria-label="Feed scope" className="bg-muted flex gap-0.5 rounded-lg p-0.5">
           <ScopeButton label="This run" active={scope === 'run'} onClick={() => setScope('run')} />
           <ScopeButton label="All" active={scope === 'all'} onClick={() => setScope('all')} />
         </div>
 
         <HeartbeatToggle showHeartbeats={showHeartbeats} onChange={setShowHeartbeats} hidden={hidden} />
-
-        <p style={{ margin: '6px 0 0', fontSize: 11, color: '#71717a' }}>
-          {shown.length} {shown.length === 1 ? 'message' : 'messages'}
-        </p>
       </header>
 
       {shown.length === 0 ? (
-        <p style={{ margin: 0, padding: 12, fontSize: 12, color: '#71717a' }}>
-          {hidden > 0
-            ? 'Nothing here but heartbeats — turn on “Show heartbeats” to see them.'
-            : emptyWording(scope)}
+        <p className="text-muted-foreground p-4 text-xs">
+          {hidden > 0 ? 'Nothing here but heartbeats — turn on “Show heartbeats” to see them.' : emptyWording(scope)}
         </p>
       ) : (
-        <ol
-          data-testid="feed-rows"
-          style={{ listStyle: 'none', margin: 0, padding: 0, overflowY: 'auto', flex: 1, minHeight: 0 }}
-        >
-          {/*
-            Newest first. The feed answers "what just happened" — and a live one that appended
-            below the fold would have to be chased down the page, or autoscrolled away from
-            under the user's own scrolling. (The inspector reads the other way round: one task's
-            messages are a story, and a story starts at the beginning.)
-          */}
-          {[...shown].reverse().map((message) => (
-            <li key={message.sequence}>
-              <MessageRow message={message} now={now} onSelect={onSelectMessage} />
-            </li>
-          ))}
-        </ol>
+        <ScrollArea className="min-h-0 flex-1">
+          <ol data-testid="feed-rows">
+            {/*
+              Newest first. The feed answers "what just happened" — and a live one that appended
+              below the fold would have to be chased down the page, or autoscrolled away from
+              under the user's own scrolling. (The inspector reads the other way round: one task's
+              messages are a story, and a story starts at the beginning.)
+            */}
+            {[...shown].reverse().map((message) => (
+              <li key={message.sequence}>
+                <MessageRow message={message} now={now} onSelect={onSelectMessage} />
+              </li>
+            ))}
+          </ol>
+        </ScrollArea>
       )}
     </aside>
   );
@@ -107,15 +105,11 @@ function ScopeButton({ label, active, onClick }: { label: string; active: boolea
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      style={{
-        padding: '3px 8px',
-        borderRadius: 6,
-        border: `1px solid ${active ? SELECTED_OUTLINE : '#d4d4d8'}`,
-        background: active ? '#eff6ff' : '#ffffff',
-        color: active ? '#1e3a8a' : '#3f3f46',
-        fontSize: 11,
-        cursor: 'pointer',
-      }}
+      className={cn(
+        'flex-1 cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+        'text-muted-foreground hover:text-foreground',
+        active && 'bg-card text-foreground shadow-sm'
+      )}
     >
       {label}
     </button>

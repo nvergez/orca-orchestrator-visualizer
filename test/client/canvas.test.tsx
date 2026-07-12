@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
 import {
   STALE_HEARTBEAT_MS,
-  STATUS_COLORS,
-  UNKNOWN_STATUS_COLOR,
+  STATUS_THEME,
+  UNKNOWN_STATUS_THEME,
 } from '../../src/client/canvas/theme.ts';
 import type { Dispatch, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
@@ -116,6 +116,11 @@ function node(id: string): HTMLElement {
   return found;
 }
 
+/** A theme's surface, as the class names `toHaveClass` takes — the page's colour is a class now. */
+function classes(surface: string): string[] {
+  return surface.split(' ');
+}
+
 describe('the task DAG on the canvas', () => {
   it('draws a node for every task, titled, without asking to be hovered', async () => {
     await draw([
@@ -134,9 +139,12 @@ describe('the task DAG on the canvas', () => {
       task({ id: 'task_done', status: 'completed' }),
     ]);
 
-    // The one thing that lets you find the failed task by scanning rather than searching.
-    expect(node('task_failed')).toHaveStyle({ background: STATUS_COLORS.failed.bg });
-    expect(node('task_done')).toHaveStyle({ background: STATUS_COLORS.completed.bg });
+    // The one thing that lets you find the failed task by scanning rather than searching. The
+    // colour is a class and not a hex, because the page has a light theme and a dark one and
+    // the palette lives in CSS (`index.css`) — what a node is *asserted* to wear is the theme's
+    // own class string, which is the same thing the old hex assertion said.
+    expect(node('task_failed')).toHaveClass(...classes(STATUS_THEME.failed.surface));
+    expect(node('task_done')).toHaveClass(...classes(STATUS_THEME.completed.surface));
   });
 
   it('keeps completed work on the canvas — a finished run is the whole point of a post-mortem', async () => {
@@ -151,7 +159,7 @@ describe('the task DAG on the canvas', () => {
     // Never dropped, never crashed on: a new Orca status shows up as *something* (SPEC §5),
     // in a colour that claims nothing about it.
     expect(within(node('task_strange')).getByText('quarantined')).toBeVisible();
-    expect(node('task_strange')).toHaveStyle({ background: UNKNOWN_STATUS_COLOR.bg });
+    expect(node('task_strange')).toHaveClass(...classes(UNKNOWN_STATUS_THEME.surface));
   });
 
   it('badges the node with who is working it, and how close they are to the breaker', async () => {

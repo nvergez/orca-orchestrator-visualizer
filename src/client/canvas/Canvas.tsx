@@ -1,5 +1,6 @@
 import {
   Background,
+  BackgroundVariant,
   Controls,
   type Edge as FlowEdge,
   MarkerType,
@@ -9,21 +10,19 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../feed/theme.ts';
 import { buildGraph, type Edge, type Graph } from './graph.ts';
 import { layoutGraph, type Placement } from './layout.ts';
 import { TaskNode, type TaskFlowNode } from './TaskNode.tsx';
-import { colorOf, NODE_HEIGHT, NODE_WIDTH } from './theme.ts';
+import { NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
 
 /**
- * The DAG.
- *
- * At this ticket it draws **every task in the database as one graph**, which at 76 tasks is
- * an unusable soup. That is expected and honest: it is the tracer that lands the read path,
- * the derivation and the canvas end to end, and it is the thing run scoping (#16) exists to
- * fix. Making it look nicer here would mean inventing run scoping, badly.
+ * The DAG — one run of it (#16), because every task in the database as one graph is 76 nodes of
+ * unreadable soup, and the rail is what resolves it.
  *
  * Two shapes the real data insists on:
  *
@@ -76,43 +75,49 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
 
   if (tasks.length === 0) {
     return (
-      <section data-testid="canvas" style={{ padding: 16 }}>
+      <Empty>
         <p role="status">No tasks in this database yet — nothing has been dispatched.</p>
-      </section>
+      </Empty>
     );
   }
 
   if (!placements) {
     return (
-      <section data-testid="canvas" style={{ padding: 16 }}>
+      <Empty>
         <p role="status">Laying out {tasks.length} tasks…</p>
-      </section>
+      </Empty>
     );
   }
 
   return (
-    <section data-testid="canvas" style={{ width: '100%', height: '100%' }}>
+    <section data-testid="canvas" className="h-full w-full">
       <ReactFlow<TaskFlowNode>
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
         fitView
-        fitViewOptions={{ padding: 0.15 }}
+        // A one-task run must not blow that task up to fill a 1600px canvas: fitting *to* the
+        // graph is the point, magnifying it is not. Zooming in past 1:1 is still yours to do.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.05}
         nodesDraggable={false}
         nodesConnectable={false}
         onNodeClick={(_, node) => onSelectTask(node.id)}
+        proOptions={{ hideAttribution: true }}
       >
-        <Background />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
         <Controls showInteractive={false} />
-        <MiniMap<TaskFlowNode> pannable zoomable nodeColor={(node) => colorOf(node.data.task.status).border} />
+        <MiniMap<TaskFlowNode> pannable zoomable nodeColor={(node) => themeOf(node.data.task.status).accent} />
 
         {/* Inside `<ReactFlow>`, because that is where its viewport context lives. */}
         <CentreOnSelection selectedTaskId={selectedTaskId} nodes={nodes} />
 
         {graph.edges.length === 0 && (
           <Panel position="top-center">
-            <p data-testid="edgeless-note" style={NOTE_STYLE}>
+            <p
+              data-testid="edgeless-note"
+              className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1 text-xs shadow-sm backdrop-blur"
+            >
               No dependencies in this run — {tasks.length} tasks dispatched independently.
             </p>
           </Panel>
@@ -120,14 +125,17 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
 
         {graph.isolated.length > 0 && (
           <Panel position="top-left">
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => setShowIsolated((shown) => !shown)}
               aria-expanded={showIsolated}
-              style={BUTTON_STYLE}
+              className="bg-card/90 h-7 gap-1 rounded-full px-3 text-xs shadow-sm backdrop-blur"
             >
-              {showIsolated ? '▾' : '▸'} Isolated tasks ({graph.isolated.length})
-            </button>
+              {showIsolated ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              Isolated tasks ({graph.isolated.length})
+            </Button>
           </Panel>
         )}
       </ReactFlow>
@@ -135,24 +143,17 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
   );
 }
 
-const NOTE_STYLE = {
-  margin: 0,
-  padding: '6px 12px',
-  borderRadius: 6,
-  background: '#f4f4f5',
-  border: '1px solid #d4d4d8',
-  fontSize: 13,
-  color: '#3f3f46',
-};
-
-const BUTTON_STYLE = {
-  padding: '5px 10px',
-  borderRadius: 6,
-  border: '1px solid #d4d4d8',
-  background: '#ffffff',
-  fontSize: 12,
-  cursor: 'pointer',
-};
+/** The canvas with nothing to draw on it: still the canvas, and still says why. */
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <section
+      data-testid="canvas"
+      className="text-muted-foreground flex h-full w-full items-center justify-center p-6 text-sm"
+    >
+      {children}
+    </section>
+  );
+}
 
 /**
  * "Click a feed row → its node highlights **and centres**" (SPEC §7.6) — the half of the link
@@ -244,7 +245,14 @@ function toEdges(edges: Edge[], tasks: Task[]): FlowEdge[] {
       source: edge.source,
       target: edge.target,
       animated: inFlight,
-      style: { strokeWidth: 1.5, strokeDasharray: inFlight ? '6 4' : undefined },
+      style: {
+        strokeWidth: 1.5,
+        strokeDasharray: inFlight ? '6 4' : undefined,
+        // The one edge with something to say says it in the colour of the thing it is saying:
+        // work is in flight into this task, and `dispatched` is what that looks like everywhere
+        // else on the page.
+        ...(inFlight && { stroke: themeOf('dispatched').accent }),
+      },
       markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
     };
   });

@@ -115,6 +115,9 @@ explanation rather than silently misread.
 - **The inspector** — the spec that was dispatched, the result that came back, and **every**
   dispatch attempt, which is the only place the retry-and-circuit-breaker story is visible.
 
+It follows your system's light or dark theme, and the toggle in the top right overrides that and
+is remembered.
+
 ## What it infers, and where that can be wrong
 
 orca-viz reads a database that was designed for a coordinator, not for a viewer, and it is
@@ -167,6 +170,7 @@ orca-viz is on its own semver and tracks no Orca version number.
 
 | orca-viz | Orca `SCHEMA_VERSION` verified against | Orca app version |
 |---|---|---|
+| 0.2.x | 5 | 1.4.128 |
 | 0.1.x | 5 | 1.4.128 |
 
 If your Orca is newer than the last row, orca-viz will most likely still work — the schema's
