@@ -116,6 +116,32 @@ describe('the live-shape corpus', () => {
     ).toBe(13);
   });
 
+  it('writes gate messages in both of the shapes the live database really holds', () => {
+    // The trap inside the trap (#19). `orchestration ask` writes {question, options} and no
+    // taskId; a worker escalating by hand with `orchestration send --type decision_gate` writes
+    // {taskId, dispatchId} and puts the question in the **subject**. On the live database
+    // (58 gate messages, measured) those two shapes are half the traffic each — and **every
+    // gate that names a task is the second kind**. So a reader that takes the question from
+    // `payload.question` alone renders an empty question on every gate that marks a node.
+    const shapes = rows<{ question: string | null; taskId: string | null }>(
+      `SELECT json_extract(payload, '$.question') AS question, json_extract(payload, '$.taskId') AS taskId
+       FROM messages WHERE type = 'decision_gate'`
+    );
+
+    expect(shapes.filter((gate) => gate.question !== null && gate.taskId === null)).toHaveLength(32);
+    expect(shapes.filter((gate) => gate.question === null && gate.taskId !== null)).toHaveLength(21);
+    // No gate has both — which is what makes the payload-only reading fail *silently*.
+    expect(shapes.filter((gate) => gate.question !== null && gate.taskId !== null)).toHaveLength(0);
+
+    // …and the question those 21 do have is in the subject, where a reader has to go and find it.
+    expect(
+      count(`SELECT COUNT(*) AS n FROM messages
+             WHERE type = 'decision_gate'
+               AND json_extract(payload, '$.taskId') IS NOT NULL
+               AND subject LIKE 'Question %'`)
+    ).toBe(21);
+  });
+
   it('holds escalations — the loudest rows in the feed, and the ones it paints red', () => {
     // Few, and every one of them naming the task its worker got stuck on. Without them the
     // feed's default content would be three types, not the four the ruling names (SPEC §7.7).

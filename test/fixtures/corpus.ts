@@ -255,26 +255,37 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
 
   // Gates. 53 gate messages against 0 decision_gates rows — the trap that empties the
   // gate panel of a gates-from-the-table implementation, forever, on real runs.
+  //
+  // And they come in the live database's **two shapes**, which is a trap inside that trap:
+  //
+  // - `orchestration ask` writes `payload = {question, options}` and **no taskId**.
+  // - a worker escalating by hand with `orchestration send --type decision_gate` writes
+  //   `payload = {taskId, dispatchId}` and puts the **question in the subject** — no
+  //   `payload.question` at all.
+  //
+  // On the live database every gate that names a task is of the second kind, so a reader that
+  // takes the question from the payload alone renders an empty question on *every gate that
+  // marks a node*. The corpus reproduces the correlation, not just the counts.
   const gateHosts = dispatchedTasks.filter((task) => task.status !== 'failed');
   for (let i = 0; i < GATE_MESSAGE_TOTAL; i++) {
     const host = gateHosts[(i * 7) % gateHosts.length]!;
     const gateId = syntheticId('msg', `gate-message-${i}`);
     const askedAt = new Date(host.createdAt.getTime() + (2 + i) * MINUTE);
-    // Only 21 of 53 gates name a task; the rest attach to their run and to no node.
+    // Only 21 of 53 gates name a task — and those are exactly the hand-written ones, whose
+    // question lives in the subject. The rest come from `ask`: a question, options, no task.
     const namesATask = i < GATES_WITH_A_TASK;
+    const question = `Question ${i + 1}: which way should this go?`;
 
     messages.push({
       id: gateId,
       type: 'decision_gate',
       fromHandle: host.assignee!,
       toHandle: host.handle ?? coordinatorOf(host.runIndex),
-      subject: `Decision needed on ${host.id}`,
-      body: 'Synthetic gate question.',
-      payload: {
-        question: `Question ${i + 1}: which way should this go?`,
-        options: ['option A', 'option B'],
-        ...(namesATask ? { taskId: host.id } : {}),
-      },
+      subject: namesATask ? question : `Decision needed on ${host.id}`,
+      body: namesATask ? 'The worker cannot proceed without a decision.' : 'Synthetic gate question.',
+      payload: namesATask
+        ? { taskId: host.id, dispatchId: syntheticId('ctx', `${host.id}-attempt-0`) }
+        : { question, options: ['option A', 'option B'] },
       createdAt: askedAt,
     });
 

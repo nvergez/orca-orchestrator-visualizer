@@ -26,6 +26,19 @@ export const STALE_HEARTBEAT_MS = 10 * 60 * 1000;
  */
 export const SELECTED_OUTLINE = '#3b82f6';
 
+/**
+ * The colour of a **blocked** orchestration — the ⛔ marker on a node, the strip above the
+ * canvas, and the flag on the rail row (SPEC §7.4, §7.5).
+ *
+ * Orange, and deliberately *not* the amber a `dispatched` node already wears: amber is "work in
+ * flight", and a gate is the opposite of that — the work has stopped, and it is waiting on a
+ * human. Two meanings in one colour would cost the strip the only thing it is for, which is
+ * being noticed.
+ *
+ * One entry, read by all three, so the thing that interrupts you looks the same everywhere.
+ */
+export const GATE_COLOR = { bg: '#ffedd5', border: '#f97316', text: '#9a3412' };
+
 export type StatusColor = { bg: string; border: string; text: string };
 
 /** Verbatim from the approved prototype (SPEC §7.5, and the colour table locked in #12). */

@@ -95,7 +95,7 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
   return {
     seq: 0,
     meta: META,
-    snapshot: { runs: [run()], tasks, coordinatorRuns: [] },
+    snapshot: { runs: [run()], tasks, gates: [], coordinatorRuns: [] },
     messages: [],
     ...over,
   };
@@ -356,6 +356,7 @@ describe('the link between the feed and the canvas', () => {
           snapshot: {
             runs: [run()],
             tasks: [task({ id: 'task_one', title: 'One' }), task({ id: 'task_two', title: 'Two' })],
+            gates: [],
             coordinatorRuns: [],
           },
           messages: [message({ type: 'worker_done', subject: 'Done with two', taskId: 'task_two' })],
@@ -379,6 +380,7 @@ describe('the link between the feed and the canvas', () => {
           snapshot: {
             runs: [run()],
             tasks: [task({ id: 'task_one', title: 'One' }), task({ id: 'task_two', title: 'Two' })],
+            gates: [],
             coordinatorRuns: [],
           },
           messages: [
@@ -440,6 +442,7 @@ describe('the link between the feed and the canvas', () => {
               task({ id: 'task_here', title: 'Here' }),
               task({ id: 'task_there', title: 'There', runId: OTHER_RUN_ID }),
             ],
+            gates: [],
             coordinatorRuns: [],
           },
           messages: [
@@ -562,6 +565,7 @@ describe('a new run arriving while you are reading', () => {
           run(),
         ],
         tasks: [task(), task({ id: 'task_new', runId: OTHER_RUN_ID, status: 'dispatched' })],
+        gates: [],
         coordinatorRuns: [],
       },
       messages: [message({ subject: 'the new run says hello', runId: OTHER_RUN_ID })],

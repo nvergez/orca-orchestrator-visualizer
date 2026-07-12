@@ -28,7 +28,7 @@ function event(meta: Partial<Meta> = {}): StreamEvent {
   return {
     seq: 0,
     meta: { ...META, ...meta },
-    snapshot: { runs: [], tasks: [], coordinatorRuns: [] },
+    snapshot: { runs: [], tasks: [], gates: [], coordinatorRuns: [] },
     messages: [],
   };
 }

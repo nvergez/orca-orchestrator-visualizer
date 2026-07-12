@@ -3,7 +3,7 @@ import { shortHandle } from '../../shared/handles.ts';
 import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../feed/theme.ts';
 import { relativeTime } from '../relative-time.ts';
-import { colorOf, NODE_HEIGHT, NODE_WIDTH, SELECTED_OUTLINE, STALE_HEARTBEAT_MS } from './theme.ts';
+import { colorOf, GATE_COLOR, NODE_HEIGHT, NODE_WIDTH, SELECTED_OUTLINE, STALE_HEARTBEAT_MS } from './theme.ts';
 
 /**
  * A task, as it appears on the canvas — the node component the dev approved on screen
@@ -77,6 +77,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
         />
         {/* The raw string, whatever it is: an unknown status names a real state (SPEC §5). */}
         <b>{task.status}</b>
+        <GateMarker task={task} />
         <RetryMarker attemptCount={task.attemptCount} />
         <Assignee task={task} />
       </div>
@@ -97,6 +98,31 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
 
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0.4 }} />
     </div>
+  );
+}
+
+/**
+ * ⛔ — this task is not working, it is *waiting on you* (SPEC §7.5).
+ *
+ * Only while the gate is open: an answered question is history, and history belongs in the
+ * inspector, not as a warning on a node that is getting on with its work. The gate the server
+ * hands the node is already the right one — the open one, when the task has several.
+ *
+ * The status colour underneath it stays whatever the row says. A `dispatched` task with an open
+ * gate is still dispatched; the marker adds the reason it is not moving, and repainting the node
+ * would be inventing a status Orca never wrote.
+ */
+function GateMarker({ task }: { task: Task }) {
+  if (task.gate?.status !== 'open') return null;
+
+  return (
+    <span
+      data-testid="gate-marker"
+      title={task.gate.question}
+      style={{ color: GATE_COLOR.text, fontWeight: 700, whiteSpace: 'nowrap' }}
+    >
+      ⛔ gate
+    </span>
   );
 }
 

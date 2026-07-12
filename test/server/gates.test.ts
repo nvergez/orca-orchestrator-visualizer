@@ -318,6 +318,19 @@ describe('gates in the live-shape corpus', () => {
     expect(gates.filter((gate) => gate.runId === null)).toHaveLength(0);
   });
 
+  it('reads a question for every one of them, in both of the shapes the real database writes', async () => {
+    // The trap inside the trap. On the live database *every* gate that names a task carries
+    // `{taskId, dispatchId}` and puts its question in the subject — so a reader that takes the
+    // question from `payload.question` alone renders a blank question on every gate that marks
+    // a node, and a strip full of ⛔ with nothing written beside it.
+    harness = await serve(liveShapeCorpus().write(tempDbPath()));
+
+    const { gates } = (await harness.snapshot()).snapshot;
+
+    expect(gates.filter((gate) => gate.question === '')).toHaveLength(0);
+    expect(gates.filter((gate) => gate.taskId !== null && gate.question !== '')).toHaveLength(21);
+  });
+
   it('flags exactly the runs that are blocked, and marks exactly the nodes that are', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
