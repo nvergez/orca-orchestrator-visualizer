@@ -1,4 +1,5 @@
 import type { CastMember, Task, TaskStatus } from '../../shared/types.ts';
+export { STALE_HEARTBEAT_MS } from '../worker-health.ts';
 
 /**
  * How a task *looks* — the visual decisions the dev signed off on screen against the live
@@ -19,16 +20,6 @@ import type { CastMember, Task, TaskStatus } from '../../shared/types.ts';
 /** 240 × 84, title clamped to three lines. Nothing is hidden behind a hover (SPEC §7.5). */
 export const NODE_WIDTH = 240;
 export const NODE_HEIGHT = 84;
-
-/**
- * How quiet an agent has to go before its "last seen" badge turns amber.
- *
- * 2× the 5-minute heartbeat cadence Orca instructs its workers to keep — one missed beat is
- * noise, two is a worker that has stopped talking. A constant, because a magic number here
- * is a magic number about *when to worry*.
- */
-export const STALE_HEARTBEAT_MS = 10 * 60 * 1000;
-
 /**
  * The one colour on the page that is not a status: *this is the one you are looking at*. The
  * node you selected — or that a turn in the conversation sent you to — the run the rail has open, the

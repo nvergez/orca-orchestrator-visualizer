@@ -1,17 +1,22 @@
 import { ArrowUp, ChevronDown, OctagonAlert, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { CoordinatorRun, Run } from '../../shared/types.ts';
+import type { CoordinatorRun, Run, Task } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
+import {
+  isActiveWorkerHealth,
+  type WorkerHealth,
+  workerHealthByAgent,
+} from '../worker-health.ts';
 import { Cast } from './Cast.tsx';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
@@ -49,6 +54,7 @@ import { formatRunDate, statusBreakdown } from './summary.ts';
  * jsdom, and the fallback is `true` — desktop and every existing test see the rail unchanged.
  */
 const CAN_HOVER = globalThis.matchMedia?.('(hover: hover)').matches ?? true;
+const EMPTY_HEALTH_BY_AGENT: ReadonlyMap<string, WorkerHealth> = new Map();
 
 /**
  * On a phone the rail is a stacked band that folds to a summary row instead of a fixed-width
@@ -64,6 +70,7 @@ export type RailFold = {
 
 export type RunRailProps = {
   runs: Run[];
+  tasks: Task[];
   coordinatorRuns: CoordinatorRun[];
   selectedId: string | null;
   onSelect: (runId: string) => void;
@@ -78,6 +85,7 @@ export type RunRailProps = {
 
 export function RunRail({
   runs,
+  tasks,
   coordinatorRuns,
   selectedId,
   onSelect,
@@ -93,6 +101,16 @@ export function RunRail({
 
   // One clock for every "last seen" badge in the cast, so the list ages in step.
   const now = useNow(runs);
+  const healthByRun = useMemo(
+    () =>
+      new Map(
+        runs.map((run) => {
+          const runTasks = tasks.filter((task) => task.runId === run.id);
+          return [run.id, workerHealthByAgent(runTasks, now)] as const;
+        })
+      ),
+    [runs, tasks, now]
+  );
 
   // What the summary row has to say while the list is clipped: which run, and — if the canvas is
   // dimmed to one agent — which agent, so the filter stays escapable without unfolding.
@@ -246,6 +264,7 @@ export function RunRail({
                 <li key={run.id}>
                   <RunRow
                     run={run}
+                    healthByAgent={healthByRun.get(run.id) ?? EMPTY_HEALTH_BY_AGENT}
                     selected={run.id === selectedId}
                     hovered={hovered === run.id}
                     onHover={() => setHovered(run.id)}
@@ -255,7 +274,12 @@ export function RunRail({
                   {/* The cast, under the one that is open — the hierarchy the database has always had,
                       drawn as a hierarchy for the first time. */}
                   {run.id === selectedId && (
-                    <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
+                    <Cast
+                      run={run}
+                      healthByAgent={healthByRun.get(run.id) ?? EMPTY_HEALTH_BY_AGENT}
+                      selectedAgent={selectedAgent}
+                      onSelectAgent={onSelectAgent}
+                    />
                   )}
                 </li>
               ))}
@@ -280,12 +304,14 @@ export function RunRail({
  */
 function RunRow({
   run,
+  healthByAgent,
   selected,
   hovered,
   onHover,
   onSelect,
 }: {
   run: Run;
+  healthByAgent: ReadonlyMap<string, WorkerHealth>;
   selected: boolean;
   hovered: boolean;
   onHover: () => void;
@@ -378,7 +404,49 @@ function RunRow({
           </>
         )}
       </span>
+
+      <RunWorkerHealth run={run} healthByAgent={healthByAgent} />
     </button>
+  );
+}
+
+function RunWorkerHealth({
+  run,
+  healthByAgent,
+}: {
+  run: Run;
+  healthByAgent: ReadonlyMap<string, WorkerHealth>;
+}) {
+  const active = run.cast
+    .map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const })
+    .filter(isActiveWorkerHealth);
+  if (active.length === 0) return null;
+
+  const staleWithoutHeartbeat = active.filter(
+    (health) => health.state === 'stale' && health.heartbeat === 'missing'
+  ).length;
+  const stale = active.filter((health) => health.state === 'stale' && health.heartbeat === 'received').length;
+  const quiet = active.filter((health) => health.state === 'quiet').length;
+  const working = active.filter((health) => health.state === 'working').length;
+  const state = staleWithoutHeartbeat + stale > 0 ? 'stale' : quiet > 0 ? 'quiet' : 'working';
+  const parts = [
+    staleWithoutHeartbeat > 0 && `${staleWithoutHeartbeat} stale without heartbeat`,
+    stale > 0 && `${stale} stale`,
+    quiet > 0 && `${quiet} awaiting heartbeat`,
+    working > 0 && `${working} active`,
+  ].filter((part): part is string => part !== false);
+
+  return (
+    <span
+      data-testid="run-worker-health"
+      data-health={state}
+      className={cn(
+        'relative mt-1 ml-4 block text-[10px] tabular-nums',
+        state === 'stale' ? 'font-bold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+      )}
+    >
+      {parts.join(' · ')}
+    </span>
   );
 }
 

@@ -1,4 +1,37 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
+
+/** Ages are coarse to the minute near the stale boundary; two ticks a minute keeps them honest. */
+export const WALL_CLOCK_INTERVAL_MS = 30_000;
+
+let wallClockNow = Date.now();
+let wallClockInterval: ReturnType<typeof setInterval> | null = null;
+const wallClockListeners = new Set<() => void>();
+
+function readWallClock(): number {
+  return wallClockNow;
+}
+
+function tickWallClock(): void {
+  wallClockNow = Date.now();
+  for (const listener of wallClockListeners) listener();
+}
+
+function subscribeWallClock(listener: () => void): () => void {
+  wallClockListeners.add(listener);
+
+  if (wallClockInterval === null) {
+    tickWallClock();
+    wallClockInterval = setInterval(tickWallClock, WALL_CLOCK_INTERVAL_MS);
+  }
+
+  return () => {
+    wallClockListeners.delete(listener);
+    if (wallClockListeners.size === 0 && wallClockInterval !== null) {
+      clearInterval(wallClockInterval);
+      wallClockInterval = null;
+    }
+  };
+}
 
 /**
  * **The instant a panel measures its ages from** — one clock, so a list ages in step.
@@ -9,15 +42,15 @@ import { useEffect, useState } from 'react';
  *
  * The real one is that `Date.now()` in a render body is a value that changes *every time React
  * happens to re-render* — a hover, a state flip in a sibling — so two rows measured a frame apart
- * would be measured against two different "now"s. This reads the clock **once per push**: the
- * dependency is the data the panel is showing, and a new one means the stream just delivered
- * (`Live.tsx`), which is exactly when an age is worth re-reading.
+ * would be measured against two different "now"s. Every mounted consumer subscribes to this one
+ * module clock. It ticks every 30 seconds and also on a push, keeping ages and health thresholds
+ * current even while the database is quiet.
  */
 export function useNow(pushed: unknown): number {
-  const [now, setNow] = useState(0);
+  const now = useSyncExternalStore(subscribeWallClock, readWallClock, readWallClock);
 
   useEffect(() => {
-    setNow(Date.now());
+    tickWallClock();
   }, [pushed]);
 
   return now;

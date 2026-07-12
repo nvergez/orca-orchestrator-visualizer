@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
 import {
   STALE_HEARTBEAT_MS,
@@ -32,6 +32,8 @@ const META: Meta = {
 };
 
 const HANDLE = 'term_9f8e7d6c-1234-4321-8888-aabbccddeeff';
+
+afterEach(() => vi.useRealTimers());
 
 function dispatch(over: Partial<Dispatch> = {}): Dispatch {
   return {
@@ -270,6 +272,64 @@ describe('the task DAG on the canvas', () => {
     expect(within(node('task_quiet')).getByTestId('last-seen')).toHaveAttribute('data-stale', 'true');
   });
 
+  it('states when a dispatch has never heartbeat and stops its working motion once stale', async () => {
+    const now = Date.now();
+
+    await draw([
+      task({
+        id: 'task_awaiting_first_beat',
+        status: 'dispatched',
+        dispatch: dispatch({ dispatchedAt: new Date(now - 2 * 60_000).toISOString() }),
+        attemptCount: 1,
+      }),
+      task({
+        id: 'task_never_beat',
+        status: 'dispatched',
+        dispatch: dispatch({ dispatchedAt: new Date(now - STALE_HEARTBEAT_MS - 60_000).toISOString() }),
+        attemptCount: 1,
+      }),
+    ]);
+
+    expect(within(node('task_awaiting_first_beat')).getByTestId('last-seen')).toHaveTextContent(
+      'dispatched 2m ago — no heartbeat yet'
+    );
+    expect(node('task_awaiting_first_beat')).toHaveAttribute('data-health', 'quiet');
+    expect(node('task_awaiting_first_beat')).toHaveAttribute('data-alive', 'true');
+
+    expect(within(node('task_never_beat')).getByTestId('last-seen')).toHaveTextContent(
+      'no heartbeat yet'
+    );
+    expect(node('task_never_beat')).toHaveAttribute('data-health', 'stale');
+    expect(node('task_never_beat')).toHaveAttribute('data-alive', 'false');
+    expect(node('task_never_beat').querySelector('.orca-alive')).toBeNull();
+  });
+
+  it('crosses the stale threshold on wall time without receiving another stream event', async () => {
+    const now = Date.parse('2026-07-12T20:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const quietTask = task({
+      id: 'task_quiet_stream',
+      status: 'dispatched',
+      dispatch: dispatch({
+        dispatchedAt: new Date(now - STALE_HEARTBEAT_MS + 15_000).toISOString(),
+      }),
+      attemptCount: 1,
+    });
+    render(<App event={event([quietTask])} />);
+    await vi.waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(1));
+
+    expect(node('task_quiet_stream')).toHaveAttribute('data-health', 'quiet');
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(node('task_quiet_stream')).toHaveAttribute('data-health', 'stale');
+    expect(node('task_quiet_stream')).toHaveAttribute('data-alive', 'false');
+  });
+
   it('shows the last-seen badge only while the dispatch is dispatched', async () => {
     await draw([
       // On a completed dispatch the last heartbeat is just when the work stopped. An amber
@@ -315,14 +375,27 @@ describe('the dependency edges', () => {
     });
   }
 
-  it('animates an edge into work that is in flight, and leaves the settled ones still', async () => {
+  it('animates an edge only while a dispatch has current activity evidence', async () => {
+    const now = Date.now();
     await draw([
       task({ id: 'task_done', status: 'completed' }),
-      task({ id: 'task_running', status: 'dispatched', deps: ['task_done'], dispatch: dispatch() }),
+      task({
+        id: 'task_running',
+        status: 'dispatched',
+        deps: ['task_done'],
+        dispatch: dispatch({ dispatchedAt: new Date(now - 60_000).toISOString() }),
+      }),
+      task({
+        id: 'task_stale',
+        status: 'dispatched',
+        deps: ['task_done'],
+        dispatch: dispatch({ dispatchedAt: new Date(now - STALE_HEARTBEAT_MS - 60_000).toISOString() }),
+      }),
       task({ id: 'task_next', status: 'pending', deps: ['task_running'] }),
     ]);
 
     expect(await edge('task_done->task_running')).toHaveClass('animated');
+    expect(await edge('task_done->task_stale')).not.toHaveClass('animated');
     // Nothing is in flight into a pending task, and a canvas that animated everything would
     // be telling you nothing.
     expect(await edge('task_running->task_next')).not.toHaveClass('animated');
