@@ -1,4 +1,5 @@
 import { shortHandle } from '../shared/handles.ts';
+import { runHealth } from '../shared/run-health.ts';
 import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
 import { castOf } from './cast.ts';
 import type { Preview } from './tasks.ts';
@@ -43,8 +44,12 @@ export const UNATTRIBUTED_RUN_ID = 'run_unattributed';
 /** …and the rail says exactly that, rather than dressing the orphans up as an orchestration. */
 export const UNATTRIBUTED_LABEL = 'Unattributed';
 
-/** A run is live only while it still has work that could move. */
-const IN_FLIGHT: ReadonlySet<string> = new Set<TaskStatus>(['ready', 'dispatched']);
+/**
+ * The two statuses that prove a task's outcome is known (SPEC §12.1). Everything else —
+ * `pending`, `ready`, `dispatched`, `blocked`, and any status this build has never heard of —
+ * holds convergence back: render-what-parses cannot prove an unknown status terminal.
+ */
+const TERMINAL: ReadonlySet<string> = new Set<TaskStatus>(['completed', 'failed']);
 
 /**
  * A task as the database has it, plus the four things the wire contract deliberately does not
@@ -88,18 +93,24 @@ export type InferredRuns = {
 };
 
 export type RunOptions = {
-  /** `meta.liveness === 'live'`. A run is live only if Orca itself is (SPEC §7.3). */
+  /** `meta.liveness === 'live'` — one half of the deprecated `live` projection (SPEC §12.4). */
   orcaIsLive: boolean;
+  /**
+   * The snapshot's wall-clock instant, injected so a test can hold it still. It feeds the
+   * deprecated `live` projection and nothing else: health itself is derived on the client,
+   * against the client's own clock, precisely so it can change without a snapshot (SPEC §12.3).
+   */
+  now: number;
 };
 
-export function inferRuns(entries: TaskWithHandle[], { orcaIsLive }: RunOptions): InferredRuns {
+export function inferRuns(entries: TaskWithHandle[], options: RunOptions): InferredRuns {
   const runs: Run[] = [];
   const runIdOfTask = new Map<string, string>();
 
   for (const [handle, members] of bucketByHandle(entries)) {
     // One handle, one run. The six-hour gap no longer gets a vote on that — it decides the
     // *waves* inside it, which is a caption on the canvas rather than a row in the rail.
-    const run = describeRun(handle, members, orcaIsLive);
+    const run = describeRun(handle, members, options);
     runs.push(run);
     for (const entry of members) runIdOfTask.set(entry.task.id, run.id);
   }
@@ -135,24 +146,34 @@ function bucketByHandle(entries: TaskWithHandle[]): Map<string | null, TaskWithH
 }
 
 /** Everything a rail row shows, so the interesting orchestrator can be picked without opening it. */
-function describeRun(handle: string | null, members: TaskWithHandle[], orcaIsLive: boolean): Run {
+function describeRun(handle: string | null, members: TaskWithHandle[], { orcaIsLive, now }: RunOptions): Run {
   const ordered = [...members].sort((a, b) => byInstant(a.task.createdAt, b.task.createdAt));
   const first = ordered[0]!;
   const tasks = ordered.map((entry) => entry.task);
+
+  const lastActivityAt = lastActivity(ordered);
+  // Terminal task outcomes only. Dispatch-attempt status never gets a vote: an attempt that
+  // completed is not a task that did — the task row is the record of the outcome (SPEC §12.1).
+  const converged = tasks.every((task) => TERMINAL.has(task.status));
 
   return {
     id: runIdFor(handle),
     handle,
     label: labelFor(handle, first),
     startedAt: first.task.createdAt,
-    endedAt: lastActivity(tasks),
+    lastActivityAt,
+    converged,
+    // The exact alias the migration promises old consumers (SPEC §12.4) — byte-for-byte.
+    endedAt: lastActivityAt,
     taskCount: tasks.length,
     cast: castOf(handle, ordered),
     waves: wavesOf(handle, ordered),
     statusCounts: countStatuses(tasks),
-    // No history mode: yesterday's run renders through this same code path, and the dot is the
-    // whole difference. It takes a running Orca *and* work that could still move.
-    live: orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status)),
+    // The deprecated compatibility projection (SPEC §12.4): what the old boolean *meant* on its
+    // best day — Orca is running and this run has recent evidence. It can no longer call an
+    // abandoned dispatch live just because Orca is open; what it still cannot say is `silent`
+    // versus `finished`, which is why new clients ignore it and derive health themselves.
+    live: orcaIsLive && runHealth({ converged, lastActivityAt }, now) === 'active',
     // False here, and true only once the gates have actually been read and their blocking
     // effect derived: they come from `decision_gate` messages and `decision_gates` rows
     // (`gates.ts`), which this module has never seen — it is handed tasks. `attachGates`
@@ -205,7 +226,8 @@ function wavesOf(handle: string | null, ordered: TaskWithHandle[]): Wave[] {
   return segments.map((segment, index) => ({
     index: index + 1,
     startedAt: segment[0]!.task.createdAt,
-    endedAt: lastActivity(segment.map((entry) => entry.task)),
+    // The run's own evidence rule, restricted to this wave's tasks and attempts (SPEC §12.2).
+    endedAt: lastActivity(segment),
     taskIds: segment.map((entry) => entry.task.id),
     // Null on the first wave — there is nothing in front of it to have been quiet for.
     idleGapBeforeMs: index === 0 ? null : (gaps[index - 1] ?? null),
@@ -240,19 +262,45 @@ function labelFor(handle: string | null, first: TaskWithHandle): string {
 }
 
 /**
- * When it last did anything — the max of every completion and every creation, which is what the
- * rail sorts on. A run's last task can outlive the last task it *started*.
+ * When recorded work last happened (SPEC §12.2): the newest readable instant across every task's
+ * creation and completion and every dispatch attempt's dispatch, completion, last heartbeat and
+ * last failure. **Every** attempt, not just the `MAX(rowid)` survivor — an earlier retry can hold
+ * the newest retained evidence, and folding it away is how the rail lagged behind real work and
+ * the attribution window closed on a run that was still talking.
+ *
+ * Messages are deliberately not inputs: task-id-less message attribution depends on this bound
+ * (`attribution.ts`), so counting attributed messages would be recursive — a chain of weak handle
+ * matches could keep extending its own window (SPEC §12.2).
  */
-function lastActivity(tasks: Task[]): string {
-  let latest = tasks[0]!.createdAt;
+function lastActivity(entries: TaskWithHandle[]): string {
+  let latest: string | null = null;
 
-  for (const task of tasks) {
-    for (const at of [task.createdAt, task.completedAt]) {
-      if (at !== null && byInstant(at, latest) > 0) latest = at;
+  for (const entry of entries) {
+    for (const at of evidenceOf(entry)) {
+      // An unreadable timestamp is ignored, never treated as the epoch: garbage in a column
+      // must not out-sort the real instants beside it.
+      if (at === null || instantOf(at) === null) continue;
+      if (latest === null || byInstant(at, latest) > 0) latest = at;
     }
   }
 
-  return latest;
+  // No candidate parsed at all. Keep the earliest task's own unreadable instant — the same value
+  // `startedAt` already reports — rather than inventing a time the database cannot support.
+  return latest ?? entries[0]!.task.createdAt;
+}
+
+/** The candidate instants one task contributes — its own row, and every attempt's four. */
+function evidenceOf({ task, attempts }: TaskWithHandle): (string | null)[] {
+  return [
+    task.createdAt,
+    task.completedAt,
+    ...attempts.flatMap((attempt) => [
+      attempt.dispatchedAt,
+      attempt.completedAt,
+      attempt.lastHeartbeatAt,
+      attempt.lastFailure,
+    ]),
+  ];
 }
 
 /**
@@ -297,5 +345,5 @@ function countEdges(tasks: Task[]): number {
 
 /** The rail sorts by most-recent activity, so the run worth opening is the one on top. */
 function byMostRecentActivity(a: Run, b: Run): number {
-  return byInstant(b.endedAt, a.endedAt) || byInstant(b.startedAt, a.startedAt);
+  return byInstant(b.lastActivityAt, a.lastActivityAt) || byInstant(b.startedAt, a.startedAt);
 }

@@ -2,11 +2,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import {
-  STALE_HEARTBEAT_MS,
-  STATUS_THEME,
-  UNKNOWN_STATUS_THEME,
-} from '../../src/client/canvas/theme.ts';
+import { STATUS_THEME, UNKNOWN_STATUS_THEME } from '../../src/client/canvas/theme.ts';
+import { STALE_HEARTBEAT_MS } from '../../src/shared/run-health.ts';
 import type { CastMember, Dispatch, Meta, Run, StreamEvent, Task, Wave } from '../../src/shared/types.ts';
 
 /**
@@ -100,6 +97,8 @@ function runOf(tasks: Task[], over: Partial<Run> = {}): Run {
     handle: HANDLE,
     label: 'A run',
     startedAt: '2026-07-08T12:00:00.000Z',
+    lastActivityAt: '2026-07-08T13:00:00.000Z',
+    converged: false,
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: tasks.length,
     cast,

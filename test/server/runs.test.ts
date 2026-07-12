@@ -7,7 +7,7 @@ import { shortHandle } from '../../src/shared/handles.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { liveShapeCorpus } from '../fixtures/corpus.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
-import { type Harness, serve } from './harness.ts';
+import { type Harness, serve, type ServeOptions } from './harness.ts';
 
 /**
  * Seam 1 (#12): the runs in `GET /api/snapshot`, driven by a real fixture database.
@@ -37,10 +37,10 @@ afterEach(async () => {
   harness = undefined;
 });
 
-/** A database served with Orca *running* — the only way `run.live` can be true. */
-async function serveLive(dbPath: string): Promise<Harness> {
+/** A database served with Orca *running* — one of the two things `run.live` still takes. */
+async function serveLive(dbPath: string, options: ServeOptions = {}): Promise<Harness> {
   writeFileSync(join(dirname(dbPath), 'orca-runtime.json'), JSON.stringify({ pid: 4242 }));
-  return serve(dbPath, { probe: (pid) => pid === 4242 });
+  return serve(dbPath, { probe: (pid) => pid === 4242, ...options });
 }
 
 async function runsOf(builder: FixtureBuilder): Promise<Run[]> {
@@ -150,6 +150,22 @@ describe('waves: an idle gap of more than six hours', () => {
     expect(runs[0]!.waves[1]).toMatchObject({ index: 2, taskIds: ['task_today'], idleGapBeforeMs: 7 * HOUR });
   });
 
+  it('ends each wave at its own newest evidence — attempts included, later waves excluded', async () => {
+    // The same evidence set as `lastActivityAt`, restricted to the wave's tasks and attempts
+    // (SPEC §12.2): the first wave ends at its worker's last heartbeat, not at the creation
+    // instant of a task that belongs to the next wave.
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_yesterday', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_yesterday', assigneeHandle: handleFor('worker'), dispatchedAt: at(1), lastHeartbeatAt: at(HOUR) })
+        .task({ id: 'task_today', handle: ALPHA, status: 'completed', createdAt: at(8 * HOUR), completedAt: at(9 * HOUR) })
+    );
+
+    expect(runs[0]!.waves).toHaveLength(2);
+    expect(runs[0]!.waves[0]!.endedAt).toBe(at(HOUR).toISOString());
+    expect(runs[0]!.waves[1]!.endedAt).toBe(at(9 * HOUR).toISOString());
+  });
+
   it('opens a wave on *more* than six hours, so a pause of exactly six does not cut one', async () => {
     const runs = await runsOf(
       new FixtureBuilder()
@@ -192,7 +208,7 @@ describe('waves: an idle gap of more than six hours', () => {
       .task({ id: 'task_readable', handle: ALPHA, createdAt: AT })
       .task({ id: 'task_broken', handle: ALPHA, createdAt: at(60_000) })
       .write(tempDbPath());
-    corruptCreatedAt(dbPath, 'task_broken', 'whenever');
+    corruptColumn(dbPath, 'tasks', 'created_at', 'whenever', 'id', 'task_broken');
     harness = await serve(dbPath);
 
     const { runs, tasks } = (await harness.snapshot()).snapshot;
@@ -217,10 +233,17 @@ describe('waves: an idle gap of more than six hours', () => {
 });
 
 /** The fixture builder always writes a real timestamp, so a corrupt column has to be forged. */
-function corruptCreatedAt(dbPath: string, taskId: string, createdAt: string): void {
+function corruptColumn(
+  dbPath: string,
+  table: 'tasks' | 'dispatch_contexts',
+  column: string,
+  value: string,
+  keyColumn: string,
+  key: string
+): void {
   const db = new DatabaseSync(dbPath);
   try {
-    db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?').run(createdAt, taskId);
+    db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${keyColumn} = ?`).run(value, key);
   } finally {
     db.close();
   }
@@ -381,6 +404,183 @@ describe('what a rail row has to show without opening the run', () => {
 
     expect(runs.map((run) => run.handle)).toEqual([BETA, null, ALPHA]);
   });
+
+  it('sorts by lastActivityAt, so a run still producing evidence outranks a merely newer one', async () => {
+    // Alpha's last *task* is older than beta's, but its worker kept beating for three hours.
+    // Ordering on task timestamps alone would bury the run that is actually moving (SPEC §12.2).
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: handleFor('worker'), dispatchedAt: at(1), lastHeartbeatAt: at(3 * HOUR) })
+        .task({ handle: BETA, createdAt: at(2 * HOUR) })
+    );
+
+    expect(runs.map((run) => run.handle)).toEqual([ALPHA, BETA]);
+  });
+});
+
+/**
+ * Convergence is a property of task state alone (SPEC §12.1): every task terminal —
+ * `completed` or `failed` — and nothing else. It is not recency and it is not Orca's process;
+ * those are the other two facts, and keeping the three apart is the whole of #48.
+ */
+describe('convergence: terminal task outcomes only', () => {
+  it('does not converge a run that is only pending, or only blocked — that work can still move', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ handle: ALPHA, status: 'pending', createdAt: at(0) })
+        .task({ handle: BETA, status: 'blocked', createdAt: at(60_000) })
+    );
+
+    expect(runs.find((run) => run.handle === ALPHA)!.converged).toBe(false);
+    expect(runs.find((run) => run.handle === BETA)!.converged).toBe(false);
+  });
+
+  it('converges a run whose every task is completed or failed', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ handle: ALPHA, status: 'completed', createdAt: at(0), completedAt: at(60_000) })
+        .task({ handle: ALPHA, status: 'failed', createdAt: at(120_000) })
+    );
+
+    expect(runs[0]!.converged).toBe(true);
+  });
+
+  it('holds convergence back while any task is still in flight', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ handle: ALPHA, status: 'completed', createdAt: at(0), completedAt: at(60_000) })
+        .task({ handle: ALPHA, status: 'dispatched', createdAt: at(120_000) })
+    );
+
+    expect(runs[0]!.converged).toBe(false);
+  });
+
+  it('treats a status it has never heard of as not converged — render-what-parses cannot prove it terminal', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder({ allowUnknownEnums: true }).task({
+        handle: ALPHA,
+        status: 'quarantined',
+        createdAt: at(0),
+      })
+    );
+
+    expect(runs[0]!.converged).toBe(false);
+  });
+
+  it('never lets a dispatch attempt outvote the task status', async () => {
+    // The attempt says `completed`; the task row still says `dispatched`. The task is the
+    // record of the outcome, and an attempt that finished is not a task that did (SPEC §12.1).
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, status: 'completed', dispatchedAt: at(1), completedAt: at(60_000) })
+    );
+
+    expect(runs[0]!.converged).toBe(false);
+  });
+});
+
+/**
+ * `lastActivityAt` — the newest readable evidence that recorded work happened (SPEC §12.2). Task
+ * creation and completion were already counted; what #48 adds is every dispatch attempt's four
+ * timestamps, because dispatch, heartbeat, completion and failure evidence can all be newer than
+ * anything on the task rows — and rail ordering, default selection and the attribution tail all
+ * hang off this one instant.
+ */
+describe('last activity: every task and every dispatch attempt gets a vote', () => {
+  it('counts a dispatch newer than every task timestamp', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(20 * 60_000) })
+    );
+
+    expect(runs[0]!.lastActivityAt).toBe(at(20 * 60_000).toISOString());
+  });
+
+  it('counts a heartbeat — the run was producing evidence long after its last task was created', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(1), lastHeartbeatAt: at(3 * HOUR) })
+    );
+
+    expect(runs[0]!.lastActivityAt).toBe(at(3 * HOUR).toISOString());
+  });
+
+  it('counts an attempt completion and an attempt failure', async () => {
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'completed', createdAt: at(0), completedAt: at(60_000) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(1), completedAt: at(30 * 60_000) })
+        .task({ id: 'task_b', handle: BETA, status: 'failed', createdAt: at(0) })
+        .dispatch({ taskId: 'task_b', assigneeHandle: ALPHA, dispatchedAt: at(1), lastFailure: at(45 * 60_000) })
+    );
+
+    expect(runs.find((run) => run.handle === ALPHA)!.lastActivityAt).toBe(at(30 * 60_000).toISOString());
+    expect(runs.find((run) => run.handle === BETA)!.lastActivityAt).toBe(at(45 * 60_000).toISOString());
+  });
+
+  it('reads every attempt, not only the surviving one — an earlier retry can hold the newest evidence', async () => {
+    // Attempt 1 kept beating until 90 minutes in; attempt 2 — the `MAX(rowid)` the node badge
+    // shows — was dispatched at 20 and never spoke again. Folding to the latest attempt would
+    // erase the newest activity this run ever recorded (SPEC §12.2).
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(1), lastHeartbeatAt: at(90 * 60_000) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(20 * 60_000) })
+    );
+
+    expect(runs[0]!.lastActivityAt).toBe(at(90 * 60_000).toISOString());
+  });
+
+  it('ignores an unreadable timestamp — it is not the epoch, and it must not win either', async () => {
+    // Nothing in this schema validates a TEXT column. Read as `0` the garbage would date the
+    // run in 1970; and the unreadable-sorts-last convention (`time.ts`) means that taken at
+    // face value it would *out-sort* every real instant. Neither: it simply does not vote
+    // (SPEC §12.2), and the readable dispatch beside it does.
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: AT })
+      .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(10 * 60_000) })
+      .write(tempDbPath());
+    corruptColumn(dbPath, 'dispatch_contexts', 'last_heartbeat_at', 'whenever', 'task_id', 'task_a');
+    harness = await serve(dbPath);
+
+    const runs = (await harness.snapshot()).snapshot.runs;
+
+    expect(runs[0]!.lastActivityAt).toBe(at(10 * 60_000).toISOString());
+  });
+
+  it('preserves the existing unreadable instant when nothing on the run parses at all', async () => {
+    // A run always has a first task, and `startedAt` already reports its unreadable column
+    // verbatim. When no candidate parses, `lastActivityAt` says the same thing rather than
+    // inventing a time the database cannot support (SPEC §12.2).
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: AT })
+      .write(tempDbPath());
+    corruptColumn(dbPath, 'tasks', 'created_at', 'whenever', 'id', 'task_a');
+    harness = await serve(dbPath);
+
+    const runs = (await harness.snapshot()).snapshot.runs;
+
+    expect(runs[0]!.lastActivityAt).toBe('whenever');
+    expect(runs[0]!.lastActivityAt).toBe(runs[0]!.startedAt);
+  });
+
+  it('keeps the deprecated endedAt as an exact alias of lastActivityAt', async () => {
+    // Byte-for-byte (SPEC §12.4): old consumers keep reading the field they know, and it now
+    // tells them the truth the new field tells everyone else.
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: at(0) })
+        .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(1), lastHeartbeatAt: at(2 * HOUR) })
+        .task({ handle: BETA, status: 'completed', createdAt: at(0), completedAt: at(60_000) })
+    );
+
+    for (const run of runs) expect(run.endedAt).toBe(run.lastActivityAt);
+  });
 });
 
 /** `edgeCount: 0` is the edgeless empty state — 4 of 13 real runs have no dependencies at all. */
@@ -426,41 +626,65 @@ describe('the edge count', () => {
 });
 
 /**
- * The green dot: a running orchestration told from a finished one. There is no history
- * mode — yesterday's run renders through this exact code path, and the dot is the whole
- * difference (SPEC §7.3).
+ * The deprecated `live` flag, kept as a snapshot-time compatibility projection:
+ * `meta.liveness === 'live' && runHealth(run, snapshotNow) === 'active'` (SPEC §12.4). It can
+ * no longer claim an abandoned dispatch is running just because Orca is open — the fix #48
+ * exists for — and new clients ignore it entirely, deriving `RunHealth` themselves.
  */
-describe('the live badge', () => {
+describe('the deprecated live projection', () => {
   const builder = () =>
     new FixtureBuilder()
       .task({ handle: ALPHA, status: 'dispatched', createdAt: at(0) })
       .task({ handle: BETA, status: 'completed', createdAt: at(60_000), completedAt: at(120_000) });
 
-  it('marks the run with work in flight, and only that one, while Orca is running', async () => {
-    harness = await serveLive(builder().write(tempDbPath()));
+  it('projects true for the active run, and only that one, while Orca is running', async () => {
+    harness = await serveLive(builder().write(tempDbPath()), { now: () => at(5 * 60_000).getTime() });
 
     const { runs } = (await harness.snapshot()).snapshot;
 
     expect(runs.find((run) => run.handle === ALPHA)!.live).toBe(true);
-    // A finished run is a finished run, however alive Orca is.
+    // A finished run is a finished run, however alive Orca is and however fresh its activity.
     expect(runs.find((run) => run.handle === BETA)!.live).toBe(false);
   });
 
-  it('marks a run with ready work as live too — the orchestration is still going somewhere', async () => {
-    const dbPath = new FixtureBuilder().task({ handle: ALPHA, status: 'ready', createdAt: AT }).write(tempDbPath());
-    harness = await serveLive(dbPath);
-
-    expect((await harness.snapshot()).snapshot.runs[0]!.live).toBe(true);
-  });
-
-  it('calls nothing live when Orca is not running, whatever the rows still say', async () => {
-    // Orca was killed mid-run: the task rows still read `dispatched` and always will —
-    // nothing rewrites them. A green dot here would be the tool's worst lie.
-    harness = await serve(builder().write(tempDbPath()), { probe: () => false });
+  it('projects false for a stale dispatched row, even while Orca is running', async () => {
+    // The false green dot this whole amendment exists to kill: the row has read `dispatched`
+    // for four days, nothing will ever rewrite it, and a running Orca is not evidence that
+    // *this run* is doing anything (SPEC §12.1). Silent, so not live.
+    harness = await serveLive(builder().write(tempDbPath()), { now: () => at(4 * 24 * HOUR).getTime() });
 
     const { runs } = (await harness.snapshot()).snapshot;
 
     expect(runs.every((run) => run.live === false)).toBe(true);
+  });
+
+  it('projects false when Orca is not running, however recent the evidence', async () => {
+    // Recent activity with a dead Orca is still an *active* run — health and process are
+    // independent facts (SPEC §12.1) — but the old flag meant both at once, so it stays false.
+    harness = await serve(builder().write(tempDbPath()), {
+      probe: () => false,
+      now: () => at(5 * 60_000).getTime(),
+    });
+
+    const { meta, snapshot } = await harness.snapshot();
+
+    // No runtime file: Orca isn't running — `stale`, the last-known-state wording.
+    expect(meta.liveness).toBe('stale');
+    expect(snapshot.runs.every((run) => run.live === false)).toBe(true);
+  });
+
+  it('projects false when liveness is unknown — not-live means exactly `live`, nothing looser', async () => {
+    // A malformed runtime file is the one state where the tool genuinely does not know. The
+    // projection takes `liveness === 'live'` verbatim (SPEC §12.4), so `unknown` lands with
+    // `stale`, however active the run's evidence is.
+    const dbPath = builder().write(tempDbPath());
+    writeFileSync(join(dirname(dbPath), 'orca-runtime.json'), 'not json at all');
+    harness = await serve(dbPath, { probe: () => false, now: () => at(5 * 60_000).getTime() });
+
+    const { meta, snapshot } = await harness.snapshot();
+
+    expect(meta.liveness).toBe('unknown');
+    expect(snapshot.runs.every((run) => run.live === false)).toBe(true);
   });
 });
 

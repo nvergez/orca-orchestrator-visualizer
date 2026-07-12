@@ -283,6 +283,39 @@ describe('message → run attribution', () => {
 
     expect(snapshot.messages[0]!.runId).toBe(snapshot.snapshot.runs[0]!.id);
   });
+
+  it('keeps the window open six hours past the newest dispatch evidence, not the newest task row', async () => {
+    // The run's only task was *created* at 0 and never completed, but its worker was still
+    // beating five hours in. Anchored to the task rows alone the window shuts at +6h and this
+    // +10h message is lost; anchored to `lastActivityAt` it runs to +11h (SPEC §12.5). The six
+    // hours themselves are unchanged — what moved is the evidence the tail hangs from.
+    const coordinator = handleFor('coordinator');
+    const builder = new FixtureBuilder().task({
+      id: 'task_a',
+      handle: coordinator,
+      status: 'dispatched',
+      createdAt: AT,
+    });
+    builder.dispatch({
+      taskId: 'task_a',
+      assigneeHandle: handleFor('worker'),
+      dispatchedAt: at(1),
+      lastHeartbeatAt: at(5 * 60),
+    });
+
+    builder.message({
+      fromHandle: coordinator,
+      toHandle: handleFor('worker'),
+      subject: 'ten hours into the work',
+      createdAt: at(10 * 60),
+    });
+
+    harness = await serve(builder.write(tempDbPath()));
+
+    const snapshot = await harness.snapshot();
+
+    expect(snapshot.messages[0]!.runId).toBe(snapshot.snapshot.runs[0]!.id);
+  });
 });
 
 /**

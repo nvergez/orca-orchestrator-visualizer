@@ -261,6 +261,12 @@
   --color-status-unknown-soft: var(--status-unknown-soft);
   --color-status-unknown-ink: var(--status-unknown-ink);
 
+  /* A silent run's dot (SPEC §12.3). It borrows the page's amber deliberately — the hue that
+     already means "attention, not a verdict" — but under its own name, because a run's health
+     is not a task's status and a class that said `dispatched` over a silent run would be
+     naming the wrong concept. */
+  --color-run-silent: var(--status-dispatched);
+
   --color-gate: var(--gate);
   --color-gate-soft: var(--gate-soft);
   --color-gate-ink: var(--gate-ink);

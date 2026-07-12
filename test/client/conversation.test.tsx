@@ -74,6 +74,8 @@ function run(over: Partial<Run> = {}): Run {
     handle: HANDLE,
     label: 'Ship the visualizer',
     startedAt: '2026-07-08T12:00:00.000Z',
+    lastActivityAt: '2026-07-08T13:00:00.000Z',
+    converged: true,
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: 2,
     cast: [A1, A2],
