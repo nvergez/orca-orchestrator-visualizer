@@ -14,6 +14,8 @@ export type Options = {
   host: string;
   /** The poll loop's cadence (SPEC §6.1) — how often the SSE stream looks for a change. */
   pollIntervalMs: number;
+  /** `--watch` (#59): also watch the database directory, to wake that poll early on a change. */
+  watch: boolean;
   /** Auto-open the browser. `--no-open` turns it off; so do a pipe, CI and SSH. */
   open: boolean;
   help: boolean;
@@ -36,6 +38,10 @@ Options:
   --host <host>          Address to bind (default ${DEFAULT_HOST}). Loopback by design: the
                          database holds your task specs, agent prompts and message bodies.
   --poll-interval <ms>   How often to re-read the database (default ${DEFAULT_POLL_INTERVAL_MS}).
+  --watch                Also watch the database directory, and run the normal poll early
+                         when a file changes. A hint, never a source: the poll stays
+                         authoritative, and if watching fails orca-viz warns once and
+                         carries on polling.
   --no-open              Do not open a browser. Also suppressed automatically when stdout
                          is not a terminal, or over SSH, or with no display.
   --version              Print the version and exit.
@@ -76,6 +82,7 @@ export function parseOptions(argv: string[]): Options {
       values['poll-interval'] === undefined
         ? DEFAULT_POLL_INTERVAL_MS
         : integerOption('--poll-interval', values['poll-interval'], { min: 100, max: 3_600_000 }),
+    watch: values.watch ?? false,
     open: !(values['no-open'] ?? false),
     help: values.help ?? false,
     version: values.version ?? false,
@@ -88,6 +95,7 @@ const OPTION_SPEC = {
   port: { type: 'string' },
   host: { type: 'string' },
   'poll-interval': { type: 'string' },
+  watch: { type: 'boolean' },
   'no-open': { type: 'boolean' },
   version: { type: 'boolean' },
   help: { type: 'boolean' },

@@ -7,6 +7,8 @@ import { boot, type BootOptions, type Booted } from '../../src/server/boot.ts';
 import { nodeVersionError } from '../../src/server/node-support.ts';
 import { FixtureBuilder } from '../fixtures/builder.ts';
 import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
+import { FixtureWriter } from '../fixtures/writer.ts';
+import { openStream } from './sse.ts';
 
 /**
  * The CLI, driven the way a user drives it: an argv in, a running (or refusing) process
@@ -56,7 +58,7 @@ describe('--help and --version', () => {
 
     expect(booted).toBeNull();
     const help = lines.join('\n');
-    for (const flag of ['--db', '--list-dbs', '--port', '--host', '--poll-interval', '--no-open', '--version']) {
+    for (const flag of ['--db', '--list-dbs', '--port', '--host', '--poll-interval', '--watch', '--no-open', '--version']) {
       expect(help).toContain(flag);
     }
   });
@@ -126,6 +128,42 @@ describe('booting', () => {
     const { lines, booted } = await run(['--db', fixtureDb(), '--port', '0']);
 
     expect(lines.join('\n')).toContain(booted!.url);
+  });
+
+  it('says it is watching for changes with --watch, and says nothing about it without', async () => {
+    const flagless = await run(['--db', fixtureDb(), '--port', '0']);
+    expect(flagless.lines.join('\n')).not.toContain('watching');
+    await flagless.booted!.close();
+
+    const { lines } = await run(['--db', fixtureDb(), '--port', '0', '--watch']);
+
+    // The hint is opt-in, so turning it on deserves a line — and an honest one: the wording
+    // must keep the poll as the thing that decides, with the watch as its accelerator only.
+    expect(lines.join('\n')).toContain('watching');
+    expect(lines.join('\n')).toContain('poll');
+  });
+
+  it('--watch actually wires the watcher: a change surfaces long before the interval could', async () => {
+    const dbPath = fixtureDb();
+    // Ten minutes of poll interval: the push below can only be the wake path, driven by the
+    // real flag through the real boot — the whole of #59, typed the way a user types it.
+    const { booted } = await run(['--db', dbPath, '--port', '0', '--watch', '--poll-interval', '600000']);
+
+    const stream = await openStream(booted!.url);
+    try {
+      const first = await stream.next();
+
+      const writer = new FixtureWriter(dbPath);
+      try {
+        writer.message({ fromHandle: 'term_a', toHandle: 'term_b', subject: 'Built it', createdAt: AT });
+        const push = await stream.next();
+        expect(push.event.seq).toBe(first.event.seq + 1);
+      } finally {
+        writer.close();
+      }
+    } finally {
+      await stream.close();
+    }
   });
 
   it("tells the terminal what it tells the page: Orca isn't running, and from when the data is", async () => {
