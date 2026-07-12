@@ -28,3 +28,20 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+      # `npx orca-viz` is the headline claim, and the manifest test can only assert that the
+      # package *declares* nothing to compile. This runs it: pack the tarball, install it into
+      # an empty directory, and start it. A dependency that ships a native binding, or a dist/
+      # that never made it into `files`, fails here rather than on a stranger's machine.
+      - name: The npx story — install the packed tarball on a clean machine and run it
+        run: |
+          set -euo pipefail
+          npm pack
+          mkdir -p "$RUNNER_TEMP/clean-machine"
+          cd "$RUNNER_TEMP/clean-machine"
+          npm init -y > /dev/null
+          npm install "$GITHUB_WORKSPACE"/orca-viz-*.tgz --no-audit --no-fund
+          # Nothing to compile: no native addon, no gyp, anywhere in the installed tree.
+          test -z "$(find node_modules \( -name '*.node' -o -name 'binding.gyp' \) -print -quit)"
+          ./node_modules/.bin/orca-viz --version
+          ./node_modules/.bin/orca-viz --help
