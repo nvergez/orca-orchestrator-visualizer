@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { shortHandle } from '../../shared/handles.ts';
 import type { Dispatch, Gate, Task, TaskDetail } from '../../shared/types.ts';
-import { colorOf, GATE_COLOR, type StatusColor, UNKNOWN_STATUS_COLOR } from '../canvas/theme.ts';
+import { colorOf, GATE_COLOR, type StatusColor } from '../canvas/theme.ts';
 import { CHIP_STYLE } from '../chip.ts';
+import { DOCK_STYLE } from '../dock.ts';
+import { HeartbeatToggle } from '../feed/HeartbeatToggle.tsx';
 import { MessageRow } from '../feed/MessageRow.tsx';
 import { viewOf } from '../feed/select.ts';
-import { relativeTime } from '../relative-time.ts';
+import { ageOf } from '../relative-time.ts';
 
 /**
  * The whole story of one task (SPEC §7.8) — the panel that swaps in over the feed when a node is
@@ -40,7 +42,15 @@ export type InspectorProps = {
   task: Task;
   /** **Every** gate this task raised — open and answered alike (`snapshot.gates`, #19). */
   gates: Gate[];
-  /** The selected run's tasks: a dep is an id, and a person needs a title. */
+  /**
+   * **Every task in the database**, not the canvas's — a dep is an id, and a person needs a title.
+   *
+   * Not the selected run's, and the difference is a bug this panel would otherwise ship: a run is
+   * *inferred* (`runs.ts` buckets by handle and splits on a six-hour gap), while `tasks.deps` is a
+   * real edge in the schema that knows nothing about that inference. A dependency crossing into
+   * the next inferred run — or into the synthetic `Unattributed` one, where 4 of 76 live tasks
+   * sit — is still perfectly present in the file, and calling it deleted would be a lie.
+   */
   tasks: Task[];
   /** The bodies, the attempts and the messages. Null until the fetch lands (`detail.ts`). */
   detail: TaskDetail | null;
@@ -56,7 +66,8 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
   const [showHeartbeats, setShowHeartbeats] = useState(false);
 
   // What this task waited for, and what waited on it. The forward edges are the task's own
-  // `deps`; the back edges are every task that names it — the same edge set the canvas draws.
+  // `deps`; the back edges are every task in the *database* that names it — a dependent in
+  // another inferred run is still a dependent, and dropping it would hide a real edge.
   const dependents = useMemo(
     () => tasks.filter((candidate) => candidate.deps.includes(task.id)).map((candidate) => candidate.id),
     [tasks, task.id]
@@ -77,15 +88,10 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
     <aside
       data-testid="inspector"
       aria-label={`Task ${task.title}`}
-      style={{
-        width: 360,
-        flexShrink: 0,
-        borderLeft: '1px solid #e4e4e7',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        overflowY: 'auto',
-      }}
+      // The same shell the feed wears (`dock.ts`) — it is the same dock — plus the one thing that
+      // is this panel's own: it scrolls as a whole, because a spec, an attempt history and a
+      // message list do not divide a fixed height between them in any honest way.
+      style={{ ...DOCK_STYLE, overflowY: 'auto' }}
     >
       <Header task={task} onClose={onClose} />
 
@@ -112,24 +118,12 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
             />
           </Section>
 
-          <Section title={attemptsTitle(detail?.attempts ?? null, task)}>
+          <Section title={attemptsTitle(detail?.attempts?.length ?? task.attemptCount)}>
             <Attempts attempts={detail?.attempts ?? null} loading={detail === null} now={now} />
           </Section>
 
           <Section title="Messages">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#3f3f46' }}>
-              <input
-                type="checkbox"
-                checked={showHeartbeats}
-                onChange={(changed) => setShowHeartbeats(changed.target.checked)}
-              />
-              Show heartbeats
-              {hidden > 0 && (
-                <span style={{ color: '#71717a' }}>
-                  ({hidden} {hidden === 1 ? 'heartbeat' : 'heartbeats'} hidden)
-                </span>
-              )}
-            </label>
+            <HeartbeatToggle showHeartbeats={showHeartbeats} onChange={setShowHeartbeats} hidden={hidden} />
 
             {shown.length === 0 ? (
               <p style={MUTED_STYLE}>{detail === null ? 'Reading…' : 'No message ever mentioned this task.'}</p>
@@ -312,8 +306,8 @@ function Body({ text, loading, empty }: { text: string | null; loading: boolean;
   );
 }
 
-function attemptsTitle(attempts: Dispatch[] | null, task: Task): string {
-  const count = attempts?.length ?? task.attemptCount;
+/** The count is the headline: `> 1` is the whole retry story, said before the rows are read. */
+function attemptsTitle(count: number): string {
   return count > 1 ? `Dispatch attempts (${count})` : 'Dispatch';
 }
 
@@ -382,40 +376,32 @@ function Attempts({ attempts, loading, now }: { attempts: Dispatch[] | null; loa
 function Fact({ label, at, now }: { label: string; at: string | null; now: number }) {
   if (at === null || at === '') return null;
 
-  const instant = Date.parse(at);
+  // The same reader the feed's row ages by (`relative-time.ts`) — including what it does with a
+  // string that is not a timestamp at all, which is show it as it was written.
+  const age = ageOf(at, now);
 
   return (
     <>
       <dt style={{ color: '#a1a1aa' }}>{label}</dt>
-      <dd style={{ margin: 0 }} title={Number.isNaN(instant) ? at : new Date(instant).toLocaleString()}>
-        {/* An unreadable timestamp reaches the client verbatim (`time.ts`), and is shown
-            verbatim rather than as "NaN ago". */}
-        {Number.isNaN(instant) ? at : `${relativeTime(now - instant)} ago`}
+      <dd style={{ margin: 0 }} title={age.title}>
+        {age.label}
       </dd>
     </>
   );
 }
 
 /**
- * A dispatch status wears the colour of the task status it means, so the panel and the canvas
- * agree: a failed attempt is red, a live one amber, a finished one green. `circuit_broken` is the
- * loudest thing a dispatch row can say — three failures and Orca stopped trying — so it is red too.
+ * A dispatch status wears the colour of the task status of the same name, so the panel and the
+ * canvas agree: a failed attempt is red, a live one amber, a finished one green — and a status
+ * from an Orca this build has never heard of is neutral grey, exactly as a node's would be
+ * (`colorOf`, SPEC §5).
+ *
+ * `circuit_broken` is the one word the two enums do not share, and it is the loudest thing a
+ * dispatch row can say: three failures and Orca stopped trying. Red, like the failures it is
+ * made of.
  */
 function dispatchColor(status: string): StatusColor {
-  switch (status) {
-    case 'completed':
-      return colorOf('completed');
-    case 'failed':
-    case 'circuit_broken':
-      return colorOf('failed');
-    case 'dispatched':
-      return colorOf('dispatched');
-    case 'pending':
-      return colorOf('pending');
-    default:
-      // An Orca that invented a dispatch status still named a real state (SPEC §5).
-      return UNKNOWN_STATUS_COLOR;
-  }
+  return colorOf(status === 'circuit_broken' ? 'failed' : status);
 }
 
 /**

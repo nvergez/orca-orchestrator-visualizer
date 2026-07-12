@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { shortHandle } from '../../shared/handles.ts';
 import { taskIdOf } from '../../shared/payload.ts';
 import type { FeedMessage } from '../../shared/types.ts';
-import { relativeTime } from '../relative-time.ts';
+import { ageOf } from '../relative-time.ts';
 import { colorOfMessage } from './theme.ts';
 
 /**
@@ -144,21 +144,21 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
 
 /** How long ago, with the exact instant in the tooltip for when "3m" is not enough. */
 function Age({ at, now }: { at: string; now: number }) {
-  const instant = Date.parse(at);
+  const age = ageOf(at, now);
 
-  if (Number.isNaN(instant)) {
-    // An unreadable timestamp reaches the client verbatim rather than being dropped
-    // (`time.ts`), so it is shown verbatim rather than rendered as "NaN ago".
+  // A string that is not a timestamp is not marked up as one: `<time datetime="…">` would be
+  // claiming a machine-readable instant that this very row is saying it does not have.
+  if (!age.readable) {
     return (
-      <span style={AGE_STYLE} title={at}>
-        {at}
+      <span style={AGE_STYLE} title={age.title}>
+        {age.label}
       </span>
     );
   }
 
   return (
-    <time dateTime={at} title={new Date(instant).toLocaleString()} style={AGE_STYLE}>
-      {relativeTime(now - instant)} ago
+    <time dateTime={at} title={age.title} style={AGE_STYLE}>
+      {age.label}
     </time>
   );
 }

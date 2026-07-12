@@ -282,7 +282,7 @@ describe('heartbeats', () => {
       />
     );
 
-    await waitFor(() => expect(screen.getByText(/1 heartbeats hidden|1 message/)).toBeVisible());
+    await waitFor(() => expect(screen.getByText(/1 heartbeat hidden/)).toBeVisible());
     expect(node('task_aaaaaaaa')).not.toHaveAttribute('data-pulse');
   });
 });

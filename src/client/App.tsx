@@ -68,6 +68,12 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
   const { selected, select, newRunId } = useRunSelection(runs);
 
+  // Every task in the database, which is a different question from the canvas's. The canvas draws
+  // one run; a *dependency* is an edge in the schema and knows nothing about a run this tool
+  // inferred, so resolving one against the canvas's tasks alone would report a task in the next
+  // run along as deleted (#20's dep chips).
+  const allTasks = event?.snapshot.tasks ?? NO_TASKS;
+
   // The feed remembers; `event.messages` is only ever the delta after the client's cursor.
   const { messages, arrived } = useFeed(event);
   const pulses = usePulses(arrived);
@@ -79,8 +85,8 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   // The scoping, in one line. Every task carries the run the server inferred for it, so the
   // client never re-derives the grouping — it only picks which one to draw.
   const tasks = useMemo(
-    () => (event && selected ? event.snapshot.tasks.filter((task) => task.runId === selected.id) : NO_TASKS),
-    [event, selected]
+    () => (selected ? allTasks.filter((task) => task.runId === selected.id) : NO_TASKS),
+    [allTasks, selected]
   );
 
   // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
@@ -134,12 +140,19 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   }
 
   /**
-   * A gate, or anything else that names a task rather than toggling one. It *selects* — it does
-   * not toggle: clicking the question a second time meaning "never mind" would be a strange
-   * thing for a blocker to offer, and the way out of a selection is the node, where the way in
-   * to it was.
+   * A gate, a dependency chip — anything that names a task rather than toggling one. It
+   * *selects*: clicking the question a second time meaning "never mind" would be a strange thing
+   * for a blocker to offer, and the way out of a selection is the node, where the way in to it was.
+   *
+   * And it goes wherever the task **is**. Runs are *inferred* (`runs.ts`): they are buckets of
+   * `created_by_terminal_handle`, split on a six-hour idle gap, with the null-handle tasks in a
+   * synthetic run of their own — so an edge in `tasks.deps` can perfectly well cross from one of
+   * them into another. Refusing to follow it would leave a real dependency looking like a dead
+   * end. It is the rule a feed row already follows: naming a task *is* asking to go to it.
    */
   function showTask(taskId: string): void {
+    const target = allTasks.find((task) => task.id === taskId);
+    if (target && target.runId !== selected?.id) select(target.runId);
     setSelectedTaskId(taskId);
   }
 
@@ -198,7 +211,9 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
           <Inspector
             task={selectedTask}
             gates={taskGates}
-            tasks={tasks}
+            // Every task, not the canvas's: a dep chip that could not see across an inferred run
+            // would call a task that is sitting right there in the database deleted.
+            tasks={allTasks}
             detail={detail}
             error={detailError}
             onClose={() => setSelectedTaskId(null)}

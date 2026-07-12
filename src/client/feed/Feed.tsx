@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { FeedMessage } from '../../shared/types.ts';
 import { SELECTED_OUTLINE } from '../canvas/theme.ts';
+import { DOCK_STYLE } from '../dock.ts';
+import { HeartbeatToggle } from './HeartbeatToggle.tsx';
 import { MessageRow } from './MessageRow.tsx';
 import { viewOf } from './select.ts';
 
@@ -49,18 +51,7 @@ export function Feed({ messages, runId, onSelectMessage }: FeedProps) {
   );
 
   return (
-    <aside
-      data-testid="feed"
-      aria-label="Message feed"
-      style={{
-        width: 360,
-        flexShrink: 0,
-        borderLeft: '1px solid #e4e4e7',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-      }}
-    >
+    <aside data-testid="feed" aria-label="Message feed" style={DOCK_STYLE}>
       <header style={{ padding: '12px 12px 8px', borderBottom: '1px solid #e4e4e7', flexShrink: 0 }}>
         <h2 style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: '#71717a', margin: '0 0 8px' }}>
           Feed
@@ -71,18 +62,10 @@ export function Feed({ messages, runId, onSelectMessage }: FeedProps) {
           <ScopeButton label="All" active={scope === 'all'} onClick={() => setScope('all')} />
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3f3f46' }}>
-          <input
-            type="checkbox"
-            checked={showHeartbeats}
-            onChange={(changed) => setShowHeartbeats(changed.target.checked)}
-          />
-          Show heartbeats
-        </label>
+        <HeartbeatToggle showHeartbeats={showHeartbeats} onChange={setShowHeartbeats} hidden={hidden} />
 
         <p style={{ margin: '6px 0 0', fontSize: 11, color: '#71717a' }}>
           {shown.length} {shown.length === 1 ? 'message' : 'messages'}
-          {hidden > 0 && <> · {hidden} heartbeats hidden</>}
         </p>
       </header>
 

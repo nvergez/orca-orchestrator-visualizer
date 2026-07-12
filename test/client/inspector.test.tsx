@@ -545,6 +545,50 @@ describe('the dependencies', () => {
     expect(node(TASK_ID)).toHaveAttribute('data-selected', 'false');
   });
 
+  it('follows a dependency into another run rather than calling it deleted', async () => {
+    // Runs are *inferred* — buckets of `created_by_terminal_handle`, split on a six-hour idle
+    // gap, with the null-handle tasks in a synthetic run of their own (`runs.ts`). A `deps` edge
+    // is a real edge in the schema and knows nothing about any of that, so it can cross from one
+    // inferred run into the next. The task is right there in the database; a chip that resolved
+    // only against the canvas would announce it as deleted.
+    const user = userEvent.setup();
+    const ELSEWHERE = task({
+      id: 'task_elsewhere',
+      title: 'Over in another run',
+      runId: 'run_1a2b3c4d_2000',
+      deps: [],
+    });
+
+    render(
+      <App
+        event={event({
+          snapshot: {
+            runs: [
+              run(),
+              run({ id: 'run_1a2b3c4d_2000', label: 'The other run', startedAt: '2026-07-07T12:00:00.000Z' }),
+            ],
+            tasks: [task({ deps: ['task_elsewhere'] }), ELSEWHERE],
+            gates: [],
+            coordinatorRuns: [],
+          },
+        })}
+        loadTask={loaderFor(detail(), detail({ id: 'task_elsewhere' }))}
+      />
+    );
+    await drawn(1);
+
+    const panel = await open();
+    await user.click(within(panel).getByRole('button', { name: /Over in another run/ }));
+
+    // The canvas went to it, and so did the rail — naming a task is asking to go to it.
+    await waitFor(() => expect(node('task_elsewhere')).toHaveAttribute('data-selected', 'true'));
+    expect(within(inspector()!).getByRole('heading', { name: 'Over in another run' })).toBeVisible();
+    expect(screen.getAllByTestId('run-row').find((row) => row.dataset.run === 'run_1a2b3c4d_2000')).toHaveAttribute(
+      'aria-current',
+      'true'
+    );
+  });
+
   it('shows a dependency the database no longer has as a dead end, not as a link', async () => {
     // No foreign keys in this schema (SPEC §4.2, trap 8): `deps` can name a task an
     // `orchestration reset` deleted. The canvas drops that edge; the chip has to admit it.
