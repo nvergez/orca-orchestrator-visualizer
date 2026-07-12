@@ -1,14 +1,15 @@
 import type { Meta, StreamEvent } from '../shared/types.ts';
 import { livenessSentence } from '../shared/wording.ts';
+import { Canvas } from './canvas/Canvas.tsx';
 
 /**
- * The shell the MVP panels get hung off — the run rail, gate strip, canvas, feed and
- * inspector arrive with their own tickets (#15–#20).
+ * The shell the MVP panels get hung off — the run rail, gate strip, feed and inspector
+ * arrive with their own tickets (#16–#20).
  *
- * What it renders *today* is `meta`: the truth about what the tool is looking at. That is
- * not a placeholder. A visualizer that cannot tell you whether it is showing a live
- * orchestration or last Tuesday's — or that it is reading a database you did not mean — is
- * worse than no visualizer, and no panel built on top of it would be worth anything.
+ * The canvas lands here (#15) under the `meta` header #14 built: the truth about *what is
+ * being read* stays on screen above the graph, because a visualizer that cannot tell you
+ * whether it is showing a live orchestration or last Tuesday's is worse than no visualizer,
+ * and the graph below it would be worth nothing.
  */
 export function App({ event }: { event: StreamEvent | null }) {
   if (!event) {
@@ -21,11 +22,17 @@ export function App({ event }: { event: StreamEvent | null }) {
   }
 
   return (
-    <main>
-      <h1>orca-viz</h1>
-      <Status meta={event.meta} />
-      <Notices meta={event.meta} />
-      <Source meta={event.meta} />
+    <main style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: 0 }}>
+      <header style={{ padding: '8px 16px', borderBottom: '1px solid #e4e4e7', flexShrink: 0 }}>
+        <h1 style={{ fontSize: 16, margin: '0 0 4px' }}>orca-viz</h1>
+        <Status meta={event.meta} />
+        <Notices meta={event.meta} />
+        <Source meta={event.meta} />
+      </header>
+
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Canvas tasks={event.snapshot.tasks} />
+      </div>
     </main>
   );
 }

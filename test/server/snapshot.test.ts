@@ -45,15 +45,18 @@ describe('GET /api/snapshot', () => {
     expect(meta.degraded).toEqual([]);
   });
 
-  it('carries the empty snapshot arrays this ticket is specified to produce', async () => {
+  it('carries the tasks, and the arrays the tickets after this one still owe', async () => {
     const dbPath = new FixtureBuilder().task({ createdAt: AT }).write(tempDbPath());
     harness = await serve(dbPath);
 
     const snapshot = await harness.snapshot();
 
-    // Deriving runs, tasks and the feed is #15+. The boot path lands here, and an empty
-    // array is the honest thing to send until it does.
-    expect(snapshot.snapshot).toEqual({ runs: [], tasks: [], coordinatorRuns: [] });
+    // #15 fills `tasks` (see tasks.test.ts). Runs are inferred in #16, coordinator runs
+    // land with them, and the feed is #17 — an empty array is the honest thing to send
+    // until each arrives.
+    expect(snapshot.snapshot.tasks).toHaveLength(1);
+    expect(snapshot.snapshot.runs).toEqual([]);
+    expect(snapshot.snapshot.coordinatorRuns).toEqual([]);
     expect(snapshot.messages).toEqual([]);
   });
 
