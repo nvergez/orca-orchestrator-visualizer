@@ -2,20 +2,20 @@
 
 **A read-only web visualizer for Orca's orchestration database.**
 
-Status: **locked.** This is the implementation-ready specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-orchestrator-visualizer/issues/1)). Every decision below traces to a resolved ticket, cited inline as (#n). An implementation session should be able to build the MVP from this document plus [`HANDOFF.md`](./HANDOFF.md) without further deliberation.
+Status: **locked.** This is the implementation-ready specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). Every decision below traces to a resolved ticket, cited inline as (#n). An implementation session should be able to build the MVP from this document plus [`HANDOFF.md`](./HANDOFF.md) without further deliberation.
 
 **Reading order for the implementer:** `HANDOFF.md` (verified ground truth about Orca's DB — do not re-derive it) → this document. The three research docs under [`docs/research/`](./docs/research/) are the evidence behind the rulings; consult them when you need the `file:line` citations, not to make decisions.
 
 | Source | What it settles |
 |---|---|
 | [`HANDOFF.md`](./HANDOFF.md) | The DB exists, is safely readable from outside, and its v5 schema |
-| [#2](https://github.com/nvergez/orca-orchestrator-visualizer/issues/2) · [`db-history.md`](./docs/research/db-history.md) | What history the DB retains; run inference; the enum traps |
-| [#3](https://github.com/nvergez/orca-orchestrator-visualizer/issues/3) · [`db-discovery.md`](./docs/research/db-discovery.md) | Cross-platform DB discovery; WAL read-only rules |
-| [#4](https://github.com/nvergez/orca-orchestrator-visualizer/issues/4) · [`cli-data-source.md`](./docs/research/cli-data-source.md) | Why the `orca` CLI is not the data source |
-| [#5](https://github.com/nvergez/orca-orchestrator-visualizer/issues/5) | Data access: SQLite-only, `node:sqlite`, render-what-parses |
-| [#6](https://github.com/nvergez/orca-orchestrator-visualizer/issues/6) · [`prototype/`](./prototype/) | Rendering: React Flow + elkjs, proven at real scale |
-| [#7](https://github.com/nvergez/orca-orchestrator-visualizer/issues/7) | UI composition: run scoping, panels, history, message flow |
-| [#8](https://github.com/nvergez/orca-orchestrator-visualizer/issues/8) | Server architecture, config surface, install story, OSS extras |
+| [#2](https://github.com/nvergez/orca-viz/issues/2) · [`db-history.md`](./docs/research/db-history.md) | What history the DB retains; run inference; the enum traps |
+| [#3](https://github.com/nvergez/orca-viz/issues/3) · [`db-discovery.md`](./docs/research/db-discovery.md) | Cross-platform DB discovery; WAL read-only rules |
+| [#4](https://github.com/nvergez/orca-viz/issues/4) · [`cli-data-source.md`](./docs/research/cli-data-source.md) | Why the `orca` CLI is not the data source |
+| [#5](https://github.com/nvergez/orca-viz/issues/5) | Data access: SQLite-only, `node:sqlite`, render-what-parses |
+| [#6](https://github.com/nvergez/orca-viz/issues/6) · [`prototype/`](./prototype/) | Rendering: React Flow + elkjs, proven at real scale |
+| [#7](https://github.com/nvergez/orca-viz/issues/7) | UI composition: run scoping, panels, history, message flow |
+| [#8](https://github.com/nvergez/orca-viz/issues/8) | Server architecture, config surface, install story, OSS extras |
 
 ---
 

@@ -9,7 +9,7 @@ npx orca-viz@latest
 
 It finds Orca's orchestration database, starts on `127.0.0.1:4269`, and opens a browser.
 
-![The orchestrator rail on the left, the task DAG in the middle with two agents dispatched, and the inspector on the right showing a task's spec, its dispatch attempts and the exchange it was rebuilt from](https://raw.githubusercontent.com/nvergez/orca-orchestrator-visualizer/main/docs/screenshot.png)
+![The orchestrator rail on the left, the task DAG in the middle with two agents dispatched, and the inspector on the right showing a task's spec, its dispatch attempts and the exchange it was rebuilt from](https://raw.githubusercontent.com/nvergez/orca-viz/main/docs/screenshot.png)
 
 ## Read this before you point it at your machine
 

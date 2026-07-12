@@ -1,6 +1,6 @@
 # Research: the `orca` CLI as a data source for the visualizer
 
-**Ticket:** [#4 — The orca CLI as a data source](https://github.com/nvergez/orca-orchestrator-visualizer/issues/4)
+**Ticket:** [#4 — The orca CLI as a data source](https://github.com/nvergez/orca-viz/issues/4)
 **Evaluated against:** Orca app v1.4.128 on Linux (`ORCA_APP_VERSION=1.4.128`), live orchestration run in flight; Orca source read at `/home/dev/projects/orca`.
 **Date:** 2026-07-11
 
