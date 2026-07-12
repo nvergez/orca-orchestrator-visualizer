@@ -2,13 +2,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { OrcaDatabase } from '../../src/server/database.ts';
 import { createServer } from '../../src/server/server.ts';
-import { tempDir } from '../fixtures/temp-dir.ts';
+import { FixtureBuilder } from '../fixtures/builder.ts';
+import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
 
 /**
- * The server is driven over real HTTP against a stand-in for the built bundle. The JSON
- * API, the SSE stream and database discovery arrive with #14 and #17; what this ticket
- * owes is a process that serves the frontend out of the package's own dist/.
+ * The static half of the server: one process serving the frontend out of the package's own
+ * dist/, so there is no CORS and no second thing to start. The JSON API it also serves has
+ * its own tests — `snapshot.test.ts` and `read-only.test.ts`.
  */
 
 const clientDir = tempDir();
@@ -16,7 +18,10 @@ mkdirSync(join(clientDir, 'assets'));
 writeFileSync(join(clientDir, 'index.html'), '<!doctype html><title>orca-viz</title>');
 writeFileSync(join(clientDir, 'assets', 'index.js'), 'console.log("orca-viz")');
 
-const server = createServer({ clientDir });
+const database = new OrcaDatabase(
+  new FixtureBuilder().task({ createdAt: new Date('2026-07-08T12:00:00Z') }).write(tempDbPath())
+);
+const server = createServer({ database, clientDir });
 let origin: string;
 
 beforeAll(async () => {
@@ -26,6 +31,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
+  database.close();
 });
 
 describe('the web server', () => {

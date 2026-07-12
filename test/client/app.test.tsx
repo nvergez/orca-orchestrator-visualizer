@@ -1,16 +1,107 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
+import type { Meta, StreamEvent } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): the frontend is tested by rendering it, in jsdom, through the same
- * Vitest run as the server seam. The panels — and the canned `StreamEvent` that feeds
- * them — arrive with their own tickets; this proves the seam exists and works.
+ * Seam 2 (#12): `<App>` fed a canned `StreamEvent`. `StreamEvent` is already the client's
+ * only input, so this is the highest available frontend seam and it costs nothing new — and
+ * the same fixtures feed both seams, so the contract cannot drift between them.
+ *
+ * What #14 owes the screen is **honesty about what is being read**. Every case below is a
+ * sentence the user has to be told rather than left to infer — most of all the stale one,
+ * which is the difference between reading history and being fooled by it.
  */
-describe('<App>', () => {
-  it('renders', () => {
-    render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'orca-viz' })).toBeVisible();
+const META: Meta = {
+  dbPath: '/home/dev/.config/orca/orchestration.db',
+  schemaVersion: 5,
+  schemaSupport: 'supported',
+  degraded: [],
+  liveness: 'live',
+  orcaPid: 4242,
+  dbMtime: '2026-07-11T20:54:00.000Z',
+  resetDetected: false,
+};
+
+function event(meta: Partial<Meta> = {}): StreamEvent {
+  return {
+    seq: 0,
+    meta: { ...META, ...meta },
+    snapshot: { runs: [], tasks: [], coordinatorRuns: [] },
+    messages: [],
+  };
+}
+
+describe('<App>', () => {
+  it('tells you which database it is reading', () => {
+    render(<App event={event()} />);
+
+    expect(screen.getByText('/home/dev/.config/orca/orchestration.db')).toBeVisible();
+  });
+
+  it('says so when it is connected to a running Orca', () => {
+    render(<App event={event({ liveness: 'live' })} />);
+
+    expect(screen.getByText(/connected to a running Orca/i)).toBeVisible();
+  });
+
+  it("says Orca isn't running, and from when the data is, rather than pretending it is live", () => {
+    render(<App event={event({ liveness: 'stale', orcaPid: null })} />);
+
+    const banner = screen.getByText(/Orca isn't running; showing last-known state from/i);
+
+    expect(banner).toBeVisible();
+    expect(banner).toHaveTextContent(/2026/); // …from *when*. A time the user can place.
+  });
+
+  it('degrades an unknown liveness to the same honest stale wording', () => {
+    // We could not read orca-runtime.json, so we do not know. Saying "live" would be a
+    // guess, and this is the one thing the tool must never guess about.
+    render(<App event={event({ liveness: 'unknown', orcaPid: null })} />);
+
+    expect(screen.getByText(/Orca isn't running; showing last-known state from/i)).toBeVisible();
+  });
+
+  it('warns when the database comes from a newer Orca than this build knows about', () => {
+    render(<App event={event({ schemaVersion: 6, schemaSupport: 'newer' })} />);
+
+    expect(screen.getByText(/newer Orca schema/i)).toBeVisible();
+    expect(screen.getByText(/some data may be missing or mislabeled/i)).toBeVisible();
+  });
+
+  it('lists what an older Orca cost you, so a missing badge is explained rather than a bug', () => {
+    render(
+      <App
+        event={event({
+          schemaVersion: 4,
+          schemaSupport: 'older',
+          degraded: ['Task titles — this Orca has no task_title/display_name column.'],
+        })}
+      />
+    );
+
+    expect(screen.getByText(/Task titles/)).toBeVisible();
+  });
+
+  it('explains a history that a reset wiped, rather than leaving it a mystery', () => {
+    render(<App event={event({ resetDetected: true })} />);
+
+    expect(screen.getByText(/reset/i)).toBeVisible();
+  });
+
+  it('says nothing about resets, schemas or staleness when there is nothing to say', () => {
+    render(<App event={event()} />);
+
+    expect(screen.queryByText(/reset/i)).toBeNull();
+    expect(screen.queryByText(/newer Orca schema/i)).toBeNull();
+    expect(screen.queryByText(/isn't running/i)).toBeNull();
+  });
+
+
+  it('says it is connecting before the first snapshot arrives', () => {
+    render(<App event={null} />);
+
+    expect(screen.getByText(/connecting/i)).toBeVisible();
   });
 });

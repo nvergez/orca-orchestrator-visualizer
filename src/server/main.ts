@@ -1,7 +1,24 @@
-import { createServer, DEFAULT_HOST, DEFAULT_PORT } from './server.ts';
+import { boot } from './boot.ts';
+import { StartupError } from './errors.ts';
 
-// Loopback only (SPEC §1.2): the database holds task specs, agent prompts and message
-// bodies. Flags, database discovery and the browser auto-open land in #14.
-createServer().listen(DEFAULT_PORT, DEFAULT_HOST, () => {
-  console.log(`orca-viz listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}`);
-});
+/**
+ * The process glue, and nothing else — everything worth testing lives in `boot()`.
+ *
+ * Its whole job is to turn a `StartupError` — a `--db` that does not work, a taken port, a
+ * database with no task DAG in it — into a message a person can act on and a non-zero exit
+ * code, rather than a stack trace.
+ */
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  try {
+    await boot({ argv });
+  } catch (error) {
+    if (error instanceof StartupError) {
+      console.error(`orca-viz: ${error.toString()}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+}
+
+await main();
