@@ -42,7 +42,7 @@ export type GateStripProps = {
   gates: Gate[];
   /** The selected run's tasks — a gate names a task id, and a person needs its title. */
   tasks: Task[];
-  /** Clicking a gate goes to the task it blocks, which centres the node and filters the feed. */
+  /** Clicking a gate goes to the task it blocks, which centres the node and opens its story. */
   onSelectTask: (taskId: string) => void;
 };
 
@@ -132,7 +132,7 @@ function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
         Clamped, and not because a question is unimportant — because on the real database a
         question is often several paragraphs of an agent explaining itself, and an unclamped
         strip would swallow the canvas it exists to point at. The whole of it is one hover away,
-        and the message that raised it is in the feed, in full, where a body belongs.
+        and the message that raised it is in the conversation, in full, where a body belongs.
       */}
       <b title={gate.question} className="line-clamp-3 min-w-0 flex-[1_1_240px] leading-snug font-semibold whitespace-pre-line">
         {gate.question}

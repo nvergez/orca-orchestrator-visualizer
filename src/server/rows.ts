@@ -40,7 +40,7 @@ export function selectPresent(
  *
  * `selectPresent` is right for rows that are overwritten in place: read them all, every tick.
  * It is wrong for `messages`, which is an append-only log the client has already seen most of
- * (the feed resumes after a cursor) and of which the gates want 53 rows in 466 (`WHERE type =
+ * (the client resumes after a cursor) and of which the gates want 53 rows in 466 (`WHERE type =
  * 'decision_gate'`). Both of those still owe the same debt — **never name a column the file
  * does not have** — so they pay it here rather than each rolling their own filter.
  *

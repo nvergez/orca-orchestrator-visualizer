@@ -1,0 +1,666 @@
+<title>orca-viz — l'orchestrateur et ses agents</title>
+
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #fafafa;
+    --sunken: #f4f4f5;
+    --fg: #18181b;
+    --muted: #71717a;
+    --faint: #a1a1aa;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --selection: #3b6ff6;
+    --selection-soft: #eef2ff;
+
+    --st-pending: #a1a1aa;   --st-pending-soft: #f4f4f5;   --st-pending-ink: #3f3f46;
+    --st-ready: #3b82f6;     --st-ready-soft: #dbeafe;     --st-ready-ink: #1e3a8a;
+    --st-dispatched: #f59e0b;--st-dispatched-soft:#fef3c7; --st-dispatched-ink:#78350f;
+    --st-completed: #22c55e; --st-completed-soft:#dcfce7;  --st-completed-ink:#14532d;
+    --st-failed: #ef4444;    --st-failed-soft: #fee2e2;    --st-failed-ink: #7f1d1d;
+    --st-blocked: #a855f7;   --st-blocked-soft:#f3e8ff;    --st-blocked-ink:#581c87;
+    --gate: #f97316;         --gate-soft: #ffedd5;         --gate-ink: #7c2d12;
+
+    /* Identité d'agent — jamais un fond, seulement un liseré + un monogramme.
+       Le hue des fonds appartient au statut. */
+    --a1: #0d9488;
+    --a2: #db2777;
+    --a3: #4f46e5;
+    --a4: #57534e;
+
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b; --panel: #101012; --sunken: #18181b;
+      --fg: #f4f4f5; --muted: #a1a1aa; --faint: #71717a;
+      --border: #27272a; --border-strong: #3f3f46;
+      --selection: #6f9bff; --selection-soft: #17233f;
+      --st-pending-soft: #26262a; --st-pending-ink: #d4d4d8;
+      --st-ready-soft: #14243f;   --st-ready-ink: #bfdbfe;
+      --st-dispatched-soft:#3a2a08;--st-dispatched-ink:#fde68a;
+      --st-completed-soft:#0d2a17; --st-completed-ink:#bbf7d0;
+      --st-failed-soft: #3a1416;   --st-failed-ink: #fecaca;
+      --st-blocked-soft:#2a1440;   --st-blocked-ink:#e9d5ff;
+      --gate-soft: #3a1f0a;        --gate-ink: #fed7aa;
+      --a1: #2dd4bf; --a2: #f472b6; --a3: #a5b4fc; --a4: #a8a29e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #09090b; --panel: #101012; --sunken: #18181b;
+    --fg: #f4f4f5; --muted: #a1a1aa; --faint: #71717a;
+    --border: #27272a; --border-strong: #3f3f46;
+    --selection: #6f9bff; --selection-soft: #17233f;
+    --st-pending-soft: #26262a; --st-pending-ink: #d4d4d8;
+    --st-ready-soft: #14243f;   --st-ready-ink: #bfdbfe;
+    --st-dispatched-soft:#3a2a08;--st-dispatched-ink:#fde68a;
+    --st-completed-soft:#0d2a17; --st-completed-ink:#bbf7d0;
+    --st-failed-soft: #3a1416;   --st-failed-ink: #fecaca;
+    --st-blocked-soft:#2a1440;   --st-blocked-ink:#e9d5ff;
+    --gate-soft: #3a1f0a;        --gate-ink: #fed7aa;
+    --a1: #2dd4bf; --a2: #f472b6; --a3: #a5b4fc; --a4: #a8a29e;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --panel: #fafafa; --sunken: #f4f4f5;
+    --fg: #18181b; --muted: #71717a; --faint: #a1a1aa;
+    --border: #e4e4e7; --border-strong: #d4d4d8;
+    --selection: #3b6ff6; --selection-soft: #eef2ff;
+    --st-pending-soft: #f4f4f5; --st-pending-ink: #3f3f46;
+    --st-ready-soft: #dbeafe;   --st-ready-ink: #1e3a8a;
+    --st-dispatched-soft:#fef3c7;--st-dispatched-ink:#78350f;
+    --st-completed-soft:#dcfce7; --st-completed-ink:#14532d;
+    --st-failed-soft: #fee2e2;   --st-failed-ink: #7f1d1d;
+    --st-blocked-soft:#f3e8ff;   --st-blocked-ink:#581c87;
+    --gate-soft: #ffedd5;        --gate-ink: #7c2d12;
+    --a1: #0d9488; --a2: #db2777; --a3: #4f46e5; --a4: #57534e;
+  }
+
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; text-align: left; }
+  :focus-visible { outline: 2px solid var(--selection); outline-offset: 2px; border-radius: 4px; }
+
+  .intro { max-width: 44rem; margin: 0 auto; padding: 3rem 1.5rem 1.75rem; display: flex; flex-direction: column; gap: 0.7rem; }
+  .intro h1 { font-size: 1.6rem; font-weight: 650; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+  .intro p { margin: 0; color: var(--muted); }
+  .intro .hint { font-size: 0.8rem; color: var(--faint); }
+  .intro code { font-family: var(--mono); font-size: 0.85em; color: var(--fg); }
+
+  /* ---------- app shell ---------- */
+  .app {
+    max-width: 1400px; margin: 0 auto 3rem; height: 760px;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    display: flex; flex-direction: column; background: var(--bg);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px -12px rgba(0,0,0,.12);
+  }
+  @media (max-width: 1100px) { .app { height: auto; } }
+
+  .topbar { height: 48px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
+  .brand .mark { width: 22px; height: 22px; border-radius: 6px; background: var(--fg); color: var(--bg); display: grid; place-items: center; font-size: 11px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 500; border: 1px solid var(--st-completed); background: var(--st-completed-soft); color: var(--st-completed-ink); }
+  .pill .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--st-completed); }
+  .topbar .path { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .theme-btn { border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 11px; color: var(--muted); }
+
+  .body { flex: 1; min-height: 0; display: flex; }
+  @media (max-width: 1100px) { .body { flex-direction: column; } }
+
+  /* ---------- sidebar ---------- */
+  .rail { width: 268px; flex: none; border-right: 1px solid var(--border); background: var(--panel); overflow-y: auto; }
+  @media (max-width: 1100px) { .rail { width: 100%; border-right: none; border-bottom: 1px solid var(--border); } }
+
+  .rail h2, .dock h2 { margin: 0; padding: 12px 14px 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+
+  .orch { border-bottom: 1px solid var(--border); }
+  .orch > .row { width: 100%; padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; }
+  .orch > .row:hover { background: var(--sunken); }
+  .orch[data-open="true"] > .row { background: var(--selection-soft); box-shadow: inset 3px 0 0 var(--selection); }
+  .orch .title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; letter-spacing: -0.005em; }
+  .orch .live { width: 7px; height: 7px; border-radius: 999px; background: var(--st-completed); flex: none; }
+  .orch .live.off { background: var(--faint); }
+  .orch .handle { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .orch .meta { font-size: 11px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
+  .orch .meta .sep { color: var(--faint); }
+
+  /* the cast, nested under the open orchestrator */
+  .cast { padding: 4px 0 10px; }
+  .cast .lbl { padding: 6px 14px 6px 26px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  .agent { width: 100%; padding: 7px 14px 7px 26px; display: flex; align-items: center; gap: 9px; }
+  .agent:hover { background: var(--sunken); }
+  .agent[aria-pressed="true"] { background: var(--selection-soft); box-shadow: inset 3px 0 0 var(--selection); }
+  .mono { width: 20px; height: 20px; flex: none; border-radius: 5px; display: grid; place-items: center; font-family: var(--mono); font-size: 9.5px; font-weight: 700; color: #fff; }
+  :root[data-theme="dark"] .mono, :root:not([data-theme="light"]) .mono { color: #09090b; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .mono { color: #fff; } }
+  .agent .who { min-width: 0; flex: 1; }
+  .agent .who b { display: block; font-size: 12.5px; font-weight: 600; }
+  .agent .who small { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .agent .n { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .agent .seen { font-size: 10px; color: var(--st-dispatched-ink); background: var(--st-dispatched-soft); border-radius: 999px; padding: 1px 6px; }
+
+  .orch-self { padding: 7px 14px 7px 26px; display: flex; align-items: center; gap: 9px; opacity: .95; }
+  .orch-self .mono { background: var(--fg); color: var(--bg); }
+
+  /* ---------- canvas ---------- */
+  .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .gatestrip { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--gate); background: var(--gate-soft); color: var(--gate-ink); font-size: 12.5px; }
+  .gatestrip b { font-weight: 650; }
+  .gatestrip .go { margin-left: auto; border: 1px solid currentColor; border-radius: 6px; padding: 2px 9px; font-size: 11px; font-weight: 600; }
+
+  .canvas { flex: 1; min-height: 0; overflow: auto; background:
+      radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0 / 22px 22px; }
+  .graph { position: relative; width: 1000px; height: 470px; margin: 18px; }
+
+  .wave { position: absolute; top: 0; border: 1px dashed var(--border-strong); border-radius: 10px; }
+  .wave .cap { position: absolute; top: -11px; left: 12px; background: var(--bg); padding: 0 8px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+  .wave .cap b { color: var(--fg); font-weight: 600; }
+  .wave .cap .gap { color: var(--st-dispatched-ink); background: var(--st-dispatched-soft); border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
+
+  .edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+  .edges path { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
+
+  .node {
+    position: absolute; width: 196px; height: 68px; border-radius: 8px; border: 1px solid;
+    padding: 8px 10px 8px 13px; display: flex; flex-direction: column; gap: 3px;
+    transition: opacity .18s ease, transform .12s ease;
+  }
+  .node:hover { transform: translateY(-1px); }
+  .node .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 8px 0 0 8px; }
+  .node .top { display: flex; align-items: center; gap: 6px; }
+  .node .mono { width: 17px; height: 17px; font-size: 8.5px; border-radius: 4px; }
+  .node .id { font-family: var(--mono); font-size: 9.5px; opacity: .75; }
+  .node .st { margin-left: auto; font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: .85; }
+  .node .name { font-size: 12.5px; font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .node .gatemark { position: absolute; right: -7px; top: -7px; width: 18px; height: 18px; border-radius: 999px; background: var(--gate); color: #fff; display: grid; place-items: center; font-size: 10px; }
+  .node[data-dim="true"] { opacity: .18; }
+  .node[data-sel="true"] { outline: 2px solid var(--selection); outline-offset: 2px; }
+
+  .n-pending    { background: var(--st-pending-soft);    color: var(--st-pending-ink);    border-color: var(--st-pending); }
+  .n-ready      { background: var(--st-ready-soft);      color: var(--st-ready-ink);      border-color: var(--st-ready); }
+  .n-dispatched { background: var(--st-dispatched-soft); color: var(--st-dispatched-ink); border-color: var(--st-dispatched); }
+  .n-completed  { background: var(--st-completed-soft);  color: var(--st-completed-ink);  border-color: var(--st-completed); }
+  .n-failed     { background: var(--st-failed-soft);     color: var(--st-failed-ink);     border-color: var(--st-failed); }
+  .n-blocked    { background: var(--st-blocked-soft);    color: var(--st-blocked-ink);    border-color: var(--st-blocked); }
+
+  .legend { flex: none; display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--panel); font-size: 11px; color: var(--muted); }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: block; }
+
+  /* ---------- conversation dock ---------- */
+  .dock { width: 400px; flex: none; border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; }
+  @media (max-width: 1100px) { .dock { width: 100%; border-left: none; border-top: 1px solid var(--border); } }
+
+  .dock .head { flex: none; padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 9px; }
+  .dock .head .who { min-width: 0; flex: 1; }
+  .dock .head b { display: block; font-size: 13px; font-weight: 650; letter-spacing: -0.01em; }
+  .dock .head small { display: block; font-size: 11px; color: var(--muted); }
+  .dock .head .clear { border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--muted); }
+
+  .thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+  .msg { display: flex; flex-direction: column; gap: 4px; max-width: 92%; }
+  .msg.out { align-self: flex-end; align-items: flex-end; }
+  .msg .hdr { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }
+  .msg .hdr .arrow { font-family: var(--mono); }
+  .msg .hdr time { font-variant-numeric: tabular-nums; }
+  .msg .kind { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 4px; background: var(--sunken); color: var(--muted); border: 1px solid var(--border); }
+  .msg .bubble { border: 1px solid var(--border); background: var(--bg); border-radius: 10px; padding: 8px 11px; font-size: 12.5px; line-height: 1.5; }
+  .msg.out .bubble { background: var(--sunken); }
+  .msg .src { font-size: 10px; color: var(--faint); font-family: var(--mono); }
+
+  .msg.dispatch .kind { background: var(--st-dispatched-soft); color: var(--st-dispatched-ink); border-color: var(--st-dispatched); }
+  .msg.dispatch .bubble { border-color: var(--st-dispatched); }
+  .msg.gate .kind { background: var(--gate-soft); color: var(--gate-ink); border-color: var(--gate); }
+  .msg.gate .bubble { border-color: var(--gate); }
+  .msg.done .kind { background: var(--st-completed-soft); color: var(--st-completed-ink); border-color: var(--st-completed); }
+  .msg.fail .kind { background: var(--st-failed-soft); color: var(--st-failed-ink); border-color: var(--st-failed); }
+
+  .opts { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .opts span { font-size: 11px; border: 1px solid var(--border-strong); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
+  .opts span.picked { border-color: var(--st-completed); background: var(--st-completed-soft); color: var(--st-completed-ink); font-weight: 600; }
+
+  .beats { align-self: center; font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 7px; padding: 3px 10px; border: 1px dashed var(--border-strong); border-radius: 999px; }
+
+  .daysep { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 10.5px; }
+  .daysep::before, .daysep::after { content: ""; height: 1px; background: var(--border); flex: 1; }
+
+  .empty { padding: 26px 16px; color: var(--muted); font-size: 12.5px; text-align: center; }
+
+  /* ---------- notes ---------- */
+  .notes { max-width: 44rem; margin: 0 auto; padding: 0 1.5rem 5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+  .notes h2 { font-size: 1rem; font-weight: 650; margin: 0 0 0.4rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  .notes p { margin: 0 0 0.6rem; color: var(--muted); }
+  .notes ul { margin: 0; padding-left: 1.1rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.45rem; }
+  .notes strong { color: var(--fg); font-weight: 600; }
+  .notes code { font-family: var(--mono); font-size: 0.85em; color: var(--fg); }
+</style>
+
+<div class="intro">
+  <h1>Un orchestrateur, ses agents, et ce qu'ils se sont dit.</h1>
+  <p>
+    Maquette cliquable. À gauche : une ligne par terminal orchestrateur. Au centre : le graphe, où
+    chaque tâche porte l'agent qui l'a traitée. À droite : la conversation.
+  </p>
+  <p class="hint">
+    Clique un orchestrateur, puis un agent dans son casting — le graphe s'estompe autour de ses tâches
+    et la conversation se remplit. Clique un nœud pour lire l'échange de cette tâche.
+  </p>
+</div>
+
+<div class="app">
+  <header class="topbar">
+    <span class="brand"><span class="mark">◇</span> orca-viz</span>
+    <span class="pill"><span class="dot"></span> Orca est en cours</span>
+    <span class="path">~/.orca/orchestration.db</span>
+    <button class="theme-btn" id="theme">thème</button>
+  </header>
+
+  <div class="body">
+    <nav class="rail" id="rail" aria-label="Orchestrateurs"></nav>
+
+    <section class="stage">
+      <div id="strip"></div>
+      <div class="canvas"><div class="graph" id="graph"></div></div>
+      <div class="legend">
+        <span><i style="background: var(--st-completed)"></i> terminé</span>
+        <span><i style="background: var(--st-dispatched)"></i> en cours</span>
+        <span><i style="background: var(--st-ready)"></i> prêt</span>
+        <span><i style="background: var(--st-pending)"></i> en attente</span>
+        <span><i style="background: var(--st-failed)"></i> échoué</span>
+        <span><i style="background: var(--gate)"></i> question bloquante</span>
+        <span style="margin-left:auto">le fond = le statut · le liseré = l'agent</span>
+      </div>
+    </section>
+
+    <aside class="dock" aria-label="Conversation">
+      <div id="dock-head"></div>
+      <div class="thread" id="thread"></div>
+    </aside>
+  </div>
+</div>
+
+<div class="notes">
+  <section>
+    <h2>Ce que cette maquette change, et pourquoi</h2>
+    <ul>
+      <li>
+        <strong>La sidebar liste des orchestrateurs, pas des « runs inférés ».</strong> Une ligne =
+        un <code>created_by_terminal_handle</code>, c'est-à-dire une session Claude Code qui a joué
+        le chef d'orchestre. Plus de règle des 6 h dans l'identité de la ligne.
+      </li>
+      <li>
+        <strong>La règle des 6 h devient une vague.</strong> Elle ne disparaît pas — elle passe du
+        statut de frontière invisible à celui de séparateur visible dans le graphe : « après 14 h
+        d'inactivité ». Le trou de temps est <em>montré</em>, plus <em>inventé</em>.
+      </li>
+      <li>
+        <strong>Le casting est le pivot.</strong> L'orchestrateur et ses agents sont enfin des
+        objets à l'écran. Sélectionner un agent estompe le graphe autour de ses tâches et remplit
+        la conversation. C'est le geste central de l'outil.
+      </li>
+      <li>
+        <strong>Le fond d'un nœud reste le statut ; l'agent est un liseré + un monogramme.</strong>
+        Deux systèmes de couleur sur le même pixel ne peuvent pas gagner tous les deux. Le statut
+        garde le hue — il était validé à l'écran ; l'identité de l'agent prend le bord.
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>La conversation n'est pas la table <code>messages</code></h2>
+    <p>
+      C'est le point qui rend cet écran possible, et le seul vrai travail serveur à ajouter. Quand
+      l'orchestrateur dispatche un agent, <strong>il n'écrit aucun message</strong> — Orca injecte le
+      prompt directement dans le PTY du worker. Il y a zéro ligne de type <code>dispatch</code> dans
+      la vraie base.
+    </p>
+    <p>La conversation affichée à droite est donc reconstruite en fusionnant quatre sources :</p>
+    <ul>
+      <li><strong>Orchestrateur → agent</strong> : <code>tasks.spec</code>, daté par <code>dispatch_contexts.dispatched_at</code>.</li>
+      <li><strong>Agent → orchestrateur</strong> : les <code>messages</code> (<code>status</code>, <code>escalation</code>, <code>worker_done</code>).</li>
+      <li><strong>La question et sa réponse</strong> : un message <code>decision_gate</code>, et la réponse threadée sur son <code>id</code>.</li>
+      <li><strong>Le rapport final</strong> : <code>tasks.result</code>, à <code>completed_at</code>.</li>
+    </ul>
+    <p>
+      Sans cette fusion, on n'afficherait que la moitié du dialogue : des agents qui parlent tout
+      seuls, à un orchestrateur qui ne répond jamais. C'est, très probablement, la vraie raison pour
+      laquelle l'écran actuel est incompréhensible.
+    </p>
+  </section>
+</div>
+
+<script>
+(() => {
+  const AGENT_COLORS = ['var(--a1)', 'var(--a2)', 'var(--a3)', 'var(--a4)'];
+
+  const DATA = {
+    orchestrators: [
+      {
+        id: 'o1',
+        handle: 'term_2ffffb19',
+        label: 'Rewrite the client on Tailwind + shadcn/ui',
+        live: true,
+        when: 'en cours',
+        agents: [
+          { id: 'a1', mono: 'A1', handle: 'term_f627dc6f', tasks: 3, seen: null },
+          { id: 'a2', mono: 'A2', handle: 'term_9c0978ce', tasks: 2, seen: null },
+          { id: 'a3', mono: 'A3', handle: 'term_27fe39ce', tasks: 2, seen: 'vu il y a 12 s' },
+        ],
+        waves: [
+          { x: 0,   w: 470, cap: '<b>Vague 1</b> · hier 20:10 → 23:47' },
+          { x: 510, w: 470, cap: '<b>Vague 2</b> · aujourd\'hui 13:20 <span class="gap">après 14 h d\'inactivité</span>' },
+        ],
+        tasks: [
+          { id: 'task_ab12', name: 'Scaffold Tailwind + shadcn/ui',        status: 'completed',  agent: 'a1', x: 137, y: 42,  deps: [] },
+          { id: 'task_cd34', name: 'Port the run rail',                    status: 'completed',  agent: 'a1', x: 22,  y: 152, deps: ['task_ab12'] },
+          { id: 'task_ef56', name: 'Port the canvas to React Flow',        status: 'completed',  agent: 'a2', x: 252, y: 152, deps: ['task_ab12'], gate: true },
+          { id: 'task_7a90', name: 'Theme: the six status colours, light + dark', status: 'completed', agent: 'a2', x: 137, y: 262, deps: ['task_cd34','task_ef56'] },
+          { id: 'task_1b2c', name: 'Wire the node inspector',              status: 'failed',     agent: 'a3', x: 137, y: 372, deps: ['task_7a90'] },
+          { id: 'task_3d4e', name: 'Stop the sidebars overflowing',        status: 'dispatched', agent: 'a3', x: 532, y: 42,  deps: ['task_1b2c'] },
+          { id: 'task_5f6a', name: 'Release 0.2.0',                        status: 'ready',      agent: 'a1', x: 532, y: 152, deps: ['task_3d4e'] },
+          { id: 'task_8b9c', name: 'Update the README compatibility table', status: 'pending',   agent: null, x: 762, y: 42,  deps: [] },
+        ],
+        gate: { taskId: 'task_3d4e', question: 'Le scroller doit-il être un bloc, ou hériter du parent ?' },
+        thread: [
+          { day: 'Hier' },
+          { dir: 'out', kind: 'dispatch', agent: 'a1', at: '20:10', task: 'task_ab12',
+            body: 'Scaffold the client on Tailwind + shadcn/ui. Keep the existing component boundaries — this is a restyle, not a rewrite of the data flow.',
+            src: 'tasks.spec · dispatched_at' },
+          { dir: 'out', kind: 'dispatch', agent: 'a2', at: '20:14', task: 'task_ef56',
+            body: 'Port the canvas to React Flow. Keep the six status colours exactly as the prototype has them — retuning them is re-approval, not refactoring.',
+            src: 'tasks.spec · dispatched_at' },
+          { dir: 'in', kind: 'status', agent: 'a1', at: '20:52', task: 'task_ab12',
+            body: 'Tailwind + shadcn installed, tokens in index.css. Moving on to the run rail.' },
+          { beats: '18 heartbeats · toutes les 5 min · repliés' },
+          { dir: 'in', kind: 'status', agent: 'a2', at: '20:58', task: 'task_ef56',
+            body: 'React Flow mounted, nodes render. Working on the dagre layout.' },
+          { dir: 'in', kind: 'gate', agent: 'a2', at: '21:02', task: 'task_ef56',
+            body: 'Le thème sombre doit-il inverser les couleurs de statut, ou garder le même accent ?',
+            opts: ['garder l\'accent', 'inverser'], picked: 0 },
+          { dir: 'out', kind: 'reply', agent: 'a2', at: '21:04', task: 'task_ef56',
+            body: 'Garder l\'accent. Un vert qui change avec le thème serait deux verts.',
+            src: 'messages.thread_id = l\'id du gate · résolu en 2 min' },
+          { dir: 'in', kind: 'done', agent: 'a2', at: '23:47', task: 'task_7a90',
+            body: 'Canvas + theme done. Six statuses, light and dark, accent identical across both.' },
+          { dir: 'in', kind: 'fail', agent: 'a3', at: '23:58', task: 'task_1b2c',
+            body: 'Inspector fails on tasks with no dispatch context. Tentative 1/3 — je relance.',
+            src: 'dispatch_contexts.failure_count = 1' },
+          { day: 'Aujourd\'hui — 14 h plus tard' },
+          { dir: 'out', kind: 'dispatch', agent: 'a3', at: '13:20', task: 'task_3d4e',
+            body: 'Fix the overflowing sidebars. A scroller is a block, not a table.',
+            src: 'tasks.spec · dispatched_at' },
+          { dir: 'in', kind: 'gate', agent: 'a3', at: '13:41', task: 'task_3d4e',
+            body: 'Le scroller doit-il être un bloc, ou hériter du parent ?',
+            opts: ['un bloc', 'hériter'], open: true },
+        ],
+      },
+      {
+        id: 'o2',
+        handle: 'term_9c0978ce',
+        label: 'Research the Orca DB schema',
+        live: false,
+        when: 'il y a 3 j',
+        agents: [
+          { id: 'a1', mono: 'B1', handle: 'term_64d18723', tasks: 2, seen: null },
+          { id: 'a2', mono: 'B2', handle: 'term_c3a91f04', tasks: 1, seen: null },
+        ],
+        waves: [{ x: 0, w: 470, cap: '<b>Vague unique</b> · 9 juillet, 09:12 → 11:40' }],
+        tasks: [
+          { id: 'task_d1e2', name: 'Map the five tables and their enums', status: 'completed', agent: 'a1', x: 137, y: 42,  deps: [] },
+          { id: 'task_f3a4', name: 'Find how a run can be scoped',        status: 'completed', agent: 'a1', x: 22,  y: 152, deps: ['task_d1e2'] },
+          { id: 'task_b5c6', name: 'Check whether the CLI could replace SQL', status: 'completed', agent: 'a2', x: 252, y: 152, deps: ['task_d1e2'] },
+        ],
+        gate: null,
+        thread: [
+          { day: '9 juillet' },
+          { dir: 'out', kind: 'dispatch', agent: 'a1', at: '09:12', task: 'task_d1e2',
+            body: 'Read Orca\'s db.ts and map every table, column and enum. Ground truth only — no guessing.',
+            src: 'tasks.spec · dispatched_at' },
+          { dir: 'in', kind: 'done', agent: 'a1', at: '10:30', task: 'task_d1e2',
+            body: 'Five tables. No foreign keys anywhere. decision_gates and coordinator_runs are empty on every real run — gates live in messages.' },
+          { dir: 'in', kind: 'done', agent: 'a2', at: '11:40', task: 'task_b5c6',
+            body: 'The CLI can read 4 of 5 tables but has no bulk dispatch read and no coordinator_runs at all. SQL wins.' },
+        ],
+      },
+      {
+        id: 'o3',
+        handle: null,
+        label: 'Sans orchestrateur',
+        live: false,
+        when: 'il y a 4 j',
+        agents: [],
+        waves: [{ x: 0, w: 470, cap: '<b>Tâches orphelines</b> · aucun handle enregistré' }],
+        tasks: [
+          { id: 'task_0f1a', name: 'Untitled task', status: 'completed', agent: null, x: 22,  y: 42, deps: [] },
+          { id: 'task_2b3c', name: 'Untitled task', status: 'pending',   agent: null, x: 252, y: 42, deps: [] },
+        ],
+        gate: null,
+        thread: [],
+      },
+    ],
+  };
+
+  const NODE_W = 196, NODE_H = 68;
+  let openId = 'o1';
+  let agentId = null;
+  let taskId = null;
+
+  const orch = () => DATA.orchestrators.find((o) => o.id === openId);
+  const agentOf = (o, id) => o.agents.find((a) => a.id === id) ?? null;
+  const colorOf = (o, id) => AGENT_COLORS[o.agents.findIndex((a) => a.id === id)] ?? 'var(--faint)';
+
+  const STATUS_FR = { pending: 'en attente', ready: 'prêt', dispatched: 'en cours', completed: 'terminé', failed: 'échoué', blocked: 'bloqué' };
+  const KIND_FR = { dispatch: 'DISPATCH', status: 'STATUS', gate: 'GATE', reply: 'RÉPONSE', done: 'WORKER_DONE', fail: 'ESCALATION' };
+
+  /* ---------------- sidebar ---------------- */
+  function renderRail() {
+    const rail = document.getElementById('rail');
+    rail.innerHTML = '<h2>Orchestrateurs</h2>';
+
+    for (const o of DATA.orchestrators) {
+      const open = o.id === openId;
+      const box = document.createElement('div');
+      box.className = 'orch';
+      box.dataset.open = String(open);
+
+      const row = document.createElement('button');
+      row.className = 'row';
+      row.setAttribute('aria-expanded', String(open));
+      row.innerHTML = `
+        <span class="title">
+          <span class="live ${o.live ? '' : 'off'}"></span>
+          ${o.label}
+        </span>
+        <span class="handle">${o.handle ?? '— aucun handle —'}</span>
+        <span class="meta">
+          <span>${o.agents.length} agent${o.agents.length > 1 ? 's' : ''}</span><span class="sep">·</span>
+          <span>${o.tasks.length} tâches</span><span class="sep">·</span>
+          <span>${o.when}</span>
+        </span>`;
+      row.onclick = () => { openId = o.id; agentId = null; taskId = null; render(); };
+      box.append(row);
+
+      if (open && o.agents.length > 0) {
+        const cast = document.createElement('div');
+        cast.className = 'cast';
+        cast.innerHTML = `<div class="lbl">Le casting</div>
+          <div class="orch-self">
+            <span class="mono">◇</span>
+            <span class="who"><b>L'orchestrateur</b><small>${o.handle}</small></span>
+          </div>`;
+
+        for (const a of o.agents) {
+          const btn = document.createElement('button');
+          btn.className = 'agent';
+          btn.setAttribute('aria-pressed', String(a.id === agentId));
+          btn.innerHTML = `
+            <span class="mono" style="background:${colorOf(o, a.id)}">${a.mono}</span>
+            <span class="who"><b>Agent ${a.mono.slice(1)}</b><small>${a.handle}</small></span>
+            ${a.seen ? `<span class="seen">${a.seen}</span>` : `<span class="n">${a.tasks} tâches</span>`}`;
+          btn.onclick = () => { agentId = agentId === a.id ? null : a.id; taskId = null; render(); };
+          cast.append(btn);
+        }
+        box.append(cast);
+      }
+      rail.append(box);
+    }
+  }
+
+  /* ---------------- canvas ---------------- */
+  function renderGraph() {
+    const o = orch();
+    const g = document.getElementById('graph');
+    g.innerHTML = '';
+
+    const maxY = Math.max(...o.tasks.map((t) => t.y)) + NODE_H;
+    const maxX = Math.max(...o.waves.map((w) => w.x + w.w));
+    g.style.width = maxX + 20 + 'px';
+    g.style.height = maxY + 60 + 'px';
+
+    for (const w of o.waves) {
+      const box = document.createElement('div');
+      box.className = 'wave';
+      box.style.left = w.x + 'px';
+      box.style.width = w.w + 'px';
+      box.style.height = maxY + 34 + 'px';
+      box.innerHTML = `<span class="cap">${w.cap}</span>`;
+      g.append(box);
+    }
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'edges');
+    const at = (id) => o.tasks.find((t) => t.id === id);
+    for (const t of o.tasks) {
+      for (const d of t.deps) {
+        const from = at(d);
+        if (!from) continue;
+        const x1 = from.x + NODE_W / 2, y1 = from.y + NODE_H;
+        const x2 = t.x + NODE_W / 2, y2 = t.y;
+        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p.setAttribute('d', `M ${x1} ${y1} C ${x1} ${y1 + 26}, ${x2} ${y2 - 26}, ${x2} ${y2}`);
+        svg.append(p);
+      }
+    }
+    g.append(svg);
+
+    for (const t of o.tasks) {
+      const dim = agentId !== null && t.agent !== agentId;
+      const el = document.createElement('button');
+      el.className = `node n-${t.status}`;
+      el.style.left = t.x + 'px';
+      el.style.top = t.y + 'px';
+      el.dataset.dim = String(dim);
+      el.dataset.sel = String(t.id === taskId);
+      const color = t.agent ? colorOf(o, t.agent) : 'var(--faint)';
+      const mono = t.agent ? agentOf(o, t.agent).mono : '—';
+      el.innerHTML = `
+        <span class="stripe" style="background:${color}"></span>
+        ${o.gate && o.gate.taskId === t.id ? '<span class="gatemark">⛔</span>' : ''}
+        <span class="top">
+          <span class="mono" style="background:${color}">${mono}</span>
+          <span class="id">${t.id}</span>
+          <span class="st">${STATUS_FR[t.status]}</span>
+        </span>
+        <span class="name">${t.name}</span>`;
+      el.onclick = () => {
+        taskId = taskId === t.id ? null : t.id;
+        if (taskId && t.agent) agentId = t.agent;
+        render();
+      };
+      g.append(el);
+    }
+  }
+
+  function renderStrip() {
+    const o = orch();
+    const strip = document.getElementById('strip');
+    if (!o.gate) { strip.innerHTML = ''; return; }
+    strip.innerHTML = `
+      <div class="gatestrip">
+        <span>⛔</span>
+        <span><b>Une question bloque cette orchestration.</b> « ${o.gate.question} »</span>
+        <button class="go">Voir</button>
+      </div>`;
+    strip.querySelector('.go').onclick = () => {
+      const t = o.tasks.find((x) => x.id === o.gate.taskId);
+      taskId = t.id; agentId = t.agent; render();
+    };
+  }
+
+  /* ---------------- conversation ---------------- */
+  function renderDock() {
+    const o = orch();
+    const head = document.getElementById('dock-head');
+    const thread = document.getElementById('thread');
+    const a = agentId ? agentOf(o, agentId) : null;
+
+    head.innerHTML = `
+      <h2>Conversation</h2>
+      <div class="head">
+        <span class="mono" style="background:${a ? colorOf(o, a.id) : 'var(--fg)'}">${a ? a.mono : '◇'}</span>
+        <span class="who">
+          <b>${a ? `L'orchestrateur ↔ Agent ${a.mono.slice(1)}` : 'Tous les échanges'}</b>
+          <small>${a ? a.handle : `${o.agents.length} agent${o.agents.length > 1 ? 's' : ''} · ${o.thread.filter((m) => m.dir).length} échanges`}</small>
+        </span>
+        ${a ? '<button class="clear">tout voir</button>' : ''}
+      </div>`;
+    const clear = head.querySelector('.clear');
+    if (clear) clear.onclick = () => { agentId = null; taskId = null; render(); };
+
+    const rows = o.thread.filter((m) => {
+      if (m.day || m.beats) return true;
+      if (taskId) return m.task === taskId;
+      if (agentId) return m.agent === agentId;
+      return true;
+    });
+
+    if (rows.filter((m) => m.dir).length === 0) {
+      thread.innerHTML = '<p class="empty">Aucun échange. Ces tâches n\'ont jamais été attribuées à un terminal — personne n\'a donc rien dit à personne.</p>';
+      return;
+    }
+
+    thread.innerHTML = '';
+    for (const m of rows) {
+      if (m.day) { thread.insertAdjacentHTML('beforeend', `<div class="daysep">${m.day}</div>`); continue; }
+      if (m.beats) { thread.insertAdjacentHTML('beforeend', `<div class="beats">♥ ${m.beats}</div>`); continue; }
+
+      const a2 = agentOf(o, m.agent);
+      const out = m.dir === 'out';
+      const el = document.createElement('div');
+      el.className = `msg ${out ? 'out' : ''} ${m.kind}`;
+      el.innerHTML = `
+        <span class="hdr">
+          <span class="kind">${KIND_FR[m.kind] ?? m.kind}</span>
+          <span>${out ? 'orchestrateur' : `agent ${a2.mono.slice(1)}`}</span>
+          <span class="arrow">→</span>
+          <span>${out ? `agent ${a2.mono.slice(1)}` : 'orchestrateur'}</span>
+          <time>${m.at}</time>
+        </span>
+        <span class="bubble">
+          ${m.body}
+          ${m.opts ? `<span class="opts">${m.opts.map((op, i) =>
+              `<span class="${m.picked === i ? 'picked' : ''}">${op}${m.picked === i ? ' ✓' : ''}</span>`).join('')}
+              ${m.open ? '<span style="border-color:var(--gate);color:var(--gate-ink);background:var(--gate-soft)">en attente de réponse</span>' : ''}
+            </span>` : ''}
+        </span>
+        ${m.src ? `<span class="src">${m.src}</span>` : ''}`;
+      thread.append(el);
+    }
+  }
+
+  function render() { renderRail(); renderStrip(); renderGraph(); renderDock(); }
+
+  document.getElementById('theme').onclick = () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme
+      ? root.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+  };
+
+  render();
+})();
+</script>

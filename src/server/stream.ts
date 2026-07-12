@@ -188,7 +188,7 @@ export class EventStream {
     // Which decides the one case where they could: a client resuming from a sequence *ahead* of
     // everything the file holds — a database restored from a backup, replaced, or reset. Keeping
     // the higher cursor there (`Math.max`) would filter every future message out for the life of
-    // that connection, and the feed would simply never speak again. So the cursor follows the
+    // that connection, and the stream would simply never speak again. So the cursor follows the
     // file down, and the client picks up from the real high-water mark. `meta.resetDetected` is
     // how the user is told that the history behind it is gone.
     subscriber.cursor = event.seq;

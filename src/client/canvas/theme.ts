@@ -1,4 +1,4 @@
-import type { TaskStatus } from '../../shared/types.ts';
+import type { CastMember, Task, TaskStatus } from '../../shared/types.ts';
 
 /**
  * How a task *looks* — the visual decisions the dev signed off on screen against the live
@@ -11,7 +11,7 @@ import type { TaskStatus } from '../../shared/types.ts';
  *
  * - **`surface`** — Tailwind classes, for anything Tailwind can paint. A node and a chip of the
  *   same status wear the *same string*, which is how "one palette for the page" stays true by
- *   construction rather than by discipline (`feed/theme.ts`).
+ *   construction rather than by discipline (`conversation/theme.ts`).
  * - **`accent`** — a `var(--…)` value, for the two places that need a colour and not a class:
  *   React Flow's minimap fill, and the box-shadow of a pulse.
  */
@@ -31,8 +31,8 @@ export const STALE_HEARTBEAT_MS = 10 * 60 * 1000;
 
 /**
  * The one colour on the page that is not a status: *this is the one you are looking at*. The
- * node you selected — or that a feed row sent you to (#18) — the run the rail has open, the
- * scope the feed is in. The same blue, so that being selected looks like one thing wherever it
+ * node you selected — or that a turn in the conversation sent you to — the run the rail has open, the
+ * scope the conversation is in. The same blue, so that being selected looks like one thing wherever it
  * happens.
  */
 export const SELECTED_RING = 'outline-2 outline-offset-2 outline-selection';
@@ -44,6 +44,16 @@ export type StatusTheme = {
   accent: string;
   /** The accent as a fill: the dot on a node, and the dot on a dependency chip. */
   dot: string;
+  /**
+   * The accent as a **border and nothing else** — for the one surface that wants the outline
+   * without the fill: a conversation bubble (`conversation/TurnRow.tsx`).
+   *
+   * A thread of thirty coloured slabs is a thread nobody reads twice, so a bubble keeps the panel's
+   * own fill and takes only the rim. Spelled out rather than sliced out of `surface` at runtime,
+   * because Tailwind reads the source and a class it cannot see written down is a class it does not
+   * ship.
+   */
+  border: string;
 };
 
 /**
@@ -61,6 +71,7 @@ export const GATE_THEME: StatusTheme = {
   surface: 'bg-gate-soft text-gate-ink border-gate',
   accent: 'var(--color-gate)',
   dot: 'bg-gate',
+  border: 'border-gate',
 };
 
 /**
@@ -76,31 +87,37 @@ export const STATUS_THEME: Record<TaskStatus, StatusTheme> = {
     surface: 'bg-status-pending-soft text-status-pending-ink border-status-pending',
     accent: 'var(--color-status-pending)',
     dot: 'bg-status-pending',
+    border: 'border-status-pending',
   },
   ready: {
     surface: 'bg-status-ready-soft text-status-ready-ink border-status-ready',
     accent: 'var(--color-status-ready)',
     dot: 'bg-status-ready',
+    border: 'border-status-ready',
   },
   dispatched: {
     surface: 'bg-status-dispatched-soft text-status-dispatched-ink border-status-dispatched',
     accent: 'var(--color-status-dispatched)',
     dot: 'bg-status-dispatched',
+    border: 'border-status-dispatched',
   },
   completed: {
     surface: 'bg-status-completed-soft text-status-completed-ink border-status-completed',
     accent: 'var(--color-status-completed)',
     dot: 'bg-status-completed',
+    border: 'border-status-completed',
   },
   failed: {
     surface: 'bg-status-failed-soft text-status-failed-ink border-status-failed',
     accent: 'var(--color-status-failed)',
     dot: 'bg-status-failed',
+    border: 'border-status-failed',
   },
   blocked: {
     surface: 'bg-status-blocked-soft text-status-blocked-ink border-status-blocked',
     accent: 'var(--color-status-blocked)',
     dot: 'bg-status-blocked',
+    border: 'border-status-blocked',
   },
 };
 
@@ -112,6 +129,7 @@ export const UNKNOWN_STATUS_THEME: StatusTheme = {
   surface: 'bg-status-unknown-soft text-status-unknown-ink border-status-unknown',
   accent: 'var(--color-status-unknown)',
   dot: 'bg-status-unknown',
+  border: 'border-status-unknown',
 };
 
 export function isKnownStatus(status: string): status is TaskStatus {
@@ -121,6 +139,60 @@ export function isKnownStatus(status: string): status is TaskStatus {
 export function themeOf(status: string): StatusTheme {
   return isKnownStatus(status) ? STATUS_THEME[status] : UNKNOWN_STATUS_THEME;
 }
+
+/**
+ * **The agent, on a node that a status already owns.**
+ *
+ * Two colour systems, one pixel — so they are given different channels rather than a compromise
+ * hue apiece. The **status keeps the fill** (SPEC §7.5: those six were signed off on screen, and
+ * retuning them to make room is re-approval, not refactoring). The **agent takes the stripe down
+ * the left, and the monogram badge** — a channel nothing else was using, and the one a person can
+ * follow across a canvas without ever reading a uuid.
+ *
+ * Four colours, cycled (`index.css`): a run's fifth agent wears the first one's teal again and is
+ * still unmistakably **A5**, because the identity is the monogram and the colour is only what
+ * makes it findable at a glance.
+ */
+const AGENT_COLOURS = ['var(--agent-1)', 'var(--agent-2)', 'var(--agent-3)', 'var(--agent-4)'] as const;
+
+/** What a node, a rail row and a conversation bubble all need to draw one agent the same way. */
+export type AgentLook = {
+  /** The stripe, and the badge's fill. A `var(--…)`, because it is a value and not a class. */
+  colour: string;
+  monogram: string;
+};
+
+/**
+ * The agent that has a task **now** — its latest attempt's assignee (`Task.dispatch`).
+ *
+ * Null is a real answer and it means one of three true things: the task was never dispatched, its
+ * dispatch names no assignee, or the orchestrator worked it itself (`cast.ts` keeps a coordinator
+ * out of its own cast). All three come out as the same neutral, unmonogrammed node — which is
+ * exactly right, because in none of them was an *agent* spawned for the work.
+ */
+export function agentOf(task: Task, cast: CastMember[]): AgentLook | null {
+  const handle = task.dispatch?.assigneeHandle;
+  if (!handle) return null;
+
+  const index = cast.findIndex((member) => member.handle === handle);
+  if (index === -1) return null;
+
+  return { colour: AGENT_COLOURS[index % AGENT_COLOURS.length]!, monogram: cast[index]!.monogram };
+}
+
+/** The same look, from the handle alone — what the rail and the conversation have to hand. */
+export function agentLook(handle: string | null, cast: CastMember[]): AgentLook | null {
+  if (handle === null) return null;
+
+  const index = cast.findIndex((member) => member.handle === handle);
+  if (index === -1) return null;
+
+  return { colour: AGENT_COLOURS[index % AGENT_COLOURS.length]!, monogram: cast[index]!.monogram };
+}
+
+/** The badge every monogram wears — the agent's colour, solid, with the ink that reads on it. */
+export const MONOGRAM_CLASS =
+  'flex shrink-0 items-center justify-center rounded-md font-mono font-bold text-agent-ink tracking-tight';
 
 /**
  * The status with an agent **inside it right now** — the one node on the canvas that is not a

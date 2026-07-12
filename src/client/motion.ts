@@ -55,6 +55,20 @@ export const EASE: Transition = { duration: 0.2, ease: [0.22, 1, 0.36, 1] };
 export const NODE_IN: Variants = {
   hidden: { opacity: 0, scale: 0.92, filter: 'blur(6px)' },
   shown: { opacity: 1, scale: 1, filter: 'blur(0px)' },
+  /**
+   * **An agent is selected, and this node is not theirs** (SPEC §7.5).
+   *
+   * It is a *variant* and not a Tailwind class, and that is not a style preference — it is the only
+   * thing that works. `shown` writes `opacity: 1` into the element's inline style, and an inline
+   * style beats a class, so an `opacity-20` on the same node would be silently overridden and the
+   * canvas would never dim at all. The two states have to live in the same system to be able to
+   * argue.
+   *
+   * Faded, never hidden: the shape of the orchestration survives the filter, so you can still see
+   * *where* your agent's work sat inside it — which is the entire difference between focusing a
+   * canvas and emptying one.
+   */
+  dimmed: { opacity: 0.18, scale: 1, filter: 'blur(0px)' },
 };
 
 /**
@@ -65,14 +79,14 @@ export function nodeDelay(index: number): number {
   return Math.min(index * 0.012, 0.28);
 }
 
-/** A dock panel swapping in (feed ⇄ inspector) — it comes from the edge it lives on. */
+/** A dock panel swapping in (conversation ⇄ inspector) — it comes from the edge it lives on. */
 export const DOCK_IN: Variants = {
   hidden: { opacity: 0, x: 18 },
   shown: { opacity: 1, x: 0 },
   gone: { opacity: 0, x: 18 },
 };
 
-/** A feed row: newest lands at the top and pushes the rest down (the `layout` prop does the push). */
+/** A row that arrives in a list, pushing the rest along (the `layout` prop does the push). */
 export const ROW_IN: Variants = {
   hidden: { opacity: 0, y: -12 },
   shown: { opacity: 1, y: 0 },

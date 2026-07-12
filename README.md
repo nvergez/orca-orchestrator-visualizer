@@ -91,29 +91,39 @@ explanation rather than silently misread.
 
 ## What it shows
 
+**An orchestrator, the agents it spawned, and what they said to each other.**
+
 ```
-┌──────────────┬──────────────────────────────────────────────┬─────────────────────┐
-│  RUN RAIL    │  ⚠ GATE STRIP (only when gates are open)      │   RIGHT DOCK        │
-│  (inferred)  ├──────────────────────────────────────────────┤   • MESSAGE FEED    │
-│              │                                              │       ⇕             │
-│  ● run label │              DAG CANVAS                      │   • NODE INSPECTOR  │
-│    date·N·⛔ │           (exactly one run)                   │     (on selection)  │
-└──────────────┴──────────────────────────────────────────────┴─────────────────────┘
+┌──────────────────┬──────────────────────────────────────────┬─────────────────────┐
+│  ORCHESTRATORS   │  ⚠ GATE STRIP (only when gates are open) │   RIGHT DOCK        │
+│                  ├──────────────────────────────────────────┤   • CONVERSATION    │
+│  ● label         │              DAG CANVAS                  │       ⇕             │
+│    term_2ffffb19 │      (exactly one orchestrator)          │   • NODE INSPECTOR  │
+│    N agents · …  │  ┌ Wave 1 ┐   ┌ Wave 2 · after 14h idle┐ │     (on selection)  │
+│    ↳ THE CAST    │  │        │   │                        │ │                     │
+│      A1 · A2     │  └────────┘   └────────────────────────┘ │                     │
+└──────────────────┴──────────────────────────────────────────┴─────────────────────┘
 ```
 
-- **The canvas** — one node per task, coloured by status, labelled with its title, with the
-  assignee's handle, a "last seen 12s ago" badge while it is dispatched, a failure count, and
-  a retry marker. Dependency edges animate into whatever is currently dispatched.
-- **The run rail** — your tasks grouped into runs, most recent selected. History is free: a
-  run from four days ago renders through exactly the same code path as the live one. There is
-  no history mode.
-- **The gate strip** — the questions actually blocking your orchestration, above the canvas
-  rather than in a tab you forget to open. It disappears when nothing is blocked.
-- **The feed** — what the agents are saying to each other, live over SSE, heartbeat-free by
-  default (heartbeats are ~65% of the traffic), and linked both ways with the canvas: click a
-  message to find its task, click a task to read its story.
-- **The inspector** — the spec that was dispatched, the result that came back, and **every**
-  dispatch attempt, which is the only place the retry-and-circuit-breaker story is visible.
+- **The rail** — one row per orchestrator: a Claude Code session that was told to coordinate
+  (`tasks.created_by_terminal_handle`). **The cast nests under the open one** — the orchestrator,
+  and every agent it dispatched work to, named `A1`, `A2`, `A3`.
+- **Clicking an agent is the whole tool.** The canvas dims to that agent's tasks, and the
+  conversation fills with that agent's half of the dialogue. One click, two panels.
+- **The canvas** — one node per task, **filled by status** and **striped by agent** (two colour
+  systems cannot both win the same pixel), with a "last seen 12s ago" badge while it is
+  dispatched, a failure count, and a retry marker. Dependency edges animate into whatever is
+  currently dispatched. Where the terminal went quiet for more than six hours, the work is drawn
+  in **waves** — bordered regions captioned with the gap that opened them.
+- **The conversation** — what the orchestrator and its agents actually said, live over SSE. The
+  orchestrator on one side, its agents on the other; a question and its answer threaded together;
+  heartbeats collapsed to one line (they are ~65% of the traffic). Every turn says which columns it
+  was reconstructed from — see below, because this is the interesting part.
+- **The gate strip** — the questions actually blocking your orchestration, above the canvas rather
+  than in a tab you forget to open. It disappears when nothing is blocked.
+- **The inspector** — the spec that was dispatched, the result that came back, **every** dispatch
+  attempt (the only place the retry-and-circuit-breaker story is visible), and that task's exchange
+  end to end.
 
 It follows your system's light or dark theme, and the toggle in the top right overrides that and
 is remembered.
@@ -123,12 +133,23 @@ is remembered.
 orca-viz reads a database that was designed for a coordinator, not for a viewer, and it is
 honest about the difference.
 
-- **Runs are inferred, and the UI says so.** The schema has no run id. orca-viz groups tasks
-  by the terminal handle that created them, then splits a handle's tasks on an idle gap of
-  more than **6 hours**. Tasks with no handle collect into one *Unattributed* run rather than
-  vanishing. A genuinely long overnight pause can therefore split one run in two
-  ([#28](https://github.com/nvergez/orca-orchestrator-visualizer/issues/28) tracks the gap
-  threshold); two runs are never merged just because they overlapped in time.
+- **The conversation is reconstructed, and every line of it says so.** This is the big one.
+  **When the orchestrator dispatches an agent it writes no message** — Orca injects the prompt
+  straight into the worker's PTY, and there is not one `dispatch` row in a real database. So a
+  conversation built from the `messages` table alone shows agents talking into the void, to an
+  orchestrator that never answers. orca-viz merges four sources instead: `tasks.spec` timestamped by
+  `dispatch_contexts.dispatched_at` (what the orchestrator said), the messages (what the agent said
+  back), a `decision_gate` message and the reply threaded onto it (the question and its answer), and
+  `tasks.result` at `tasks.completed_at` (the final report). Each turn carries a small grey caption
+  naming the columns it came from, because a bubble that *looked* like a message the orchestrator
+  sent, when no such message exists, would be the most convincing lie this tool could tell.
+- **An orchestrator is a column, not a guess.** A row is one `created_by_terminal_handle`. Tasks
+  with no handle collect into one *Unattributed* row rather than vanishing. Two orchestrators are
+  never merged just because they overlapped in time.
+- **The six-hour rule is shown, not imposed.** A terminal that goes quiet for six hours and then
+  dispatches again did two separate bursts of work. That used to silently end one "run" and start
+  another, so one terminal became several unrelated rows for no reason the screen ever gave. It is
+  now a **wave**: same rule, drawn on the canvas, with the length of the silence written on it.
 - **Gates come from `decision_gate` messages, not the `decision_gates` table** — which is
   empty in practice. A gate is open until a reply threads onto it.
 - **Status transitions are not recorded anywhere.** Only creation, each dispatch attempt, and
@@ -138,13 +159,13 @@ honest about the difference.
   orca-viz), so "completed at" is the latest completion, never the first.
 - **The database is never pruned**, and `orca orchestration reset` deletes rows without
   renumbering. orca-viz detects a reset and says so, and a message that points at a task the
-  reset deleted still appears in the feed — just unlinked.
+  reset deleted still appears in the conversation — just unlinked.
 
 ## When Orca is closed
 
 It keeps working. Liveness is re-derived every tick from Orca's `orca-runtime.json` and the
 process table, so the moment Orca goes away the badge flips to **stale** and the page says
-*"Orca isn't running; showing last-known state from &lt;time&gt;"*. The canvas, rail, feed and
+*"Orca isn't running; showing last-known state from &lt;time&gt;"*. The canvas, rail, conversation and
 inspector all keep rendering — reading yesterday's run is the whole point, and being told
 plainly that it is yesterday's run is what makes it trustworthy.
 
@@ -158,7 +179,7 @@ exist, and builds its queries from those:
 |---|---|
 | The schema it was built for | Everything. |
 | A **newer** Orca | Everything renders, under a banner: *some data may be missing or mislabeled.* |
-| An **older** Orca | Per-feature degradation. A missing column disables exactly the feature that needed it — you lose a badge, not the tool — and the banner names what you lost. |
+| An **older** Orca | Per-feature degradation. A missing column disables exactly the feature that needed it — you lose that feature, not the tool — and the banner names it. |
 | The right version number, but a column it expected is gone | The same per-feature degradation, under its own banner: *this Orca is missing columns this build expects.* The columns are the fact; the version number is only a claim. |
 | A status or message type it has never seen | Rendered in a neutral style with its raw name. Never dropped. |
 | No readable task table at all | This, and only this, is a hard error. |

@@ -5,15 +5,16 @@ import type { CSSProperties } from 'react';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { shortHandle } from '../../shared/handles.ts';
 import type { Task } from '../../shared/types.ts';
-import type { Pulse } from '../feed/theme.ts';
+import type { Pulse } from '../conversation/theme.ts';
 import { enter, NODE_IN, nodeDelay, SPRING } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
 import {
+  type AgentLook,
   GATE_THEME,
   glowOf,
   isAlive,
+  MONOGRAM_CLASS,
   NODE_HEIGHT,
   NODE_WIDTH,
   SELECTED_RING,
@@ -27,34 +28,44 @@ import {
  * Everything it has to say, it says without being hovered: scanning a finished run for the
  * failed node must not require interaction (SPEC §7.5).
  *
- * **The status is a light source, not a box** (SPEC §7.5). The node used to be *outlined* in its
- * status — a green rectangle drawn all the way around a green fill — and that is three ways of
- * saying one thing, the loudest of which is a hard edge closing the card off on the side furthest
- * from anything you read. So the outline is gone. What is left is a **spine**: a soft bar of the
- * status colour down the left, glowing, with the colour bleeding rightwards out of it and running
- * out before it reaches the other edge. The card is held together by its fill and its shadow, the
- * way a lit object is, and the eye still finds the failed node in a 76-node run from across the
- * canvas — because that was never the *border's* job, it was the fill's.
+ * **The status keeps the hue; the agent takes the edge** (SPEC §7.5). Two colour systems want this
+ * card — what state the work is in, and who did it — and they cannot both win the same pixel. So
+ * they are given different channels rather than a washed-out hue apiece:
  *
- * Two of the things it says come from the feed rather than from the task row, and they are
- * both #18's half of the bidirectional link: the node the feed sent you to is **outlined**,
- * and a node something has just *happened* to **pulses** in the colour of the message that
- * happened (`feed/theme.ts`). The node knows neither which message nor why — it is handed a
- * colour, which is what keeps the canvas ignorant of the feed. (And the *selection* outline is
- * now the only outline a node can ever wear, which is exactly the point of it.)
+ * - **The status is the *fill*, and the light.** Those six hexes were signed off on screen and
+ *   retuning them to make room for anything is re-approval, not refactoring. The fill is also what
+ *   was always doing the work: a failed node is found from across a 76-node run by its *red*, not
+ *   by an outline. It keeps the ink, the colour bleeding rightwards across the card, and — for the
+ *   two statuses a person is actually hunting — the glow around it.
+ * - **The agent is the *stripe and the monogram*.** A 4px bar down the left and an `A1` badge, in
+ *   a colour nothing else on the card was using. A node with no agent wears a faint stripe and no
+ *   badge, which is the truth: nobody was ever dispatched to it.
+ *
+ * The uuid is gone from the face of the card. It was the loudest thing on a node for a value you
+ * cannot read, cannot hold in your head and would not act on; `A2` is the same fact in two
+ * characters, it is the *same* `A2` in the rail and in the conversation, and the handle itself is
+ * one hover away.
+ *
+ * Two of the things it says come from elsewhere, and they are the bidirectional link: the node the
+ * conversation sent you to is **outlined**, and a node something has just *happened* to **pulses**
+ * in the colour of the message that happened. **Dimming** is the third: when an agent is selected
+ * in the rail, every node that is not theirs fades back, which is the tool's central gesture — the
+ * canvas answering "show me what A2 did".
  *
  * **The one node that moves** is the one with an agent inside it (SPEC §7.9). A `dispatched` task
  * wears a ring of its own amber, turning, for exactly as long as the work is in flight — and it is
- * the only spinning thing anywhere in this tool, which is what lets it mean *this is happening
- * right now* rather than *this is a card on a website*. A `failed` node glows red and holds still:
- * it is not happening, it happened, and it is the other thing you are scanning for.
+ * the only spinning thing anywhere in this tool.
  */
 
 export type TaskNodeData = {
   task: Task;
   now: number;
-  /** The task the feed row pointed at, or the one you clicked. Outlined, and centred by the canvas. */
+  /** Who has it — the stripe and the monogram. Null ⇒ nobody was dispatched to it (`theme.ts`). */
+  agent: AgentLook | null;
+  /** The task the conversation pointed at, or the one you clicked. Outlined, and centred. */
   selected: boolean;
+  /** An agent is selected and this is not their task. Faded, never hidden (SPEC §7.5). */
+  dimmed: boolean;
   /** A message about this task just arrived. ~1 s, in its type's colour. Never a heartbeat. */
   pulse: Pulse | null;
   /** Where it sits in the draw order — the entrance staggers by it, capped (`motion.ts`). */
@@ -63,7 +74,7 @@ export type TaskNodeData = {
 export type TaskFlowNode = Node<TaskNodeData, 'task'>;
 
 export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
-  const { task, now, selected, pulse, index } = data;
+  const { task, now, agent, selected, dimmed, pulse, index } = data;
   const theme = themeOf(task.status);
   const spotlight = useSpotlight();
 
@@ -74,13 +85,18 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       data-testid="task-node"
       data-task={task.id}
       data-selected={selected}
+      data-dimmed={dimmed}
+      data-agent={agent?.monogram}
       // The *type*, not the colour: a test asserts that a `worker_done` flashed this node and
       // that a heartbeat never did, and neither of those is a question about a colour.
       data-pulse={pulse?.type}
       data-alive={alive}
       variants={NODE_IN}
       initial={enter('hidden')}
-      animate="shown"
+      // A *variant*, and not an `opacity-20` class: `shown` writes `opacity: 1` into the inline
+      // style, and an inline style beats a class — so a dim expressed as a class would be silently
+      // overridden and the canvas would never fade at all (`motion.ts`).
+      animate={dimmed ? 'dimmed' : 'shown'}
       transition={{ ...SPRING, delay: nodeDelay(index) }}
       // A node lifts a hair under the pointer. It is the smallest possible way of saying "this is
       // a thing, and it is clickable" — and on a canvas of 76 of them, the smallest is the budget.
@@ -90,20 +106,23 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
         // The fill and the ink. `theme.surface` also carries the status *border colour* — which
         // nothing on this node draws any more, because Tailwind's reset leaves every border at
         // zero width until something asks for one, and nothing here does. It stays in the string
-        // because the string is one token shared with the chips in the feed and the inspector
-        // (`canvas/theme.ts`), and those wear it as an actual border.
+        // because the string is one token shared with the chips in the conversation and the
+        // inspector (`canvas/theme.ts`), and those wear it as an actual border.
         theme.surface,
-        // Selection is an *outline*, and now the only one a node can wear: the status is a spine
-        // and a fill, so a rectangle around a card can mean exactly one thing — *this is the one
-        // you are looking at*.
-        selected && SELECTED_RING
+        // Selection is an *outline*, and the only one a node can wear: the status is a fill and
+        // the agent is a stripe, so a rectangle around a card can mean exactly one thing — *this
+        // is the one you are looking at*.
+        selected && SELECTED_RING,
+        // A dimmed node is still a node, and still holds its place — but it is not one you are being
+        // invited to click, so it stops answering the pointer.
+        dimmed && 'pointer-events-none'
       )}
       style={{
         // The one thing here that is a *number* and not a look: elkjs placed every node in the
         // graph against exactly these (`layout.ts`), so they cannot become a class.
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
-        boxShadow: shadowOf(task.status, pulse),
+        boxShadow: shadowOf(task.status, pulse, dimmed),
         ...(pulse && {
           // The keyframes are in `index.css` — the one rule a style attribute cannot express.
           animation: 'orca-pulse 1s ease-out',
@@ -113,17 +132,25 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       {...spotlight}
     >
       {/*
-        The spine — the status, as the light this card is lit by. A bar rather than a border, and
-        inset rather than flush, so it reads as a *mark on* the card and not the edge of it.
+        **The stripe — the agent.** A bar rather than a border, and inset rather than flush, so it
+        reads as a *mark on* the card and not the edge of it. A task nobody was dispatched to gets
+        the same bar in the card's own ink at a whisper, because an absent agent is a fact and a
+        missing stripe is a rendering hole.
       */}
       <span
         aria-hidden
-        className={cn('absolute top-2 bottom-2 left-1.5 w-[3px] rounded-full', theme.dot)}
-        style={{ boxShadow: `0 0 10px 0 color-mix(in oklch, ${theme.accent} 55%, transparent)` }}
+        data-testid="agent-stripe"
+        className="absolute top-2 bottom-2 left-1.5 w-[4px] rounded-full"
+        style={{
+          background: agent?.colour ?? 'color-mix(in oklch, currentColor 22%, transparent)',
+          ...(agent && { boxShadow: `0 0 10px 0 color-mix(in oklch, ${agent.colour} 55%, transparent)` }),
+        }}
       />
 
-      {/* The colour running out of the spine, and running out *before the far edge* — which is the
-          whole difference between a card that is lit from one side and a card in a coloured box. */}
+      {/* The *status*, bleeding rightwards across the card and running out before the far edge —
+          which is the whole difference between a card that is lit from one side and a card in a
+          coloured box. It is the fill's own colour, so the status still owns the surface even
+          though the left edge now belongs to somebody else. */}
       <span
         aria-hidden
         className="pointer-events-none absolute inset-0 rounded-xl"
@@ -133,7 +160,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       />
 
       {/* The ring: an agent is inside this node, right now. Nothing else on the page spins. */}
-      {alive && (
+      {alive && !dimmed && (
         <span
           aria-hidden
           className="orca-alive"
@@ -150,18 +177,19 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       <Handle type="target" position={Position.Top} className="!size-1.5 !border-0 !opacity-0" />
 
       <div className="relative flex items-center gap-1.5">
+        <Monogram agent={agent} handle={task.dispatch?.assigneeHandle ?? null} />
+
         {/*
           The raw string, whatever it is: an unknown status names a real state (SPEC §5). Set in
-          small caps with a little tracking — it is a *label*, not a sentence, and the dot that used
-          to sit beside it was a third way of saying what the spine and the fill already say.
+          small caps with a little tracking — it is a *label*, not a sentence.
         */}
         <b className="text-[9px] font-bold tracking-[0.09em] uppercase opacity-80">{task.status}</b>
         <GateMarker task={task} />
         <RetryMarker attemptCount={task.attemptCount} />
-        <Assignee task={task} />
+        <FailureCount task={task} />
       </div>
 
-      <div className="relative line-clamp-3 text-[11.5px] leading-tight font-medium">{task.title}</div>
+      <div className="relative line-clamp-2 text-[11.5px] leading-tight font-medium">{task.title}</div>
 
       <LastSeen task={task} now={now} />
 
@@ -171,23 +199,50 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
 }
 
 /**
+ * **`A2`** — who worked this task, in two characters you can actually follow.
+ *
+ * It replaces the eight hex of the assignee handle that used to sit here. That chip was the
+ * loudest object on the card, for a uuid you cannot read, cannot remember and would not act on —
+ * and, worse, it was the *only* name the agent had, so "the failed node and the open gate are the
+ * same agent" was a fact you had to work out by comparing two strings of hex. The monogram is one
+ * glance, it is the same `A2` in the rail and in the conversation, and the handle itself has not
+ * gone anywhere: it is in the tooltip, and in full.
+ */
+function Monogram({ agent, handle }: { agent: AgentLook | null; handle: string | null }) {
+  if (agent === null) return null;
+
+  return (
+    <span
+      data-testid="assignee"
+      title={handle ?? undefined}
+      className={cn(MONOGRAM_CLASS, 'size-[17px] text-[8.5px]')}
+      style={{ background: agent.colour }}
+    >
+      {agent.monogram}
+    </span>
+  );
+}
+
+/**
  * What lifts the card off the canvas, and what it lights up with.
  *
- * Three layers that have to be composed rather than chosen between, because they are all
- * box-shadows and a box-shadow does not stack with another one written after it:
+ * Layers that have to be composed rather than chosen between, because they are all box-shadows and
+ * a box-shadow does not stack with another one written after it:
  *
  * 1. **The sheen and the lift** — every node has them. A 1px inner highlight along the top edge is
  *    what makes a fill read as a *surface catching light* instead of a coloured rectangle, and it
  *    is doing the job the deleted border was doing badly.
  * 2. **The glow** — only `dispatched` and `failed` (`glowOf`). The two a person is hunting for.
+ *    A **dimmed** node does not glow: it is not the one you asked to see, and a halo is exactly the
+ *    thing that would drag the eye back to it through the fade.
  * 3. **The pulse** — a message just landed here. It is transient and it *wins*: a node that kept
- *    its halo while flashing would flash a duller colour than the feed handed it.
+ *    its halo while flashing would flash a duller colour than the conversation handed it.
  */
-function shadowOf(status: string, pulse: Pulse | null): string {
+function shadowOf(status: string, pulse: Pulse | null, dimmed: boolean): string {
   const base = 'inset 0 1px 0 0 var(--sheen), var(--lift-2)';
   if (pulse) return `0 0 0 3px ${pulse.color}, ${base}`;
 
-  const glow = glowOf(status);
+  const glow = dimmed ? undefined : glowOf(status);
   return glow ? `${glow}, ${base}` : base;
 }
 
@@ -242,31 +297,23 @@ function RetryMarker({ attemptCount }: { attemptCount: number }) {
 }
 
 /**
- * Who has it, and how close they are to the circuit breaker (it trips at 3).
+ * How close this agent is to the circuit breaker — it trips at 3 (SPEC §4.1).
  *
- * A **quiet** chip. It used to be a solid slab of the foreground colour — the loudest object on
- * the card, for a value that is a uuid you cannot read and would not act on. It is now a tint of
- * the card's own ink: still monospace, still exact, and no longer the first thing your eye lands
- * on when what you came to the node for was its status.
+ * It used to ride beside the assignee's hex chip. The chip is now a monogram at the head of the
+ * row, and the failure count stayed *here*, at the end of it, because they answer different
+ * questions: the monogram is who, and this is how badly it is going.
  */
-function Assignee({ task }: { task: Task }) {
-  if (!task.dispatch?.assigneeHandle) return null;
-  const { assigneeHandle, failureCount } = task.dispatch;
+function FailureCount({ task }: { task: Task }) {
+  const failureCount = task.dispatch?.failureCount ?? 0;
+  if (failureCount <= 0) return null;
 
   return (
-    <span className="ml-auto flex items-center gap-1">
-      {failureCount > 0 && (
-        <span data-testid="failure-count" className="text-[10px] font-bold text-red-700 dark:text-red-400">
-          ✗{failureCount}
-        </span>
-      )}
-      <span
-        data-testid="assignee"
-        title={assigneeHandle}
-        className="rounded-md bg-black/10 px-1.5 py-px font-mono text-[10px] tracking-tight opacity-70 dark:bg-white/10"
-      >
-        {shortHandle(assigneeHandle)}
-      </span>
+    <span
+      data-testid="failure-count"
+      title={`${failureCount} failed attempt${failureCount === 1 ? '' : 's'} — the circuit breaker trips at 3`}
+      className="ml-auto text-[10px] font-bold text-red-700 dark:text-red-400"
+    >
+      ✗{failureCount}
     </span>
   );
 }

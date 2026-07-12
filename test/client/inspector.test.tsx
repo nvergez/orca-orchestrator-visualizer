@@ -4,14 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type {
+  CastMember,
   Dispatch,
-  FeedMessage,
   Gate,
   Meta,
   Run,
   StreamEvent,
   Task,
   TaskDetail,
+  Turn,
 } from '../../src/shared/types.ts';
 
 /**
@@ -71,6 +72,8 @@ function run(over: Partial<Run> = {}): Run {
     startedAt: '2026-07-08T12:00:00.000Z',
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: 1,
+    cast: [],
+    waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 0, failed: 1, blocked: 0 },
     live: false,
     hasOpenGates: false,
@@ -83,31 +86,26 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
   return {
     seq: 0,
     meta: META,
-    snapshot: { runs: [run()], tasks: [task()], gates: [], coordinatorRuns: [] },
+    snapshot: { runs: [run()], tasks: [task()], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
     ...over,
   };
 }
 
-let nextSequence = 1;
-
-function message(over: Partial<FeedMessage> = {}): FeedMessage {
-  const sequence = over.sequence ?? nextSequence++;
-
+/** A turn of this task's exchange — the task-scoped slice of `snapshot.turns` (SPEC §4.7). */
+function turn(over: Partial<Turn> = {}): Turn {
   return {
-    id: `msg_${sequence}`,
-    sequence,
-    type: 'status',
+    id: 'turn_1',
+    runId: RUN_ID,
+    direction: 'in',
+    kind: 'status',
     fromHandle: FIRST_WORKER,
     toHandle: HANDLE,
-    subject: `Message ${sequence}`,
-    body: '',
-    priority: 'normal',
-    threadId: null,
-    payload: { taskId: TASK_ID },
-    createdAt: '2026-07-08T12:30:00.000Z',
+    at: '2026-07-11T21:00:00.000Z',
     taskId: TASK_ID,
-    runId: RUN_ID,
+    subject: 'A turn',
+    body: 'Something was said.',
+    source: 'messages · #1',
     ...over,
   };
 }
@@ -132,7 +130,6 @@ function detail(over: Partial<TaskDetail> = {}): TaskDetail {
     spec: 'Build the node inspector, and the route it exists for.',
     result: null,
     attempts: [],
-    messages: [],
     ...over,
   };
 }
@@ -148,8 +145,8 @@ function inspector(): HTMLElement | null {
   return screen.queryByTestId('inspector');
 }
 
-function feed(): HTMLElement | null {
-  return screen.queryByTestId('feed');
+function conversation(): HTMLElement | null {
+  return screen.queryByTestId('conversation');
 }
 
 function node(id: string): HTMLElement {
@@ -184,30 +181,29 @@ afterEach(() => {
  * deserves the width, and a dock holding a feed *and* an inspector would take it back.
  */
 describe('the right dock', () => {
-  it('swaps the feed for the inspector when a node is selected', async () => {
-    render(<App event={event({ messages: [message({ subject: 'Something happened' })] })} loadTask={loaderFor(detail())} />);
+  it('swaps the conversation for the inspector when a node is selected', async () => {
+    render(<App event={event({ })} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
-    expect(feed()).not.toBeNull();
+    expect(conversation()).not.toBeNull();
     expect(inspector()).toBeNull();
 
     await open();
 
     expect(inspector()).not.toBeNull();
-    expect(feed()).toBeNull();
+    expect(conversation()).toBeNull();
   });
 
-  it('goes back to the feed when the selection is let go', async () => {
-    render(<App event={event({ messages: [message({ subject: 'Something happened' })] })} loadTask={loaderFor(detail())} />);
+  it('goes back to the conversation when the selection is let go', async () => {
+    render(<App event={event({ })} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     await open();
     // The way out is the way in: clicking the same node again.
     clickNode(TASK_ID);
 
-    await waitFor(() => expect(feed()).not.toBeNull());
+    await waitFor(() => expect(conversation()).not.toBeNull());
     expect(inspector()).toBeNull();
-    expect(screen.getByText('Something happened')).toBeVisible();
   });
 
   it('closes from the inspector itself, and the canvas lets the node go with it', async () => {
@@ -218,7 +214,7 @@ describe('the right dock', () => {
     const panel = await open();
     await user.click(within(panel).getByRole('button', { name: /close/i }));
 
-    await waitFor(() => expect(feed()).not.toBeNull());
+    await waitFor(() => expect(conversation()).not.toBeNull());
     expect(node(TASK_ID)).toHaveAttribute('data-selected', 'false');
   });
 });
@@ -376,6 +372,7 @@ describe('the dispatch attempts', () => {
             runs: [run()],
             tasks: [task({ status: 'pending', attemptCount: 0 })],
             gates: [],
+            turns: [],
             coordinatorRuns: [],
           },
         })}
@@ -390,39 +387,107 @@ describe('the dispatch attempts', () => {
   });
 });
 
-/** The messages that named this task (SPEC §7.8, item 4) — its story, in `sequence` order. */
-describe('the messages', () => {
-  const MESSAGES = [
-    message({ sequence: 1, type: 'dispatch', subject: 'Dispatched: ship it' }),
-    message({ sequence: 2, type: 'heartbeat', subject: 'alive' }),
-    message({ sequence: 3, type: 'worker_done', subject: 'Failed: circuit breaker tripped' }),
+/**
+ * **The exchange** (SPEC §7.8, item 4) — this task's slice of the conversation, both sides of it.
+ *
+ * It replaces the flat list of messages this panel used to fetch, and the upgrade is the whole
+ * feature: a list of messages is *the half of the exchange that got written down*. The prompt the
+ * agent was dispatched with is `tasks.spec`, and Orca injects it straight into the worker's PTY
+ * (SPEC §4.2, trap 2) — so it could never have been in that list, and the panel showed an agent
+ * reporting back to nobody.
+ */
+describe('the exchange', () => {
+  const AGENT: CastMember = {
+    handle: FIRST_WORKER,
+    monogram: 'A1',
+    taskIds: [TASK_ID],
+    taskCount: 1,
+    lastHeartbeatAt: null,
+  };
+
+  const EXCHANGE: Turn[] = [
+    turn({
+      id: 'dispatch:ctx_1',
+      kind: 'dispatch',
+      direction: 'out',
+      fromHandle: HANDLE,
+      toHandle: FIRST_WORKER,
+      body: 'Ship the visualizer.',
+      source: 'tasks.spec · dispatch_contexts.dispatched_at',
+      at: '2026-07-11T20:54:00.000Z',
+    }),
+    turn({
+      id: 'beats:' + TASK_ID,
+      kind: 'heartbeats',
+      direction: 'in',
+      fromHandle: FIRST_WORKER,
+      toHandle: HANDLE,
+      beatCount: 12,
+      at: '2026-07-11T21:00:00.000Z',
+      endedAt: '2026-07-11T21:55:00.000Z',
+    }),
+    turn({
+      id: 'msg:3',
+      kind: 'worker_done',
+      direction: 'in',
+      fromHandle: FIRST_WORKER,
+      toHandle: HANDLE,
+      body: 'Failed: circuit breaker tripped',
+      source: 'messages · #3',
+      at: '2026-07-11T22:00:00.000Z',
+    }),
   ];
 
-  it('are the ones that referenced this task, oldest first', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail({ messages: MESSAGES }))} />);
+  function withExchange(): StreamEvent {
+    return event({
+      snapshot: {
+        runs: [run({ cast: [AGENT] })],
+        tasks: [task()],
+        gates: [],
+        turns: EXCHANGE,
+        coordinatorRuns: [],
+      },
+    });
+  }
+
+  it('shows both sides — including the prompt, which no message anywhere records', async () => {
+    render(<App event={withExchange()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
-    const rows = await within(panel).findAllByTestId('feed-row');
+    const turns = await within(panel).findAllByTestId('turn');
 
-    // The story reads forwards — unlike the feed, which answers "what just happened" and so
-    // puts the newest at the top.
-    expect(rows.map((row) => row.dataset.sequence)).toEqual(['1', '3']);
+    // The story reads forwards: a task's exchange is a story, and a story starts at the beginning.
+    expect(turns.map((row) => row.dataset.kind)).toEqual(['dispatch', 'worker_done']);
+    expect(turns.map((row) => row.dataset.direction)).toEqual(['out', 'in']);
+
+    // The orchestrator's half — reconstructed from two columns, and it says so on screen.
+    expect(within(panel).getByText('Ship the visualizer.')).toBeVisible();
+    expect(within(panel).getByText('tasks.spec · dispatch_contexts.dispatched_at')).toBeVisible();
   });
 
-  it('hide the heartbeats, and hand them back when asked — the same 65% rule the feed follows', async () => {
-    const user = userEvent.setup();
-    render(<App event={event()} loadTask={loaderFor(detail({ messages: MESSAGES }))} />);
+  it('collapses the heartbeats into one line, and says how many it stood in for', async () => {
+    render(<App event={withExchange()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
-    await within(panel).findAllByTestId('feed-row');
+    await within(panel).findAllByTestId('turn');
 
-    expect(within(panel).getByText(/1 heartbeat/i)).toBeVisible();
+    // 65% of all traffic says "alive" (SPEC §7.7). One row keeps the fact and loses the repetition —
+    // and there is nothing behind a toggle any more, because the rows it would reveal all say the
+    // same word.
+    const beats = within(panel).getByTestId('heartbeats');
+    expect(beats).toHaveTextContent(/12 heartbeats/);
+    expect(beats).toHaveTextContent(/every ~5 min/);
+  });
 
-    await user.click(within(panel).getByRole('checkbox', { name: /show heartbeats/i }));
+  it('says so when a task was never dispatched — nobody was ever given it, so nobody spoke', async () => {
+    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    await drawn(1);
 
-    expect(within(panel).getAllByTestId('feed-row')).toHaveLength(3);
+    const panel = await open();
+
+    expect(await within(panel).findByTestId('exchange-empty')).toBeVisible();
   });
 });
 
@@ -449,7 +514,7 @@ describe('the gate Q&A', () => {
 
   function withGates(gates: Gate[]): StreamEvent {
     return event({
-      snapshot: { runs: [run()], tasks: [task({ gate: gates[0] ?? null })], gates, coordinatorRuns: [] },
+      snapshot: { runs: [run()], tasks: [task({ gate: gates[0] ?? null })], gates, turns: [], coordinatorRuns: [] },
     });
   }
 
@@ -517,6 +582,7 @@ describe('the dependencies', () => {
         runs: [run({ edgeCount: 2, taskCount: 3 })],
         tasks: [BEFORE, HERE, AFTER],
         gates: [],
+        turns: [],
         coordinatorRuns: [],
       },
     });
@@ -569,6 +635,7 @@ describe('the dependencies', () => {
             ],
             tasks: [task({ deps: ['task_elsewhere'] }), ELSEWHERE],
             gates: [],
+            turns: [],
             coordinatorRuns: [],
           },
         })}
@@ -599,6 +666,7 @@ describe('the dependencies', () => {
             runs: [run()],
             tasks: [task({ deps: ['task_wiped_by_a_reset'] })],
             gates: [],
+            turns: [],
             coordinatorRuns: [],
           },
         })}

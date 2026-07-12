@@ -1,36 +1,43 @@
 import { shortHandle } from '../shared/handles.ts';
-import { type Run, type Task, TASK_STATUSES, type TaskStatus } from '../shared/types.ts';
+import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
+import { castOf } from './cast.ts';
+import type { Preview } from './tasks.ts';
 import { byInstant, instantOf } from './time.ts';
 
 /**
- * Run inference — the thing the schema does not have.
+ * **An orchestrator, and everything it dispatched.**
  *
- * There is **no run id in the schema**. A run is a guess, and the whole tool rests on it: it
- * is what turns 76 tasks in one unreadable soup into 13 orchestrations you can pick between.
- * So the guess is made once, here, on the server, and the UI says out loud that it is a guess
- * (the rail is headed "Runs (inferred)").
+ * A row in the rail is one `created_by_terminal_handle` — a Claude Code session that was told to
+ * coordinate. That is not a guess: the column says which terminal created a task, and the tool
+ * simply never said so on screen. What *was* a guess, and what this module has stopped doing, is
+ * using the six-hour idle gap to decide a row's **identity**:
  *
- * Every rule below was paid for by a shape the live database really has (SPEC §4.3):
+ * > A terminal reused across four days used to become several unrelated rows in the rail, and
+ * > nothing on screen ever said why. The rule was invisible and its consequences were not.
  *
- * 1. **Bucket by `created_by_terminal_handle`. The handle is the primary key; time is only
- *    the tiebreaker.** Two handles genuinely overlap in time in real data — a time-first
- *    clustering would merge two unrelated orchestrations into one.
- * 2. **Null-handle tasks are one run, not none.** 4 of 76 live tasks have no handle. They
- *    collect into a single synthetic `run_unattributed` rather than vanishing off the rail.
- * 3. **Split on an idle gap of more than six hours** — hours, not minutes: a real 13-task
- *    run spans 20:10 → 07:04 overnight, and any shorter threshold shreds it.
- * 4. **The ids are deterministic**, because a rail whose rows change identity on every
+ * So the rule is **demoted, not deleted**. It is the same threshold (`IDLE_GAP_MS`) doing a new
+ * job: it cuts an orchestrator's tasks into **waves**, which the canvas draws as bordered regions
+ * captioned with the gap that opened them ("Wave 2 · after 14h idle"). The time gap is now
+ * *shown* instead of *imposed* (SPEC §4.3).
+ *
+ * What survives from the old inference, because the live data still insists on it:
+ *
+ * 1. **Bucket by the handle. The handle is the key; time is not.** Two handles genuinely overlap
+ *    in time in real data — a time-first clustering would merge two unrelated orchestrations.
+ * 2. **Null-handle tasks are one run, not none.** 4 of 76 live tasks have no handle. They collect
+ *    into a single synthetic `run_unattributed` rather than vanishing off the rail. It is not an
+ *    orchestrator, and it is labelled as what it is.
+ * 3. **The ids are deterministic and stable**, because a rail whose rows change identity on every
  *    restart cannot hold a selection, and history is the point of this tool.
  *
- * The module is deliberately **pure** — tasks in, runs out, no SQLite. Reading rows is the
- * query layer's job (`tasks.ts`); this is the derivation, and the two tickets that build on
- * it (#17's poll loop, #21's degradation) can each call it without touching the other.
+ * The module is deliberately **pure** — tasks in, runs out, no SQLite. Reading rows is the query
+ * layer's job (`tasks.ts`); this is the derivation.
  */
 
-/** More than six hours of silence from one terminal ends a run and starts the next. */
+/** More than six hours of silence from one terminal opens a new **wave** of its work. */
 export const IDLE_GAP_MS = 6 * 60 * 60 * 1000;
 
-/** The one bucket for tasks Orca never attributed to a terminal. Not a real handle's run. */
+/** The one bucket for tasks Orca never attributed to a terminal. Not an orchestrator's run. */
 export const UNATTRIBUTED_RUN_ID = 'run_unattributed';
 
 /** …and the rail says exactly that, rather than dressing the orphans up as an orchestration. */
@@ -40,7 +47,7 @@ export const UNATTRIBUTED_LABEL = 'Unattributed';
 const IN_FLIGHT: ReadonlySet<string> = new Set<TaskStatus>(['ready', 'dispatched']);
 
 /**
- * A task as the database has it, plus the three things the wire contract deliberately does not
+ * A task as the database has it, plus the four things the wire contract deliberately does not
  * carry on a task — and that the derivations built on it cannot work without.
  */
 export type TaskWithHandle = {
@@ -51,20 +58,26 @@ export type TaskWithHandle = {
   /**
    * `task_title ?? display_name`, or null when Orca never named the task.
    *
-   * Not the same thing as `Task.title`: a *task* with no name falls back to its short id,
-   * while a *run* with no name falls back to its handle. One chain cannot serve both, and
-   * reusing `Task.title` here would silently label a run with a task id.
+   * Not the same thing as `Task.title`: a *task* with no name falls back to its short id, while a
+   * *run* with no name falls back to its handle. One chain cannot serve both, and reusing
+   * `Task.title` here would silently label a run with a task id.
    */
   name: string | null;
   /**
-   * Every terminal ever dispatched this task — one per attempt, deduplicated, oldest first.
+   * **Every** dispatch attempt this task ever had, oldest first — not `task.dispatch`, which is
+   * only the latest.
    *
-   * Not `dispatch.assigneeHandle`, which is only the *latest* attempt's: a retry goes to a
-   * fresh worktree with a fresh handle, so the first worker's handle exists nowhere else on
-   * the wire. Message attribution (`attribution.ts`) builds a run's handle set out of these,
-   * and a handle it never saw is a message it cannot place.
+   * A retry goes to a fresh worktree with a fresh handle, so the first worker's handle exists
+   * nowhere else on the wire. The cast is built of all of them (`cast.ts`), message attribution
+   * is built of all of them (`attribution.ts`), and the conversation emits one `dispatch` turn per
+   * attempt (`conversation.ts`) — because each attempt really was a separate thing the
+   * orchestrator did.
    */
-  assignees: string[];
+  attempts: Dispatch[];
+  /** The beginning of `tasks.spec` — what the orchestrator said. Null when the task has none. */
+  spec: Preview | null;
+  /** The beginning of `tasks.result` — what came back. Null while the task is still working. */
+  result: Preview | null;
 };
 
 export type InferredRuns = {
@@ -84,11 +97,11 @@ export function inferRuns(entries: TaskWithHandle[], { orcaIsLive }: RunOptions)
   const runIdOfTask = new Map<string, string>();
 
   for (const [handle, members] of bucketByHandle(entries)) {
-    for (const segment of segmentsOf(handle, members)) {
-      const run = describeRun(handle, segment, orcaIsLive);
-      runs.push(run);
-      for (const entry of segment) runIdOfTask.set(entry.task.id, run.id);
-    }
+    // One handle, one run. The six-hour gap no longer gets a vote on that — it decides the
+    // *waves* inside it, which is a caption on the canvas rather than a row in the rail.
+    const run = describeRun(handle, members, orcaIsLive);
+    runs.push(run);
+    for (const entry of members) runIdOfTask.set(entry.task.id, run.id);
   }
 
   runs.sort(byMostRecentActivity);
@@ -98,17 +111,16 @@ export function inferRuns(entries: TaskWithHandle[], { orcaIsLive }: RunOptions)
     // Mapped over the entries as they were read, so the creation order the canvas depends on
     // for its isolated-task grid survives the trip through the buckets.
     //
-    // The lookup is total by construction: every entry went into exactly one bucket, every
-    // bucket into exactly one segment, and every segment became a run. A fallback here would
-    // not be caution — it would hand a task a run id that names no row in the rail, which is
-    // a task nothing can ever render.
+    // The lookup is total by construction: every entry went into exactly one bucket, and every
+    // bucket became a run. A fallback here would not be caution — it would hand a task a run id
+    // that names no row in the rail, which is a task nothing can ever render.
     tasks: entries.map((entry) => ({ ...entry.task, runId: runIdOfTask.get(entry.task.id)! })),
   };
 }
 
 /**
- * Step 1 — and the load-bearing one. Everything a terminal created belongs to that terminal's
- * runs, whatever else was happening at the same moment.
+ * The load-bearing step. Everything a terminal created belongs to that terminal, whatever else
+ * was happening at the same moment.
  */
 function bucketByHandle(entries: TaskWithHandle[]): Map<string | null, TaskWithHandle[]> {
   const buckets = new Map<string | null, TaskWithHandle[]>();
@@ -122,80 +134,104 @@ function bucketByHandle(entries: TaskWithHandle[]): Map<string | null, TaskWithH
   return buckets;
 }
 
-/**
- * Step 3 — the six-hour split, applied within one handle's bucket.
- *
- * The null bucket is **not** split: it is one run by definition (step 2), and splitting it
- * would produce several runs all claiming the same `run_unattributed` id. Those tasks share
- * nothing but the absence of a handle; a gap between them means nothing.
- */
-function segmentsOf(handle: string | null, members: TaskWithHandle[]): TaskWithHandle[][] {
+/** Everything a rail row shows, so the interesting orchestrator can be picked without opening it. */
+function describeRun(handle: string | null, members: TaskWithHandle[], orcaIsLive: boolean): Run {
   const ordered = [...members].sort((a, b) => byInstant(a.task.createdAt, b.task.createdAt));
-  if (handle === null) return [ordered];
-
-  const segments: TaskWithHandle[][] = [];
-  let current: TaskWithHandle[] = [];
-  let previous: number | null = null;
-
-  for (const entry of ordered) {
-    const createdAt = instantOf(entry.task.createdAt);
-
-    // Strictly *more* than six hours: a run that idled exactly six is still that run.
-    //
-    // And a gap is only a gap between two instants we can actually read. A task whose
-    // `created_at` holds something unparseable sorts to the back of its bucket and joins the
-    // run it belongs to — measuring a "gap" against it would split a healthy run over a bad
-    // column, and mint a ghost run dated 1970 to hold the one task.
-    if (previous !== null && createdAt !== null && createdAt - previous > IDLE_GAP_MS) {
-      segments.push(current);
-      current = [];
-    }
-
-    current.push(entry);
-    if (createdAt !== null) previous = createdAt;
-  }
-
-  if (current.length > 0) segments.push(current);
-  return segments;
-}
-
-/** Everything a rail row shows, so the interesting run can be picked without opening it. */
-function describeRun(handle: string | null, segment: TaskWithHandle[], orcaIsLive: boolean): Run {
-  const first = segment[0]!;
-  const tasks = segment.map((entry) => entry.task);
+  const first = ordered[0]!;
+  const tasks = ordered.map((entry) => entry.task);
 
   return {
-    id: runIdFor(handle, first.task),
+    id: runIdFor(handle),
     handle,
     label: labelFor(handle, first),
     startedAt: first.task.createdAt,
     endedAt: lastActivity(tasks),
     taskCount: tasks.length,
+    cast: castOf(handle, ordered),
+    waves: wavesOf(handle, ordered),
     statusCounts: countStatuses(tasks),
-    // No history mode: yesterday's run renders through this same code path, and the dot is
-    // the whole difference. It takes a running Orca *and* work that could still move.
+    // No history mode: yesterday's run renders through this same code path, and the dot is the
+    // whole difference. It takes a running Orca *and* work that could still move.
     live: orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status)),
     // False here, and true only once the gates have actually been read: they come from
     // `decision_gate` *messages* (`gates.ts`), which this module has never seen — it is handed
-    // tasks. `attachGates` flips it for the runs that a gate really is blocking, which is the
-    // one thing that can honestly raise a gate strip over the canvas.
+    // tasks. `attachGates` flips it for the runs a gate really is blocking.
     hasOpenGates: false,
     edgeCount: countEdges(tasks),
   };
 }
 
 /**
- * `run_<handle8>_<epoch seconds of the first task>` — deterministic, and stable across
- * restarts, because the rail cannot hold a selection across ids that change on every boot.
+ * **The waves** — the six-hour rule, doing its new job (SPEC §4.3).
+ *
+ * A terminal that goes quiet for more than six hours and then dispatches again did two separate
+ * bursts of work, and that is worth seeing. It is *not* worth silently splitting into two rows
+ * that claim to be different orchestrators, which is what it used to do.
+ *
+ * Six hours, and not minutes: a real 13-task run spans 20:10 → 07:04 overnight, and any shorter
+ * threshold shreds it into nonsense.
+ *
+ * The null-handle bucket gets exactly one wave. Those tasks share nothing but the *absence* of a
+ * handle — they were never one terminal's work, so a gap between two of them measures nothing,
+ * and captioning it "after 14h idle" would be an observation about nobody.
  */
-function runIdFor(handle: string | null, first: Task): string {
-  if (handle === null) return UNATTRIBUTED_RUN_ID;
-  return `run_${shortHandle(handle)}_${Math.floor((instantOf(first.createdAt) ?? 0) / 1000)}`;
+function wavesOf(handle: string | null, ordered: TaskWithHandle[]): Wave[] {
+  const segments: TaskWithHandle[][] = [];
+  let current: TaskWithHandle[] = [];
+  let previous: number | null = null;
+  const gaps: (number | null)[] = [];
+
+  for (const entry of ordered) {
+    const createdAt = instantOf(entry.task.createdAt);
+    const gap = previous !== null && createdAt !== null ? createdAt - previous : null;
+
+    // Strictly *more* than six hours: work that paused for exactly six is still the same wave.
+    //
+    // And a gap is only a gap between two instants we can actually read. A task whose `created_at`
+    // holds something unparseable sorts to the back of its bucket and joins the wave it is beside —
+    // opening a new one on a bad column would caption a gap that nothing measured.
+    if (handle !== null && current.length > 0 && gap !== null && gap > IDLE_GAP_MS) {
+      segments.push(current);
+      gaps.push(gap);
+      current = [];
+    }
+
+    current.push(entry);
+    if (createdAt !== null) previous = createdAt;
+  }
+  if (current.length > 0) segments.push(current);
+
+  return segments.map((segment, index) => ({
+    index: index + 1,
+    startedAt: segment[0]!.task.createdAt,
+    endedAt: lastActivity(segment.map((entry) => entry.task)),
+    taskIds: segment.map((entry) => entry.task.id),
+    // Null on the first wave — there is nothing in front of it to have been quiet for.
+    idleGapBeforeMs: index === 0 ? null : (gaps[index - 1] ?? null),
+  }));
 }
 
 /**
- * What the run was trying to do: the earliest task's title, then its display name, then the
- * terminal that ran it. In practice a run's first task names the work.
+ * `run_<handle>` — the handle, and nothing else.
+ *
+ * It used to carry the epoch seconds of the run's first task, which the six-hour split made
+ * necessary: one handle could own several runs, and they needed telling apart. One handle is now
+ * one run, so the suffix has nothing left to disambiguate — and it was a liability, because it
+ * keyed a row's identity on a *task*, and a rail row that changes identity is a selection the
+ * user loses.
+ *
+ * The whole handle, not its first eight hex: this string is a React key and a join, never a label
+ * (the rail shows the short handle, and the full one rides in the tooltip). Two terminals sharing
+ * a prefix is vanishingly unlikely and would silently merge two orchestrators into one row —
+ * which is a lie, and a lie that costs nothing to make impossible.
+ */
+function runIdFor(handle: string | null): string {
+  return handle === null ? UNATTRIBUTED_RUN_ID : `run_${handle}`;
+}
+
+/**
+ * What the orchestrator was trying to do: the earliest task's title, then its display name, then
+ * the terminal that ran it. In practice a run's first task names the work.
  */
 function labelFor(handle: string | null, first: TaskWithHandle): string {
   if (handle === null) return UNATTRIBUTED_LABEL;
@@ -203,8 +239,8 @@ function labelFor(handle: string | null, first: TaskWithHandle): string {
 }
 
 /**
- * When the run last did anything — the max of every completion and every creation, which is
- * what the rail sorts on. A run's last task can outlive the last task it *started*.
+ * When it last did anything — the max of every completion and every creation, which is what the
+ * rail sorts on. A run's last task can outlive the last task it *started*.
  */
 function lastActivity(tasks: Task[]): string {
   let latest = tasks[0]!.createdAt;
@@ -219,10 +255,10 @@ function lastActivity(tasks: Task[]): string {
 }
 
 /**
- * The breakdown the rail shows ("6 done / 1 failed"). The six known statuses are always
- * present, at zero when the run has none of them; a status this build has never heard of is
- * counted under its own raw name rather than dropped — a task missing from the tally is a
- * task the rail lies about (SPEC §5).
+ * The breakdown the rail shows ("6 done / 1 failed"). The six known statuses are always present,
+ * at zero when the run has none of them; a status this build has never heard of is counted under
+ * its own raw name rather than dropped — a task missing from the tally is a task the rail lies
+ * about (SPEC §5).
  */
 function countStatuses(tasks: Task[]): Record<string, number> {
   // A bare object, not an object literal: a status Orca invents is a *key* here, and on an
@@ -239,19 +275,19 @@ function countStatuses(tasks: Task[]): Record<string, number> {
 }
 
 /**
- * The dependency edges *inside* this run — `0` is the edgeless empty state, and 4 of 13 real
- * runs are edgeless.
+ * The dependency edges *inside* this run — `0` is the edgeless empty state, and 4 of 13 real runs
+ * are edgeless.
  *
  * A dep naming a task in another run, or one an `orchestration reset` deleted, is not an edge:
- * there are no foreign keys here (SPEC §4.2, trap 8), and the canvas cannot draw a line to a
- * node that is not on it. Counting one would promise a DAG the user never gets.
+ * there are no foreign keys here (SPEC §4.2, trap 8), and the canvas cannot draw a line to a node
+ * that is not on it. Counting one would promise a DAG the user never gets.
  */
 function countEdges(tasks: Task[]): number {
   const inRun = new Set(tasks.map((task) => task.id));
 
   // Distinct deps: the column is an unvalidated JSON array, and a task listing the same
-  // dependency twice is still one line on the canvas. Counting it twice would keep a run out
-  // of the edgeless state over an edge nobody can see.
+  // dependency twice is still one line on the canvas. Counting it twice would keep a run out of
+  // the edgeless state over an edge nobody can see.
   return tasks.reduce(
     (total, task) => total + [...new Set(task.deps)].filter((dep) => inRun.has(dep)).length,
     0

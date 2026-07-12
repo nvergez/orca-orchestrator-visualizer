@@ -57,16 +57,81 @@ export type Meta = {
   resetDetected: boolean;
 };
 
-/** Inferred — the schema has no run id, and the UI says so out loud (SPEC §4.3). */
+/**
+ * One agent an orchestrator spawned — a terminal that was dispatched at least one of its tasks
+ * (SPEC §4.3a). Derived from the `assignee_handle`s of that orchestrator's dispatch contexts,
+ * which is the only place in the schema that records who did the work.
+ */
+export type CastMember = {
+  /** The worker's `dispatch_contexts.assignee_handle`. Its identity, and its only one. */
+  handle: string;
+  /**
+   * `A1`, `A2`, `A3` — the agent's name on screen, in first-dispatch order within its run.
+   *
+   * The handle is a uuid nobody can read or hold in their head, and the node has room for one
+   * badge. The monogram is what makes "the failed node and the gate are the same agent" a thing
+   * you can *see*, and it is the server's so that the rail, the canvas and the conversation
+   * cannot each number the cast differently.
+   */
+  monogram: string;
+  /** **Every** task it ever held, including ones a later attempt re-dispatched to someone else. */
+  taskIds: string[];
+  taskCount: number;
+  /** The latest heartbeat across its dispatches — the rail's "last seen 12s ago" (SPEC §4.6). */
+  lastHeartbeatAt: string | null;
+};
+
+/**
+ * A burst of work, and the silence in front of it (SPEC §4.3).
+ *
+ * The six-hour idle gap used to decide a run's *identity*: one terminal, reused across four
+ * days, silently became several unrelated rows in the rail and nothing on screen ever said why.
+ * It is now a **visible grouping inside one orchestrator**: the canvas draws each wave in its own
+ * bordered region, captioned with the gap that opened it. The rule is the same rule
+ * (`IDLE_GAP_MS`); what changed is that it is *shown* rather than *imposed*.
+ */
+export type Wave = {
+  /** 1-based — the caption reads "Wave 2". */
+  index: number;
+  startedAt: string;
+  endedAt: string;
+  taskIds: string[];
+  /** How long the terminal was quiet before this wave began. Null on the first: nothing precedes it. */
+  idleGapBeforeMs: number | null;
+};
+
+/**
+ * **An orchestrator, and everything it dispatched.**
+ *
+ * One row per `created_by_terminal_handle` — a Claude Code session that was told to coordinate.
+ * The name on the wire is still `Run` (a run *is* an orchestrator's run, and `Task.runId` /
+ * `FeedMessage.runId` are the joins the whole client is built on), but the thing it names has
+ * changed and the rail says the new word: **Orchestrators**, not "Runs (inferred)".
+ *
+ * Nothing about the grouping is inferred any more. The column says which terminal created a task;
+ * that is not a guess. What *was* the guess — the six-hour split that silently ended a run — is now
+ * `waves`, drawn on the canvas with the gap that caused it written on it (SPEC §4.3).
+ */
 export type Run = {
-  /** `run_<handle8>_<epoch>`, or `run_unattributed`. Stable across restarts. */
+  /**
+   * `run_<handle>`, or `run_unattributed`.
+   *
+   * Keyed on the handle **alone**: the id must be the same across restarts (a rail that cannot
+   * hold a selection across a reboot is a rail you cannot use for history) and it must not
+   * change when the orchestrator dispatches its next task — which the old `_<epoch>` suffix,
+   * taken from the first task of a six-hour segment, could not promise.
+   */
   id: string;
-  /** The full `created_by_terminal_handle`, for the rail's tooltip. Null on the synthetic run. */
+  /** The full `created_by_terminal_handle` — the orchestrator itself. Null on the synthetic run. */
   handle: string | null;
   label: string;
   startedAt: string;
   endedAt: string;
   taskCount: number;
+  /** The agents this orchestrator spawned, in first-dispatch order (`cast.ts`). */
+  cast: CastMember[];
+  /** Bursts of work separated by more than six idle hours. Always at least one (SPEC §4.3). */
+  waves: Wave[];
   /**
    * The six known statuses are always present, at 0 when the run has none of them. An
    * unknown status counts under its own raw name rather than being dropped — the same
@@ -184,6 +249,101 @@ export type FeedMessage = {
 };
 
 /**
+ * One thing that was said — and **the reason this feature exists** (SPEC §4.7).
+ *
+ * **When the orchestrator dispatches an agent, it writes no message.** Orca injects the prompt
+ * straight into the worker's PTY, and the live database holds **zero** `type = 'dispatch'` rows
+ * (SPEC §4.2, trap 2). So a conversation built from the `messages` table alone shows agents
+ * talking into the void, to an orchestrator that never answers — which is, very probably, the
+ * real reason the old screen was unreadable.
+ *
+ * A turn is therefore **merged from four sources**, and it says which one it came from:
+ *
+ * | Turn | Reconstructed from |
+ * |---|---|
+ * | The orchestrator's prompt | `tasks.spec`, timestamped by `dispatch_contexts.dispatched_at` |
+ * | The agent answering | `messages` (`status`, `worker_done`, `escalation`, …) |
+ * | A question, and its answer | a `decision_gate` message, and the reply whose `thread_id` is its `id` |
+ * | The final report | `tasks.result`, timestamped by `tasks.completed_at` |
+ *
+ * `source` is on the wire and on the screen, as a small muted caption under the bubble. This
+ * project tells the truth about its derivations: a bubble that *looks* like a message the
+ * orchestrator sent, when no such message was ever written, would be the most convincing lie the
+ * tool could tell.
+ */
+export type Turn = {
+  /** Stable across polls: `msg:<sequence>`, `dispatch:<contextId>`, `result:<taskId>`, `beats:<key>`. */
+  id: string;
+  /** The orchestrator whose conversation this is. Null ⇒ nothing in the schema places it (SPEC §4.4). */
+  runId: string | null;
+  /**
+   * `out` — the orchestrator speaking. `in` — an agent speaking.
+   *
+   * Decided by **"did one of this run's agents say it?"**, not by "is the sender the coordinator":
+   * the synthetic `run_unattributed` has no coordinator handle at all, and a rule that keyed on
+   * one would leave every one of its turns undirected.
+   */
+  direction: 'out' | 'in';
+  /**
+   * `dispatch` | `result` | `answer` | `heartbeats` — the four this tool reconstructs — or the
+   * message's own `type` verbatim (`status`, `worker_done`, `escalation`, `decision_gate`, and
+   * whatever an Orca we have never seen invents: shown, never dropped — SPEC §5).
+   */
+  kind: string;
+  fromHandle: string | null;
+  toHandle: string | null;
+  /** Normalized to ISO, like every instant on this wire. Empty ⇒ the column held no readable one. */
+  at: string;
+  taskId: string | null;
+  subject: string;
+  /**
+   * What was said. For a `dispatch` or a `result` this is a **preview** of `tasks.spec` /
+   * `tasks.result` — the bodies themselves stay in the file (SPEC §6.3), and a 400px bubble was
+   * never going to show 3 KB of agent prompt anyway. `truncated` says so out loud, and the node
+   * inspector is one click away with the whole of it.
+   */
+  body: string;
+  /** The columns this turn was reconstructed from — rendered, verbatim, under the bubble. */
+  source: string;
+
+  /*
+   * Everything below is **optional on the wire, and absent when it is the default** — which is not
+   * micro-optimisation, it is the difference between a snapshot this tool can re-send every five
+   * seconds and one it cannot.
+   *
+   * The snapshot is pushed **whole on every tick** (SPEC §6.3), and a conversation is ~360 turns on
+   * a live database. `"options":[],"answer":null,"beatCount":0,"truncated":false,"endedAt":null` is
+   * 75 bytes of nothing, and 75 bytes of nothing on 360 turns, five seconds apart, is 27 KB of
+   * nothing. So a field that has nothing to say does not say it.
+   */
+
+  /** True ⇒ `body` is the first `BODY_PREVIEW_CHARS` of a longer one. The inspector has the rest. */
+  truncated?: boolean;
+  /** A gate's options. Absent for everything that is not a gate. */
+  options?: string[];
+  /** A gate's answer, when one threaded on it. Absent ⇒ the question is still open. */
+  answer?: string;
+  /** How many beats a `heartbeats` row is standing in for. Absent on every other kind. */
+  beatCount?: number;
+  /** The last beat of a `heartbeats` row, so the panel can say "every ~5 min". Absent elsewhere. */
+  endedAt?: string;
+};
+
+/**
+ * **The agent side of an exchange, whichever way it points** — and the key every scope narrower
+ * than an orchestrator is a filter on.
+ *
+ * Derived rather than carried. It is always one of the two handles already on the turn, so putting
+ * it on the wire would be a third copy of a uuid in an object that is re-sent every five seconds —
+ * 21 KB per push, to save one line of arithmetic. It lives here, beside the type, so the client and
+ * the server cannot answer it differently.
+ */
+export function agentOfTurn(turn: Turn): string | null {
+  const handle = turn.direction === 'in' ? turn.fromHandle : turn.toHandle;
+  return handle === null || handle === '' ? null : handle;
+}
+
+/**
  * What clicking a node fetches — `GET /api/task/:id`, and the only payload in this tool that
  * is not a `StreamEvent` (SPEC §6.4, §7.8).
  *
@@ -197,10 +357,12 @@ export type FeedMessage = {
  *   only genuinely append-only per-task history in this schema, and the retry and
  *   circuit-breaker story is not visible anywhere else (SPEC §7.5, §7.8).
  *
- * What is *not* here is as considered: the gate Q&A and the dependencies are already on the
- * wire. `snapshot.gates` carries every gate — answered ones included — with the task it blocks
- * (#19), and `Task.deps` carries the edges. Re-sending either would be a second copy that could
- * disagree with the first.
+ * What is *not* here is as considered: the gate Q&A, the dependencies **and now the messages** are
+ * already on the wire. `snapshot.gates` carries every gate — answered ones included — with the
+ * task it blocks (#19), `Task.deps` carries the edges, and `snapshot.turns` carries this task's
+ * whole exchange, *both sides of it*, filtered by `taskId`. Re-sending any of them would be a
+ * second copy that could disagree with the first — which is why the flat `messages` list that
+ * used to live here is gone: it was the weaker half of a conversation the wire now carries whole.
  */
 export type TaskDetail = {
   id: string;
@@ -210,8 +372,6 @@ export type TaskDetail = {
   result: string | null;
   /** **Every** dispatch attempt, oldest first — never just the latest one. */
   attempts: Dispatch[];
-  /** Every message whose `payload.taskId` is this task, in `sequence` order. Heartbeats included. */
-  messages: FeedMessage[];
 };
 
 /**
@@ -223,11 +383,18 @@ export type StreamEvent = {
   seq: number;
   meta: Meta;
   /**
-   * `gates` is the fourth derived collection, beside the runs and the tasks — not a field of
-   * either, because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). The
-   * client filters it by the selected run to raise the strip; it never re-derives it.
+   * `gates` is a derived collection beside the runs and the tasks — not a field of either,
+   * because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). `turns` is the
+   * same, and for the same reason: a turn belongs to a run, and it is scoped down to an agent or
+   * a task by the panel that shows it. The client filters both; it re-derives neither.
    */
-  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; coordinatorRuns: CoordinatorRun[] };
-  /** Only messages after the client's last-seen sequence. */
+  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; turns: Turn[]; coordinatorRuns: CoordinatorRun[] };
+  /**
+   * Only messages after the client's last-seen sequence.
+   *
+   * The **conversation** is `snapshot.turns`, not this: a feed of messages is exactly the half of
+   * the dialogue that got written down (SPEC §4.7). What this is still for is the one thing a
+   * snapshot cannot say — *what just arrived* — which is what flashes a node (SPEC §7.6).
+   */
   messages: FeedMessage[];
 };

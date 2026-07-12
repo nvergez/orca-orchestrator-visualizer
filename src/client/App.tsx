@@ -7,12 +7,12 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import type { FeedMessage, Gate, Meta, Run, StreamEvent, Task } from '../shared/types.ts';
+import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME } from './canvas/theme.ts';
-import { useFeed, usePulses } from './feed/feed.ts';
-import { Feed } from './feed/Feed.tsx';
+import { Conversation } from './conversation/Conversation.tsx';
+import { useArrivals, usePulses } from './conversation/pulses.ts';
 import { GateStrip } from './gates/GateStrip.tsx';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
@@ -23,51 +23,51 @@ import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 
 /**
- * The shell — the run rail on the left, the canvas in the middle, the feed on the right, and
- * above all of them the truth about what is being read.
+ * The shell — **an orchestrator, the agents it spawned, and what they said to each other.**
  *
- * The rail is what makes the canvas mean anything (#16). Before it, every task in the
- * database rendered as one graph: 76 nodes, 13 unrelated orchestrations, four days of
- * history in a single unreadable soup. Now the canvas renders **exactly one run**, and
- * because the database is never pruned, yesterday's run renders through that same code
- * path as today's — there is no history mode, there is a list, and one of them happens to
- * be live.
+ * That sentence is the whole tool, and it is three panels: the orchestrators on the left with
+ * their cast nested under the open one, the DAG in the middle, and the conversation on the right.
+ * The database has always held all three and the screen used to name none of them: the rail said
+ * "Runs (inferred)" and named a row after its first task's title, so the two characters a reader
+ * is actually following — who coordinated, and who did the work — appeared nowhere at all.
  *
- * **The link between the feed and the canvas is owned here** (#18), because it is the one
- * thing neither of them can own: a feed row knows a task id, and a node knows it was clicked,
- * and only the shell knows which run is on screen. So the shell holds the selected task, and
- * both directions of the link are one state change:
+ * **The shell owns the two selections, because they are the two that no panel can own.**
  *
- * - **A feed row → its node.** The canvas highlights and centres it. If the message belongs to
- *   another run, the rail follows: the row *is* the user asking to go there, and leaving them
- *   staring at a canvas that does not contain the task they just clicked would be the worse
- *   surprise. (The rule this does not break is the *automatic* one — a run starting on its own
- *   never moves the canvas; it gets a chip, and the chip is the rail's, from #16.)
- * - **A node → its story.** The dock swaps to the inspector, which is that task's story end to
- *   end — its spec, its result, every attempt, its messages, its gates, its neighbours (#20).
- *   Clicking the same node again lets it go, so the way out is where the way in was.
+ * - **The agent is the pivot** (SPEC §7.2). One click in the rail dims the canvas to that agent's
+ *   tasks *and* fills the conversation with their half of the dialogue. Two panels, one movement,
+ *   and neither of them can see the other — so the state lives here, which is the only place that
+ *   can see both. It is the tool's central gesture.
+ * - **The task is the same story.** The node the canvas outlines and the task the inspector
+ *   describes are one task; clicking a node opens its story end to end, and clicking it again lets
+ *   go, so the way out is where the way in was. A turn in the conversation, a gate, a dep chip —
+ *   anything that *names* a task — goes to it, following it across into another orchestration if
+ *   that is where it lives, because refusing would leave a real dependency looking like a dead end.
  *
- * **The gate strip is the third thing the shell owns** (#19), and for the same reason: it sits
- * above the canvas, it belongs to the selected *run*, and clicking it selects a *task* — three
- * pieces of state that live in three different panels and meet nowhere else. It is here, and
- * not in the dock, because a question that has stopped your orchestration has to be in your
- * way; and it is rendered only while that run has an open gate, so it stays a signal.
+ * **The gate strip is the third thing the shell owns**, and for the same reason: it sits above the
+ * canvas, it belongs to the selected *orchestrator*, and clicking it selects a *task* — three
+ * pieces of state that live in three different panels and meet nowhere else. It is here, and not in
+ * the dock, because a question that has stopped your orchestration has to be in your way; and it is
+ * rendered only while there is one, so it stays a signal rather than becoming furniture.
  *
- * **The dock holds one panel, and it swaps** (#20, SPEC §7.1): the feed by default, the node
+ * **The dock holds one panel, and it swaps** (SPEC §7.1): the conversation by default, the node
  * inspector while a task is selected — never both stacked, because at this node count the canvas
- * deserves the width. Which is why the selection lives here and not in either of them: it is the
- * thing that decides *which panel exists*.
+ * deserves the width.
+ *
+ * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
+ * rail beside today's and renders through the exact same code path; live-ness is a green dot.
  *
  * **And it is a field with panels on it, not a page with rules drawn across it** (SPEC §7.9). The
- * panels float, the field shows through the gaps, and `reducedMotion="user"` is set once, here,
- * so that a reader who has asked their machine for stillness gets a completely still tool without
- * a single component having to remember to check.
+ * panels float, the field shows through the gaps, and `reducedMotion="user"` is set once, here, so
+ * that a reader who has asked their machine for stillness gets a completely still tool without a
+ * single component having to remember to check.
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
 const NO_RUNS: Run[] = [];
 const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
+const NO_TURNS: Turn[] = [];
+const NO_CAST: CastMember[] = [];
 
 export type AppProps = {
   event: StreamEvent | null;
@@ -85,21 +85,30 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const { selected, select, newRunId } = useRunSelection(runs);
 
   // Every task in the database, which is a different question from the canvas's. The canvas draws
-  // one run; a *dependency* is an edge in the schema and knows nothing about a run this tool
-  // inferred, so resolving one against the canvas's tasks alone would report a task in the next
-  // run along as deleted (#20's dep chips).
+  // one orchestrator's; a *dependency* is an edge in the schema and knows nothing about which
+  // terminal created which task, so resolving one against the canvas's tasks alone would report a
+  // task in the next orchestration along as deleted (the inspector's dep chips).
   const allTasks = event?.snapshot.tasks ?? NO_TASKS;
 
-  // The feed remembers; `event.messages` is only ever the delta after the client's cursor.
-  const { messages, arrived } = useFeed(event);
-  const pulses = usePulses(arrived);
+  // The conversation is the server's, whole, on every push (SPEC §4.7) — the client picks a scope
+  // and nothing else. What still arrives as a *delta* is the message log, and it is the only thing
+  // that can say **what just happened**, which is what flashes a node (`conversation/pulses.ts`).
+  const pulses = usePulses(useArrivals(event));
 
-  // The one piece of panel state that is *not* a panel's: the task the canvas outlines and the
-  // task the feed is filtered to are the same task, and neither panel can see the other.
+  const turns = event?.snapshot.turns ?? NO_TURNS;
+
+  // The two pieces of state that are nobody's panel and everybody's business.
+  //
+  // **The agent is the pivot** (SPEC §7.2). One click in the rail dims the canvas to that agent's
+  // tasks *and* fills the conversation with their half of the dialogue — two panels, one movement,
+  // and neither of them can see the other. So it lives here, which is the only place that can see
+  // both. The task is the same story: the node the canvas outlines and the task the inspector
+  // describes are one task.
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
-  // The scoping, in one line. Every task carries the run the server inferred for it, so the
-  // client never re-derives the grouping — it only picks which one to draw.
+  // The scoping, in one line. Every task carries the run the server put it in, so the client never
+  // re-derives the grouping — it only picks which one to draw.
   const tasks = useMemo(
     () => (selected ? allTasks.filter((task) => task.runId === selected.id) : NO_TASKS),
     [allTasks, selected]
@@ -135,17 +144,16 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   // mounted and unmounted by this very state.
   const { detail, error: detailError } = useTaskDetail(selectedTask?.id ?? null, event, loadTask);
 
-  /** The rail. A different run is a different canvas, so the task selection does not survive it. */
+  /**
+   * The rail. A different orchestrator is a different canvas, a different cast and a different
+   * conversation — so neither the task nor the **agent** selection survives it. An `A2` in one
+   * orchestration is a different terminal from the `A2` in the next, and carrying the selection
+   * across would silently dim the new canvas to a stranger.
+   */
   function selectRun(runId: string): void {
     select(runId);
+    setSelectedAgent(null);
     setSelectedTaskId(null);
-  }
-
-  /** A feed row. The task it names is the destination — its run is merely how to get there. */
-  function selectMessage(message: FeedMessage): void {
-    if (message.taskId === null) return; // An unlinked row is not a link (SPEC §4.2, trap 8).
-    if (message.runId !== null && message.runId !== selected?.id) select(message.runId);
-    setSelectedTaskId(message.taskId);
   }
 
   /** A node. Clicking it again is how you let go of it. */
@@ -154,19 +162,23 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   }
 
   /**
-   * A gate, a dependency chip — anything that names a task rather than toggling one. It
-   * *selects*: clicking the question a second time meaning "never mind" would be a strange thing
-   * for a blocker to offer, and the way out of a selection is the node, where the way in to it was.
+   * A gate, a dependency chip, a turn in the conversation — anything that *names* a task rather
+   * than toggling one. It selects: clicking a blocking question a second time to mean "never mind"
+   * would be a strange thing for a blocker to offer, and the way out of a selection is the node,
+   * where the way in to it was.
    *
-   * And it goes wherever the task **is**. Runs are *inferred* (`runs.ts`): they are buckets of
-   * `created_by_terminal_handle`, split on a six-hour idle gap, with the null-handle tasks in a
-   * synthetic run of their own — so an edge in `tasks.deps` can perfectly well cross from one of
-   * them into another. Refusing to follow it would leave a real dependency looking like a dead
-   * end. It is the rule a feed row already follows: naming a task *is* asking to go to it.
+   * And it goes wherever the task **is**. An orchestrator is a bucket of
+   * `created_by_terminal_handle`, and `tasks.deps` is a real edge in the schema that knows nothing
+   * about which terminal created which task — so an edge can perfectly well cross from one
+   * orchestration into another, or into the synthetic `Unattributed` one where 4 of 76 live tasks
+   * sit. Refusing to follow it would leave a real dependency looking like a dead end.
    */
   function showTask(taskId: string): void {
     const target = allTasks.find((task) => task.id === taskId);
-    if (target && target.runId !== selected?.id) select(target.runId);
+    if (target && target.runId !== selected?.id) {
+      select(target.runId);
+      setSelectedAgent(null); // A different orchestrator's cast — see `selectRun`.
+    }
     setSelectedTaskId(taskId);
   }
 
@@ -189,6 +201,8 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             coordinatorRuns={event.snapshot.coordinatorRuns}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
+            selectedAgent={selectedAgent}
+            onSelectAgent={setSelectedAgent}
             newRunId={newRunId}
           />
 
@@ -204,6 +218,9 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             <div className="min-h-0 flex-1">
               <Canvas
                 tasks={tasks}
+                cast={selected?.cast}
+                waves={selected?.waves}
+                selectedAgent={selectedAgent}
                 selectedTaskId={selectedTask?.id ?? null}
                 onSelectTask={selectTask}
                 pulses={pulses}
@@ -212,9 +229,9 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
           </div>
 
           {/*
-            One panel, and it swaps (SPEC §7.1). A selected task is the whole of the condition:
-            the inspector is what a selection *is* on screen, and letting the task go is what
-            brings the feed back.
+            One panel, and it swaps (SPEC §7.1). A selected task is the whole of the condition: the
+            inspector is what a selection *is* on screen, and letting the task go is what brings the
+            conversation back.
 
             Deliberately **no exit animation**: the panel that is leaving has nothing left to say,
             and a dock that stayed empty for 200 ms on every click would put a stutter between a
@@ -224,16 +241,24 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             <Inspector
               task={selectedTask}
               gates={taskGates}
-              // Every task, not the canvas's: a dep chip that could not see across an inferred run
-              // would call a task that is sitting right there in the database deleted.
+              // Every task, not the canvas's: a dep chip that could not see across into another
+              // orchestration would call a task sitting right there in the database deleted.
               tasks={allTasks}
               detail={detail}
               error={detailError}
+              turns={turns}
+              cast={selected?.cast ?? NO_CAST}
               onClose={() => setSelectedTaskId(null)}
               onSelectTask={showTask}
             />
           ) : (
-            <Feed messages={messages} runId={selected?.id ?? null} onSelectMessage={selectMessage} />
+            <Conversation
+              turns={turns}
+              run={selected}
+              selectedAgent={selectedAgent}
+              onClearAgent={() => setSelectedAgent(null)}
+              onSelectTask={showTask}
+            />
           )}
         </div>
       </main>

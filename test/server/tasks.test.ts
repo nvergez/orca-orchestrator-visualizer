@@ -89,23 +89,34 @@ describe('the tasks in a snapshot', () => {
     expect(JSON.stringify(tasks)).not.toContain('the receipt');
   });
 
-  it('keeps the whole live-shape corpus down to a few KB by omitting the bodies', async () => {
+  it('keeps the re-sent snapshot bounded — the bodies stay in the file (SPEC §6.3)', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const event = await harness.snapshot();
 
-    // The graph half of the event, which is the half the omitted bodies were 172 KB of. The
-    // *whole* event is bigger, because from #17 it also carries the message feed — and that
-    // is the deal the payload was designed around (SPEC §6.3): the graph is re-sent whole on
-    // every push, so it has to stay small, while the feed is sent once and then incrementally.
+    // **A budget on the half of the payload that is re-sent on every push**, and a feature that
+    // grows it has to come here and say so. Two have.
     //
-    // The ceiling is what the snapshot *legitimately* holds, and nothing more: ~44 KB of tasks
-    // and runs, plus ~20 KB for #19's 53 gates and the one each gated node repeats. The bodies
-    // would put 172 KB back. It is a budget on the re-sent half of the payload, so a feature
-    // that grows it should have to say so here — which is exactly what #19 just did.
+    // The graph is ~74 KB of tasks, runs and the 53 gates. The conversation (SPEC §4.7) is the rest:
+    // ~360 turns, and it is what this whole screen exists to show. It is bounded by the *row count*
+    // of a database that holds 76 tasks and 466 messages — which is why it is allowed to be here at
+    // all, and the 172 KB of `spec` text is not: that grows with how much a person typed at their
+    // agents, without limit, and it is exactly what the omission in §6.3 was defending against.
+    //
+    // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec and
+    // says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let alone
+    // the wire. The bodies are one click away, in full, on `GET /api/task/:id`.
     expect(event.snapshot.tasks).toHaveLength(76);
     expect(event.snapshot.gates).toHaveLength(53);
-    expect(JSON.stringify(event.snapshot).length).toBeLessThan(70_000);
+    expect(event.snapshot.turns.length).toBeGreaterThan(300);
+
+    expect(JSON.stringify(event.snapshot).length).toBeLessThan(250_000);
+
+    // …and the ceiling means nothing without the thing it is a ceiling *against*: every spec in this
+    // corpus is longer than the cap, and not one full body is on the wire.
+    const specs = event.snapshot.turns.filter((turn) => turn.kind === 'dispatch');
+    expect(specs.length).toBeGreaterThan(50);
+    for (const turn of specs) expect(turn.body.length).toBeLessThanOrEqual(240);
   });
 });
 

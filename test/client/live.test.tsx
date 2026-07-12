@@ -41,6 +41,8 @@ const RUN: Run = {
   startedAt: '2026-07-11T20:54:00.000Z',
   endedAt: '2026-07-11T21:30:00.000Z',
   taskCount: 1,
+  cast: [],
+  waves: [],
   statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 0, failed: 0, blocked: 0 },
   live: true,
   hasOpenGates: false,
@@ -67,7 +69,7 @@ function event(over: { meta?: Partial<Meta>; runs?: Run[]; tasks?: Task[]; seq?:
   return {
     seq: over.seq ?? 0,
     meta: { ...META, ...over.meta },
-    snapshot: { runs: over.runs ?? [RUN], tasks: over.tasks ?? [TASK], gates: [], coordinatorRuns: [] },
+    snapshot: { runs: over.runs ?? [RUN], tasks: over.tasks ?? [TASK], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
   };
 }

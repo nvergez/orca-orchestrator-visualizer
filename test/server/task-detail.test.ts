@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TaskDetail } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor, syntheticId } from '../fixtures/builder.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
+import { selectTurns } from '../../src/client/conversation/select.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
@@ -252,46 +253,49 @@ describe('the messages referencing the task', () => {
     return builder.write(tempDbPath());
   }
 
-  it('are this task\'s, in sequence order, and no other task\'s', async () => {
+  it('are no longer on this route at all — the exchange is on the wire, whole', async () => {
     harness = await serve(fixture());
 
     const detail = await detailOf('task_one');
 
-    expect(detail.messages.map((message) => message.subject)).toEqual([
-      'Dispatched: One',
-      'alive',
-      'Done: One',
-    ]);
-    expect(detail.messages.map((message) => message.sequence)).toEqual([1, 3, 5]);
+    // This route used to return the messages whose `payload.taskId` was this task. That list was
+    // *the half of the exchange that got written down*: the prompt the agent was dispatched with,
+    // the orchestrator's answer to a gate and the final receipt are not messages at all (SPEC §4.2,
+    // trap 2), so they could never appear in it. `snapshot.turns` carries all four (SPEC §4.7) — so
+    // the weaker list is gone rather than kept beside it, because a second copy of a truth is a
+    // second copy that can disagree with the first.
+    expect(detail).not.toHaveProperty('messages');
+    expect(Object.keys(detail).sort()).toEqual(['attempts', 'id', 'result', 'spec']);
   });
 
-  it('include the heartbeats — hiding 65% of the traffic is the client\'s call, not the wire\'s', async () => {
+  it('are replaced by the task-scoped conversation, with both sides in it', async () => {
     harness = await serve(fixture());
 
-    const detail = await detailOf('task_one');
+    const { snapshot } = await harness.snapshot();
+    const exchange = selectTurns(snapshot.turns, { runId: null, taskId: 'task_one' });
 
-    // The same rule the feed follows (SPEC §7.7): the server sends every message, and the
-    // panel decides what to show. A payload that dropped them would put rows behind a filter
-    // the user can turn off.
-    expect(detail.messages.some((message) => message.type === 'heartbeat')).toBe(true);
+    // The agent's messages — which is all the old list had…
+    expect(exchange.some((turn) => turn.kind === 'worker_done' && turn.direction === 'in')).toBe(true);
+    // …and the orchestrator's dispatch, which no message anywhere records.
+    expect(exchange.some((turn) => turn.kind === 'dispatch' && turn.direction === 'out')).toBe(true);
+
+    // …and every one of them is this task's, and no other task's.
+    for (const turn of exchange) expect(turn.taskId).toBe('task_one');
   });
 
-  it('carry the same shape the feed rows do, so one row component renders both', async () => {
+  it('collapse the heartbeats rather than hiding them behind a toggle', async () => {
     harness = await serve(fixture());
 
-    const done = (await detailOf('task_one')).messages.find((message) => message.type === 'worker_done')!;
+    const { snapshot } = await harness.snapshot();
+    const exchange = selectTurns(snapshot.turns, { runId: null, taskId: 'task_one' });
 
-    expect(done).toMatchObject({
-      fromHandle: FIRST_WORKER,
-      toHandle: COORDINATOR,
-      subject: 'Done: One',
-      body: 'Three sentences.',
-      taskId: 'task_one',
-      payload: { taskId: 'task_one' },
-      createdAt: at(5).toISOString(),
-    });
-    // Placed in the same run the task was inferred into — a gate or a feed row would be too.
-    expect(done.runId).not.toBeNull();
+    // 65% of all traffic says "alive" (SPEC §4.2, trap 4). One row keeps the fact — an agent was
+    // beating, this often, over this span — and throws away only the repetition. Nothing is behind
+    // a toggle any more, because the rows it would reveal all say the same word.
+    const beats = exchange.filter((turn) => turn.kind === 'heartbeats');
+    expect(beats).toHaveLength(1);
+    expect(beats[0]!.beatCount).toBeGreaterThan(0);
+    expect(exchange.some((turn) => turn.kind === 'heartbeat')).toBe(false);
   });
 });
 

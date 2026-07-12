@@ -106,8 +106,19 @@ describe('bucketing: the handle is the key, the clock is only the tiebreaker', (
   });
 });
 
-describe('splitting: an idle gap of more than six hours', () => {
-  it('holds a run together across an overnight gap — a real 13-task run spans 20:10 → 07:04', async () => {
+/**
+ * **The six-hour rule, demoted from an identity to a wave** (SPEC §4.3).
+ *
+ * It used to decide what a rail row *was*: a terminal reused across four days silently became
+ * several unrelated rows, and nothing on screen ever said why. The user saw the consequences of a
+ * boundary they were never shown.
+ *
+ * Same threshold, new job. One handle is now **one** orchestrator, and the gap is drawn on the
+ * canvas as a bordered region captioned with the silence that opened it. The tests below are the
+ * old splitting tests, asking the same questions of the waves.
+ */
+describe('waves: an idle gap of more than six hours', () => {
+  it('holds one wave together across an overnight gap — a real 13-task run spans 20:10 → 07:04', async () => {
     const { runs, tasks } = await snapshotOf(
       new FixtureBuilder()
         .task({ id: 'task_evening', handle: ALPHA, createdAt: at(0) })
@@ -115,49 +126,68 @@ describe('splitting: an idle gap of more than six hours', () => {
     );
 
     expect(runs).toHaveLength(1);
+    expect(runs[0]!.waves).toHaveLength(1);
     expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toEqual(['task_evening', 'task_morning']);
   });
 
-  it('splits the same handle into two runs when it went quiet for seven', async () => {
+  it('opens a second wave when the same terminal went quiet for seven — and stays ONE orchestrator', async () => {
+    // The heart of the change. Before: two rows in the rail, no explanation. Now: one row, two
+    // waves, and the gap written on the border of the second one.
     const { runs, tasks } = await snapshotOf(
       new FixtureBuilder()
         .task({ id: 'task_yesterday', handle: ALPHA, createdAt: at(0) })
         .task({ id: 'task_today', handle: ALPHA, createdAt: at(7 * HOUR) })
     );
 
-    expect(runs).toHaveLength(2);
-    expect(new Set(runs.map((run) => run.id)).size).toBe(2);
-    // Same terminal, two orchestrations — the handle survives on both rows.
-    expect(runs.every((run) => run.handle === ALPHA)).toBe(true);
-    // …and the tasks go one to each, most-recent run first: this morning's work is not
-    // filed under yesterday's orchestration.
-    expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toEqual(['task_today']);
-    expect(tasksOf(tasks, runs[1]!).map((task) => task.id)).toEqual(['task_yesterday']);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.handle).toBe(ALPHA);
+    // Both tasks are one orchestrator's, so the canvas draws them together…
+    expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toEqual(['task_yesterday', 'task_today']);
+
+    // …in two regions, and the second one says how long the silence was.
+    expect(runs[0]!.waves).toHaveLength(2);
+    expect(runs[0]!.waves[0]).toMatchObject({ index: 1, taskIds: ['task_yesterday'], idleGapBeforeMs: null });
+    expect(runs[0]!.waves[1]).toMatchObject({ index: 2, taskIds: ['task_today'], idleGapBeforeMs: 7 * HOUR });
   });
 
-  it('splits on *more* than six hours, so a gap of exactly six does not shred a run', async () => {
+  it('opens a wave on *more* than six hours, so a pause of exactly six does not cut one', async () => {
     const runs = await runsOf(
       new FixtureBuilder()
         .task({ handle: ALPHA, createdAt: at(0) })
         .task({ handle: ALPHA, createdAt: at(6 * HOUR) })
     );
 
-    expect(runs).toHaveLength(1);
+    expect(runs[0]!.waves).toHaveLength(1);
   });
 
-  it('measures the gap between consecutive tasks, not from the first — a long run never splits on its own length', async () => {
+  it('measures the gap between consecutive tasks, not from the first — a long run never cuts on its own length', async () => {
     // Ten tasks, five hours apart: 45 hours end to end, and not one gap over six.
     const builder = new FixtureBuilder();
     for (let i = 0; i < 10; i++) builder.task({ handle: ALPHA, createdAt: at(i * 5 * HOUR) });
 
-    expect(await runsOf(builder)).toHaveLength(1);
+    const runs = await runsOf(builder);
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.waves).toHaveLength(1);
   });
 
-  it('does not split a run over a task whose created_at is unreadable', async () => {
-    // Nothing in this schema validates a TEXT column. An unparseable instant read as `0` would
-    // sort to the head of the bucket, sit 56 years before the next task, and split off as a
-    // ghost run dated 1970 — so the run is dated by the tasks that *have* a readable time, and
-    // the odd one joins them.
+  it('gives every orchestrator at least one wave, and accounts for every task exactly once', async () => {
+    // The canvas lays out wave by wave (`client/canvas/layout.ts`), so a task in no wave is a node
+    // that never gets drawn — the one thing this tool must never do.
+    const runs = await runsOf(liveShapeCorpus());
+
+    for (const run of runs) {
+      expect(run.waves.length).toBeGreaterThan(0);
+      const inWaves = run.waves.flatMap((wave) => wave.taskIds);
+      expect(inWaves).toHaveLength(run.taskCount);
+      expect(new Set(inWaves).size).toBe(run.taskCount);
+    }
+  });
+
+  it('does not open a wave over a task whose created_at is unreadable', async () => {
+    // Nothing in this schema validates a TEXT column. An unparseable instant read as `0` would sit
+    // 56 years before the next task and open a ghost wave dated 1970 — so the run is dated by the
+    // tasks that *have* a readable time, and the odd one joins the wave it is beside.
     const dbPath = new FixtureBuilder()
       .task({ id: 'task_readable', handle: ALPHA, createdAt: AT })
       .task({ id: 'task_broken', handle: ALPHA, createdAt: at(60_000) })
@@ -168,8 +198,21 @@ describe('splitting: an idle gap of more than six hours', () => {
     const { runs, tasks } = (await harness.snapshot()).snapshot;
 
     expect(runs).toHaveLength(1);
+    expect(runs[0]!.waves).toHaveLength(1);
     expect(runs[0]!.startedAt).toBe(AT.toISOString());
     expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toContain('task_broken');
+  });
+
+  it('gives the null-handle bucket one wave — a gap between two orphans measures nobody', async () => {
+    // Those tasks share nothing but the *absence* of a handle. They were never one terminal's work,
+    // so a two-day gap between two of them is not a pause anybody took.
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ handle: null, createdAt: at(0) })
+        .task({ handle: null, createdAt: at(48 * HOUR) })
+    );
+
+    expect(runs[0]!.waves).toHaveLength(1);
   });
 });
 
@@ -222,8 +265,8 @@ describe('the tasks Orca never attributed to a terminal', () => {
   });
 });
 
-describe('the run id: deterministic, and stable across a restart', () => {
-  it('is the handle and the first task, so the same file yields the same ids twice', async () => {
+describe('the run id: the handle, and nothing else', () => {
+  it('is the same across a restart, so the rail can hold a selection', async () => {
     // The rail holds a selection across a restart only if the ids do. Two servers, one file.
     const dbPath = new FixtureBuilder()
       .task({ handle: ALPHA, createdAt: at(0) })
@@ -242,23 +285,28 @@ describe('the run id: deterministic, and stable across a restart', () => {
     expect(new Set(after).size).toBe(3);
   });
 
-  it('reads `run_<handle8>_<epoch seconds of the first task>`', async () => {
+  it('reads `run_<handle>`', async () => {
     const runs = await runsOf(new FixtureBuilder().task({ handle: ALPHA, createdAt: AT }));
 
-    expect(runs[0]!.id).toBe(`run_${shortHandle(ALPHA)}_${Math.floor(AT.getTime() / 1000)}`);
+    expect(runs[0]!.id).toBe(`run_${ALPHA}`);
   });
 
-  it('gives the two halves of a split handle two different ids', async () => {
-    const runs = await runsOf(
+  it('does not change when the orchestrator dispatches its next task', async () => {
+    // The old id carried the epoch seconds of a *segment's* first task, which the six-hour split
+    // made necessary. It also made a row's identity depend on a task — so an orchestrator picking
+    // its work up again after a long night would have had its id change under the user's selection.
+    const before = await runsOf(new FixtureBuilder().task({ handle: ALPHA, createdAt: at(0) }));
+
+    await harness!.close();
+    harness = undefined;
+
+    const after = await runsOf(
       new FixtureBuilder()
         .task({ handle: ALPHA, createdAt: at(0) })
         .task({ handle: ALPHA, createdAt: at(7 * HOUR) })
     );
 
-    expect(runs.map((run) => run.id)).toEqual([
-      `run_${shortHandle(ALPHA)}_${Math.floor(at(7 * HOUR).getTime() / 1000)}`,
-      `run_${shortHandle(ALPHA)}_${Math.floor(AT.getTime() / 1000)}`,
-    ]);
+    expect(after.map((run) => run.id)).toEqual(before.map((run) => run.id));
   });
 });
 

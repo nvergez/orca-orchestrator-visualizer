@@ -24,8 +24,8 @@ export type TableName = (typeof TABLES)[number];
 
 /**
  * The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
- * It spots an `orchestration reset` (`detectReset`), and it is what the message feed resumes
- * from (`highWaterMark`, and #17's SSE event id) — three call sites for one column, so it is
+ * It spots an `orchestration reset` (`detectReset`), and it is what the message log resumes
+ * from (`highWaterMark`, and the SSE event id) — three call sites for one column, so it is
  * named once and guarded by that name.
  */
 export const MESSAGE_SEQUENCE = 'messages.sequence';
@@ -56,6 +56,19 @@ export const MESSAGE_PAYLOAD = 'messages.payload';
 
 /** What ties a dispatch attempt to the task it was made for — the whole retry history hangs on it. */
 export const DISPATCH_TASK_ID = 'dispatch_contexts.task_id';
+
+/**
+ * **What it takes to know who the agents were** — the cast, and everything that hangs off it.
+ *
+ * An orchestrator is `tasks.created_by_terminal_handle`; *its agents* are the `assignee_handle`s
+ * of its dispatch contexts, and there is nowhere else in this schema that anybody records who did
+ * the work. Both columns, or none: `assignee_handle` with no `task_id` names a worker that cannot
+ * be tied to a task, so it can be neither counted nor drawn nor dimmed to — and `task_id` with no
+ * `assignee_handle` ties an attempt to a task and to nobody.
+ *
+ * Losing it is not losing a badge. It is losing the pivot of the whole screen (SPEC §4.3a).
+ */
+export const CAST_COLUMNS = [DISPATCH_TASK_ID, 'dispatch_contexts.assignee_handle'] as const;
 
 /**
  * A feature the visualizer offers, the column it cannot live without, and what the user is
@@ -91,21 +104,26 @@ const FEATURES: Feature[] = [
     degraded: 'Task titles — this Orca has no task_title/display_name column, so tasks are labelled by their short id.',
   },
   {
+    // The orchestrator *is* this column (SPEC §4.3). Without it there is no coordinator to list, no
+    // conversation to have a direction, and no cast — every task in the file lands in the one
+    // synthetic Unattributed row, and the rail says so rather than showing an empty list.
     anyOf: ['tasks.created_by_terminal_handle'],
     degraded:
-      'Runs — this Orca has no created_by_terminal_handle column, so runs cannot be inferred and every task lands in Unattributed.',
+      'Orchestrators — this Orca has no created_by_terminal_handle column, so no task says which terminal coordinated it: every task lands in Unattributed, and there is nobody for the conversation to call the orchestrator.',
   },
   {
     anyOf: ['dispatch_contexts.last_heartbeat_at'],
     degraded: 'The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.',
   },
   {
-    // The feed is ordered by `sequence` and resumed from it. A feed with no order is not a
-    // feed, so this column is the one the whole panel rests on — the message *rows* can all
-    // be there and it still cannot be built.
+    // The message log is ordered by `sequence` and resumed from it. A log with no order is not a
+    // log, so this column is the one the whole read rests on — the message *rows* can all be there
+    // and they still cannot be put in order. It costs the agents' half of the conversation (SPEC
+    // §4.7): the orchestrator's prompts and the final reports are columns and survive, so what is
+    // left is an orchestrator dispatching into a silence.
     anyOf: [MESSAGE_SEQUENCE],
     degraded:
-      'The message feed — this Orca has no messages.sequence column, so there is no cursor to order the feed by or resume it from.',
+      'What the agents said back — this Orca has no messages.sequence column, so there is no cursor to order the message log by or resume it from, and the conversation is left with only the orchestrator speaking.',
   },
   {
     anyOf: [MESSAGE_SEQUENCE],
@@ -126,12 +144,13 @@ const FEATURES: Feature[] = [
       'Gate options, and the task a gate blocks — this Orca has no messages.payload column, so a gate shows the question in its subject line and marks no node.',
   },
   {
-    // The same missing column, a different feature (#20). `payload.taskId` is the only link a
-    // message has to a task, so without it the inspector's message list is empty — which the
-    // gate entry above does not say and a user reading a blank panel is owed.
+    // The same missing column, a different feature. `payload.taskId` is the only link a message has
+    // to a task, so without it a message can be placed in an orchestrator's conversation (by its
+    // handles) but never in a *task's* — which is what the node inspector's exchange is, and what
+    // the gate entry above does not say. A user reading a half-empty panel is owed both reasons.
     anyOf: [MESSAGE_PAYLOAD],
     degraded:
-      'The messages in the node inspector — this Orca has no messages.payload column, so nothing says which task a message referenced.',
+      "The agents' half of a task's exchange — this Orca has no messages.payload column, so nothing says which task a message referenced: the node inspector shows the prompt and the result, and none of the replies in between.",
   },
   {
     // The task's own two body columns. Each costs exactly its own section of the inspector: an
@@ -152,6 +171,31 @@ const FEATURES: Feature[] = [
     anyOf: [DISPATCH_TASK_ID],
     degraded:
       'Dispatch attempts — this Orca has no dispatch_contexts.task_id column, so no attempt can be tied to the task it was made for: no assignee badge, no retry count, and no attempt history.',
+  },
+  {
+    // The pivot of the whole screen, and so the entry this list most needed. An orchestrator with
+    // no cast is the old rail back again: a row named after a task, with the two characters the
+    // reader is actually following — who coordinated, and who did the work — nowhere on it.
+    allOf: CAST_COLUMNS,
+    degraded:
+      "The cast — this Orca is missing dispatch_contexts.task_id or assignee_handle, so an orchestrator's agents cannot be named: the rail lists no agents, nodes wear no agent stripe, and the conversation cannot say who was being spoken to.",
+  },
+  {
+    // The same column as the inspector's spec entry above, and a *different* feature — the pattern
+    // `MESSAGE_PAYLOAD` already sets. Losing it costs the inspector one section; it costs the
+    // conversation an entire speaker. A reader looking at a panel where only the agents ever talk
+    // is owed the reason, and it is not the reason the inspector's entry gives.
+    anyOf: ['tasks.spec'],
+    degraded:
+      "The orchestrator's side of the conversation — this Orca has no tasks.spec column, and a dispatch writes no message at all (Orca injects the prompt into the worker's PTY), so nothing anywhere records what an agent was told to do: the conversation becomes agents answering a question nobody asked.",
+  },
+  {
+    // The six-hour rule, made visible. With no instant to measure the silence between two tasks
+    // there is no gap to caption — the orchestrator still lists, still draws and still talks; it
+    // simply does so as one undivided burst of work.
+    anyOf: ['tasks.created_at'],
+    degraded:
+      'Waves — this Orca has no tasks.created_at column, so the idle gaps that separate one burst of an orchestrator’s work from the next cannot be measured, and every task is drawn in a single wave.',
   },
 ];
 

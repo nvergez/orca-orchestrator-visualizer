@@ -166,7 +166,7 @@ Enums (`HANDOFF.md`): `TaskStatus` = `pending | ready | dispatched | completed |
 These are the highest-value findings of the entire map. Each one, implemented naively, produces a permanently empty or wrong panel.
 
 1. **Gates must be derived from `decision_gate` *messages*, never the `decision_gates` table.** `orchestration.ask` writes a message and **no table row**. The live DB has **53 gate messages and 0 gate rows** (#2, #7 §8). A gates-from-the-table implementation renders nothing, forever, on real runs. See §4.5.
-2. **`type = 'dispatch'` messages are never written.** Both dispatch paths inject the prompt straight into the worker's PTY. The dispatch *event* is reconstructible from `dispatch_contexts.dispatched_at`, not from messages. (Live: 0 `dispatch`, 0 `merge_ready`, 0 `handoff` rows.)
+2. **`type = 'dispatch'` messages are never written.** Both dispatch paths inject the prompt straight into the worker's PTY. The dispatch *event* is reconstructible from `dispatch_contexts.dispatched_at`, and what was *said* only from `tasks.spec` — never from messages. (Live: 0 `dispatch`, 0 `merge_ready`, 0 `handoff` rows.) **This is the trap the conversation turns on: see §4.7.** A dialogue read out of `messages` alone is agents talking into the void, to an orchestrator that never answers.
 3. **`coordinator_runs` is empty** — it cannot be the run-scoping key. Runs must be *inferred* (§4.3).
 4. **Heartbeats are ~65 % of all messages** (302 of 466). Rendered straight, the feed becomes a heartbeat ticker with the real events lost in it (#7 §7). See §7.7.
 5. **Timestamp formats are split.** Columns written by SQL (`datetime('now')`) are `'YYYY-MM-DD HH:MM:SS'` **UTC**; columns written from JS are ISO-8601 `'…T…Z'`. Concretely: all `created_at`, `dispatch_contexts.dispatched_at`/`completed_at`, `messages.delivered_at`, `decision_gates.resolved_at`, `last_heartbeat_at` are the SQL format; **`tasks.completed_at`** and `coordinator_runs.completed_at` are ISO. **Normalize every timestamp to an ISO-8601 UTC instant at the server boundary** — the client must never see the raw split, and comparing them unnormalized silently produces garbage.
@@ -176,37 +176,89 @@ These are the highest-value findings of the entire map. Each one, implemented na
 9. **`GateStatus = 'timeout'` never occurs** — `timeoutGate()` has no callers outside tests.
 10. **The DB is never pruned.** It accumulates every run since the last manual reset (13 runs / 4 days in the live sample). You cannot assume the DB contains "the current run" — this is *why* run scoping exists.
 
-### 4.3 Run inference (#2 §2, #7 §1, #7 §3) — server-side
+### 4.3 The orchestrator, and its waves — server-side
 
-There is **no run id in the schema**. A "run" is inferred, and the UI says so out loud (the rail header reads **"Runs (inferred)"** — #7 §1).
+**A row in the rail is one `created_by_terminal_handle`: a Claude Code session that was told to coordinate.** That is not a guess — the column says which terminal created a task — and the rail says the word: **"Orchestrators"**.
+
+It used to say *"Runs (inferred)"*, and it had to. A "run" was a bucket of tasks by handle, **cut wherever six idle hours fell**, so one terminal reused across four days silently became several unrelated rows and nothing on screen ever gave the reason. The user saw only the consequences of a boundary they were never shown.
+
+**The six-hour rule is demoted, not deleted.** Same threshold, new job: it cuts an orchestrator's tasks into **waves**, which the canvas draws as bordered regions captioned with the gap that opened each one — *"Wave 2 · after 14h idle"*. The time gap is now **shown** instead of **imposed**.
 
 ```
 Algorithm — recompute per tick from the tasks table:
 
 1. Read all tasks ordered by created_at.
-2. Bucket by `created_by_terminal_handle`.
-   → HANDLE IS THE PRIMARY KEY, TIME IS ONLY THE TIEBREAKER.
-     Two handles genuinely overlap in time in real data (#7); time-first
-     clustering would merge unrelated runs.
+2. Bucket by `created_by_terminal_handle`. ONE HANDLE IS ONE ORCHESTRATOR.
+   → THE HANDLE IS THE KEY, TIME IS NOT. Two handles genuinely overlap in
+     time in real data (#7); a time-first clustering would merge two
+     unrelated orchestrations into one.
    → Tasks with a NULL handle (4 of 76 live) collect into ONE synthetic
-     "Unattributed" run rather than vanishing (#7 §1).
-3. Within a handle bucket, sort by created_at and split on an idle gap
-   of more than 6 HOURS between consecutive tasks.
-   → 6h, not minutes: a real 13-task run spans 20:10 → 07:04 overnight.
-     A short gap would shred it (#7 §1).
-4. Run id: deterministic and stable across restarts —
-   `run_<handle-first-8-hex>_<epoch-seconds of first task>`;
-   the synthetic bucket is `run_unattributed`.
-5. Label = the earliest task's `task_title`, falling back to
-   `display_name`, then the short handle (#7 §3). In practice a run's
-   first task names the work.
-6. Derived per run: startedAt (min created_at), endedAt (max of
-   completed_at / created_at), task count, per-status counts,
+     "Unattributed" row rather than vanishing (#7 §1). It is not an
+     orchestrator, and it is labelled as what it is.
+3. WAVES. Within a handle, sort by created_at and cut on an idle gap of
+   MORE than 6 HOURS between consecutive tasks.
+   → 6h, not minutes: a real 13-task run spans 20:10 → 07:04 overnight,
+     and any shorter threshold shreds it (#7 §1).
+   → A cut opens a wave; it no longer opens a ROW. Each wave carries
+     {index, startedAt, endedAt, taskIds, idleGapBeforeMs}, and the gap is
+     drawn on the canvas (§7.5).
+   → The null-handle bucket gets exactly one wave: those tasks were never
+     one terminal's work, so a gap between two of them measures nobody.
+4. Run id: `run_<handle>` — the handle ALONE — or `run_unattributed`.
+   → The old `_<epoch of the first task>` suffix existed only to tell one
+     handle's several segments apart, and there are none now. It was also a
+     liability: it keyed a rail row's identity on a TASK, so an orchestrator
+     picking its work back up would have changed id under the user's
+     selection. The id must be deterministic AND stable across restarts —
+     a rail that cannot hold a selection cannot be used for history.
+   → The whole handle, not its first 8 hex: this string is a join key and a
+     React key, never a label (the row shows the handle; the tooltip has it
+     in full). Two terminals sharing a prefix would silently merge two
+     orchestrators into one row, which is a lie that costs nothing to make
+     impossible.
+5. Label = the earliest task's `task_title`, falling back to `display_name`,
+   then the short handle (#7 §3). In practice a run's first task names the work.
+6. Derived per run: startedAt (min created_at), endedAt (max of completed_at /
+   created_at), task count, per-status counts, the CAST (§4.3a), the WAVES,
    `live` = (meta.liveness === 'live') AND (any task is `ready` or
    `dispatched`), `hasOpenGates` (§4.5).
 ```
 
 The **server owns this** — the client never re-derives it (#7 "Consequences for #9").
+
+### 4.3a The cast: the orchestrator, and the agents it spawned — server-side
+
+**The database has always known exactly who coordinated and who did the work, and neither has ever appeared on screen.** The old rail named a row after its first task's title and stopped there, so the two characters a reader is actually following were nowhere at all. Both are columns:
+
+| Screen concept | Column |
+|---|---|
+| **The orchestrator** | `tasks.created_by_terminal_handle` (the run's own `handle`) |
+| **Its agents** | the `assignee_handle`s of that orchestrator's `dispatch_contexts` |
+
+```
+Per orchestrator, from its tasks' dispatch attempts:
+
+1. EVERY attempt's assignee, not just the surviving one. `Task.dispatch` is
+   MAX(rowid) — the latest attempt — and a retry goes to a FRESH worktree
+   with a FRESH terminal handle. A cast built from the surviving attempt
+   alone silently deletes the agent that failed, which is exactly the one a
+   post-mortem came for.
+2. The orchestrator is NEVER in its own cast. A coordinator that dispatched
+   a task to itself would otherwise appear twice, and the conversation's
+   notion of direction (§4.7) would have nothing left to hang on. Such a
+   task simply wears no agent stripe — no agent was spawned for it.
+3. MONOGRAM: A1, A2, A3 … in FIRST-DISPATCH order (the dispatch instant, not
+   the task's creation — an orchestrator can create five tasks up front and
+   hand them out over an hour). Ties break on the handle, so a cast cannot
+   renumber itself between two polls of an unchanged database.
+4. Per agent: `taskIds` (every task it ever held), `taskCount`, and
+   `lastHeartbeatAt` — the latest beat ACROSS its tasks, because an agent
+   beating on one task is alive whatever its other tasks say (§4.6).
+```
+
+**The monogram is the server's**, and that is load-bearing: the rail, the node's stripe and the conversation all name the same agent, and a cast numbered three times would be three castings. `term_f627dc6f-4a1b-…` is the agent's only identity in this schema and it is unreadable, unrememberable and unactionable; `A2` is the same fact in two characters.
+
+**Selecting an agent is the tool's central gesture** — it dims the canvas to that agent's tasks and fills the conversation with that agent's half of the dialogue (§7.2, §7.5, §7.7).
 
 ### 4.4 Message → run attribution (#7 §5) — server-side
 
@@ -225,7 +277,64 @@ The **server owns this** — the client never re-derives it (#7 "Consequences fo
 
 ### 4.6 Heartbeat → liveness (#7 §7)
 
-The latest `heartbeat` message per dispatch (equivalently, `dispatch_contexts.last_heartbeat_at`, which carries the last one on the row) drives a **"last seen 12 s ago"** on the node's assignee badge. The snapshot must therefore carry per-task latest-heartbeat (#7 "Consequences for #9"). Heartbeats **never** enter the feed by default and **never** pulse a node.
+The latest `heartbeat` message per dispatch (equivalently, `dispatch_contexts.last_heartbeat_at`, which carries the last one on the row) drives a **"last seen 12 s ago"** on the node, and — rolled up per *agent* (§4.3a) — a **"seen 12s ago"** badge in the rail's cast. The snapshot carries both. Heartbeats **never** pulse a node, and they never appear one-per-row in the conversation (§4.7).
+
+### 4.7 The conversation: the four-source merge — server-side
+
+**This is the substance of the tool, and the trap it turns on.**
+
+> **When the orchestrator dispatches an agent, it writes no message.** Orca injects the prompt straight into the worker's PTY. The live database contains **zero** `type = 'dispatch'` rows (§4.2, trap 2).
+
+So a conversation built from the `messages` table alone renders **agents talking into the void, to an orchestrator that never answers a word** — half a dialogue, and the half that makes no sense on its own. That is, very probably, the real reason the old flat feed was unreadable. And it would pass an unwitting test suite, because a tidy fixture full of `dispatch` messages makes it look correct.
+
+The other half is in the schema. It was simply never called a conversation. **A turn is merged from four sources:**
+
+| Turn | Reconstructed from |
+|---|---|
+| **The orchestrator's prompt** (`dispatch`) | `tasks.spec`, timestamped by `dispatch_contexts.dispatched_at` |
+| **The agent answering** (`status`, `worker_done`, `escalation`, …) | `messages` |
+| **A question and its answer** (`decision_gate`, `answer`) | a `decision_gate` message (§4.5), and the reply whose `thread_id` is that message's `id` |
+| **The final report** (`result`) | `tasks.result`, timestamped by `tasks.completed_at` |
+
+```
+Rules the schema forces:
+
+1. ONE `dispatch` TURN PER *ATTEMPT*, not per task. `dispatch_contexts` is
+   one row per attempt, and a retry is a genuinely separate thing the
+   orchestrator did — to a fresh worktree, with a fresh handle. Folding them
+   into one turn hides the only retry story the schema has.
+
+2. DIRECTION is "did one of this run's AGENTS say it?" — never "is the sender
+   the coordinator". The synthetic `run_unattributed` has no coordinator
+   handle at all, so a rule keyed on the coordinator would leave every one of
+   its turns undirected. `out` = the orchestrator; `in` = an agent.
+
+3. THE TWO TIMESTAMP FORMATS MEET HERE. `dispatch_contexts.dispatched_at` is
+   SQL-format and `tasks.completed_at` is ISO (§4.2, trap 5). This merge
+   orders columns written by BOTH writers against each other — the exact
+   comparison that trap exists to break. Everything is normalized at the
+   query boundary and compared through one comparator, which sorts an
+   unreadable instant LAST rather than pretending it is the epoch.
+
+4. EVERY JOIN TOLERATES A MISS (§4.2, trap 8). A message naming a task a
+   reset deleted still becomes a turn — it just carries no `taskId`. A turn
+   no run could claim (§4.4, rule 3) carries no `runId`, appears in the
+   "All" scope and nowhere else, and is never guessed into somebody's thread.
+
+5. HEARTBEATS COLLAPSE TO ONE ROW PER TASK — 302 of 466 messages, all saying
+   "alive" (§4.2, trap 4). By TASK and not by adjacency: a task belongs to
+   exactly one agent and one orchestrator, so a summary keyed on it is wholly
+   inside every scope the panel can ask for (§7.7). It carries the count and
+   the span, so the panel can say "every ~5 min" from two instants and a
+   count rather than asserting a cadence nobody measured.
+
+6. `source` — EVERY turn names the columns it was built from, on screen.
+   Four of these turns are not messages. A bubble that LOOKED like a message
+   the orchestrator sent, when no such message was ever written, would be the
+   most convincing lie this tool could tell.
+```
+
+**Scopes** — nested, and each one is a filter over `runId` / the agent side / `taskId`. One orchestrator (the default) → one agent inside it (the central gesture) → one task (the node inspector, §7.8).
 
 ---
 
@@ -244,7 +353,7 @@ Then:
 |---|---|
 | `user_version === 5` | Normal operation. |
 | `user_version > 5` (newer Orca) | **Render normally, under a visible banner:** *"newer Orca schema — some data may be missing or mislabeled."* |
-| `user_version < 5` (older Orca) | **Per-feature degradation.** A missing column disables exactly the feature that needs it and nothing else — e.g. no `task_title`/`display_name` (pre-v5) → fall back to the short task id for labels; no `created_by_terminal_handle` (pre-v4) → every task lands in the **Unattributed** run and the rail says so; no `last_heartbeat_at` (pre-v2) → no last-seen badge. Report the degraded feature list in `meta.degraded` and surface it in the UI. |
+| `user_version < 5` (older Orca) | **Per-feature degradation.** A missing column disables exactly the feature that needs it and nothing else — e.g. no `task_title`/`display_name` (pre-v5) → fall back to the short task id for labels; no `created_by_terminal_handle` (pre-v4) → every task lands in the **Unattributed** row and the rail says so; no `last_heartbeat_at` (pre-v2) → no last-seen badge; no `dispatch_contexts.task_id`/`assignee_handle` → **no cast** (§4.3a), so no agents in the rail, no stripe on a node and nobody for the conversation to name; no `tasks.spec` → **the orchestrator's side of the conversation** goes (§4.7), and it is a *different* loss from the inspector's spec section, so it gets its own sentence; no `tasks.created_at` → **no waves**, and the orchestrator draws as one undivided burst. Report the degraded feature list in `meta.degraded` and surface it in the UI. **A feature with no entry in that list degrades silently, which is the one failure the list exists to prevent — so a new feature that reads a column outside the DAG core must add one.** |
 | Unknown enum value (a new status / message type) | **Rendered in a neutral "unknown" style — never dropped, never crashed on.** An unknown `TaskStatus` gets the neutral grey node treatment and its raw string as the chip label. |
 | The DAG core (`tasks.id` / `status` / `deps`) is unreadable | **Hard-fail** with an actionable message. This is the *only* hard-fail. |
 
@@ -295,7 +404,11 @@ The two halves of the data have opposite shapes, so they get opposite treatments
 
 **Graph state → a full snapshot on every push.** `tasks`, `dispatch_contexts`, `decision_gates`, `coordinator_runs` are all **overwritten in place with no `updated_at` column anywhere** (#2 §3). Computing a delta would mean reading every row anyway and diffing against server-side shadow state — zero DB savings and a whole new class of drift bugs, where one missed mutation path leaves the client silently stale forever. **Overwritten-in-place argues *for* snapshots: don't trust a delta you had to reconstruct.** The tables are small (76 tasks / 64 dispatch contexts live).
 
-> **The snapshot omits `spec` and `result` bodies.** A live 71-task dump was **172 KB, almost entirely spec text**. Omitting them drops the snapshot to a few KB; they are fetched on demand by `GET /api/task/:id` when a node is clicked (#8 §3).
+> **The snapshot omits the `spec` and `result` bodies.** A live 71-task dump was **172 KB, almost entirely spec text**. They are fetched on demand by `GET /api/task/:id` when a node is clicked (#8 §3).
+>
+> **The conversation carries a capped *preview* of each — 240 characters — and says when it cut one.** The prompt an agent was dispatched with is `tasks.spec` and nothing else records it (§4.7), so the conversation cannot omit it outright; and a 400px bubble was never going to show 3 KB of agent prompt anyway. The preview is sliced **in SQL** (`substr`), so the other 3 KB never crosses the SQLite boundary, let alone the wire.
+>
+> **What that defence is actually protecting** is the thing that grows *without limit*: `spec` is whatever a person typed at their agents. The conversation grows with the **row count** of a database that holds 76 tasks and 466 messages — which is why it is allowed on a snapshot that is re-sent whole, and 172 KB of prompt text is not. Measured on the live-shaped corpus: **~221 KB of snapshot, of which ~147 KB is the conversation** (~360 turns). It is a budget, and a feature that grows it has to come and say so here — as this one has (`test/server/tasks.test.ts`).
 
 **Message feed → incremental append** (`sequence > lastSeen`). This is the one place a delta is both cheap *and correct*, because message rows are immutable once written. `messages.read` / `delivered_at` are mutable flags on otherwise-immutable rows — **we do not render them** (internal mailbox bookkeeping, not orchestration semantics), so their mutability never bites (#8 §3).
 
@@ -305,7 +418,10 @@ The two halves of the data have opposite shapes, so they get opposite treatments
 type StreamEvent = {
   seq: number            // message high-water mark; also the SSE event id
   meta: Meta
-  snapshot: { runs: Run[]; tasks: Task[]; coordinatorRuns: CoordinatorRun[] }
+  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; turns: Turn[]; coordinatorRuns: CoordinatorRun[] }
+  // The append-only delta. It is no longer what the dock renders — that is `turns` — and what it
+  // is still for is the one thing a snapshot cannot say: WHAT JUST ARRIVED, which is what flashes
+  // a node (§7.6).
   messages: FeedMessage[]   // sequence > client's last-seen; [] on an idle-but-changed tick
 }
 
@@ -320,16 +436,56 @@ type Meta = {
   resetDetected: boolean                     // sqlite_sequence gap (§5)
 }
 
-type Run = {                                 // inferred — §4.3
-  id: string                                 // run_<handle8>_<epoch> | run_unattributed
-  handle: string | null                      // full handle, shown in a tooltip
+type Run = {                                 // AN ORCHESTRATOR, and everything it dispatched — §4.3
+  id: string                                 // run_<handle> | run_unattributed. The handle ALONE.
+  handle: string | null                      // the orchestrator itself; null on the synthetic row
   label: string                              // earliest task's title
   startedAt: string; endedAt: string         // ISO
   taskCount: number
+  cast: CastMember[]                         // the agents it spawned — §4.3a
+  waves: Wave[]                              // its bursts of work. Always ≥ 1 — §4.3
   statusCounts: Record<TaskStatus, number>
   live: boolean
   hasOpenGates: boolean
   edgeCount: number                          // 0 ⇒ the edgeless empty state (§7.5)
+}
+
+type CastMember = {                          // §4.3a
+  handle: string                             // dispatch_contexts.assignee_handle
+  monogram: string                           // A1, A2, A3 — first-dispatch order, the SERVER's
+  taskIds: string[]                          // EVERY task it held, retries included
+  taskCount: number
+  lastHeartbeatAt: string | null             // the "seen 12s ago" badge (§4.6)
+}
+
+type Wave = {                                // the six-hour rule, made visible — §4.3
+  index: number                              // 1-based: "Wave 2"
+  startedAt: string; endedAt: string         // ISO
+  taskIds: string[]
+  idleGapBeforeMs: number | null             // null on the first — nothing precedes it
+}
+
+type Turn = {                                // THE CONVERSATION — the four-source merge, §4.7
+  id: string                                 // msg:<seq> | dispatch:<ctxId> | result:<taskId> | beats:<key>
+  runId: string | null                       // null ⇒ nothing in the schema places it (§4.4 rule 3)
+  direction: 'out' | 'in'                    // out = the orchestrator; in = an agent
+  kind: string                               // dispatch | result | answer | heartbeats, or the
+                                             // message's own `type`, verbatim (§5)
+  fromHandle: string | null; toHandle: string | null
+  at: string                                 // ISO. '' ⇒ the column held no readable instant
+  taskId: string | null
+  subject: string
+  body: string                               // a dispatch/result body is a 240-char PREVIEW
+  source: string                             // the columns it was reconstructed from — RENDERED
+  // Absent when default — the snapshot is re-sent whole every tick, and 75 bytes of nothing on
+  // 360 turns is 27 KB of nothing:
+  truncated?: boolean                        // body was cut; the inspector has the rest
+  options?: string[]                         // a gate's options
+  answer?: string                            // the reply that threaded on it; absent ⇒ still open
+  beatCount?: number; endedAt?: string       // a `heartbeats` row: how many, over what span
+  // The AGENT side of the turn is DERIVED (`agentOfTurn`), never carried: it is always one of the
+  // two handles already here, and a third copy of a uuid in an object re-sent every five seconds
+  // is 21 KB per push to save one line of arithmetic.
 }
 
 type Task = {
@@ -364,7 +520,7 @@ type FeedMessage = {
 }
 ```
 
-Bodies in the feed are small (subjects and short bodies); ship them. `spec`/`result` are the only heavy fields and they are the ones we omit.
+Bodies in the message log are small (subjects and short bodies); ship them. `spec`/`result` are the only heavy fields, and the conversation takes 240 characters of each (§4.7).
 
 ### 6.4 HTTP surface & config (#8 §4)
 
@@ -372,7 +528,7 @@ Bodies in the feed are small (subjects and short bodies); ship them. `spec`/`res
 |---|---|
 | `GET /` + `/assets/*` | The pre-built frontend, served from the package's `dist/` |
 | `GET /api/stream` | SSE (§6.2). Honors `Last-Event-ID`. |
-| `GET /api/task/:id` | Lazy detail: `spec`, `result`, **all** `dispatch_contexts` rows ordered by `rowid` (not just the latest — #7 §8), and all messages whose `payload.taskId` is this task, sequence-ordered. |
+| `GET /api/task/:id` | Lazy detail: the **full** `spec` and `result`, and **all** `dispatch_contexts` rows ordered by `rowid` (not just the latest — #7 §8). It no longer carries the task's messages: that list was *the half of the exchange that got written down*, and `snapshot.turns` filtered by `taskId` carries all four sources of it (§4.7). A second copy of a truth is a second copy that can disagree with the first. |
 | `GET /api/snapshot` | *(Spec-level convenience:)* a one-shot `StreamEvent`, same code path. Costs nothing and makes the whole thing `curl`-debuggable. |
 
 **Binding: `127.0.0.1:4269`** by default; `--port` / `--host` override.
@@ -408,38 +564,55 @@ Every dependency here is bundled at build time and **none of them is a runtime d
 ### 7.1 Layout composition: three zones, four panels (#7 §4)
 
 ```
-┌──────────────┬──────────────────────────────────────────────┬─────────────────────┐
-│  RUN RAIL    │  ⚠ GATE STRIP (only when open gates exist)    │   RIGHT DOCK        │
-│  (inferred)  ├──────────────────────────────────────────────┤   one panel, swaps: │
-│              │                                              │                     │
-│  ● run label │              DAG CANVAS                      │   • MESSAGE FEED    │
-│    date·N·k  │           (exactly one run)                  │     (default)       │
-│  ● run label │                                              │     ⇕               │
-│    …         │   ── connected components (elkjs, TB) ──     │   • NODE INSPECTOR  │
-│              │   ── isolated tasks, grid-packed below ──    │     (on selection)  │
-└──────────────┴──────────────────────────────────────────────┴─────────────────────┘
+┌──────────────────┬──────────────────────────────────────────┬─────────────────────┐
+│  ORCHESTRATORS   │  ⚠ GATE STRIP (only when open gates exist)│   RIGHT DOCK        │
+│                  ├──────────────────────────────────────────┤   one panel, swaps: │
+│  ● label         │              DAG CANVAS                   │                     │
+│    term_2ffffb19 │        (exactly one orchestrator)         │   • CONVERSATION    │
+│    N agents · …  │                                           │     (default)       │
+│  ● label ◄ open  │   ┌ Wave 1 ┐      ┌ Wave 2 · after 14h ┐  │     ⇕               │
+│    THE CAST      │   │ ── elkjs, TB ─┤ ── elkjs, TB ──    │  │   • NODE INSPECTOR  │
+│      ◇ orchestr. │   │ ── isolated ──┤ ── isolated ───    │  │     (on selection)  │
+│      A1 agent 1  │   └────────────┘  └────────────────────┘  │                     │
+│      A2 agent 2  │                                           │                     │
+└──────────────────┴──────────────────────────────────────────┴─────────────────────┘
 ```
 
-- **Left rail** — the list of inferred runs (§7.2).
-- **Centre** — the DAG canvas, showing **exactly one run** (§7.5).
-- **Right dock** — **one** panel that *swaps*: the **message feed** (default, run-scoped) ⇄ the **node inspector** (on node selection). Not both stacked — at this node count the canvas deserves the width.
-- **Gate strip** — above the canvas, appearing **only** when the selected run has unresolved gates. Gates *block* an orchestration; they must interrupt, not sit in a tab you forget to open. It is not a standing panel.
-- **Agent roster — cut.** Everything it would show (assignee, failure count) is already on the node badge; the one thing it could uniquely add — which agent is alive *right now* — needs `orca worktree ps`, which is post-MVP (#5). A panel with no unique information.
+- **Left rail** — the list of **orchestrators**, with **the cast nested under the open one** (§7.2).
+- **Centre** — the DAG canvas, showing **exactly one orchestrator**, in **waves** (§7.5).
+- **Right dock** — **one** panel that *swaps*: the **conversation** (default, §7.7) ⇄ the **node inspector** (on node selection, §7.8). Not both stacked — at this node count the canvas deserves the width.
+- **Gate strip** — above the canvas, appearing **only** when the selected orchestrator has unresolved gates. Gates *block* an orchestration; they must interrupt, not sit in a tab you forget to open. It is not a standing panel.
+- **Agent roster — no longer cut, and no longer a roster.** #7 cut it because everything it would show was already on the node badge. What it could not see then is that the *agent* is the pivot the whole screen turns on, and that "which of these nodes are A2's" is a question the badges could never answer without you reading eight hex on every card. So it is not a panel: it is the **cast**, nested under the orchestrator that spawned it, and clicking a member re-scopes the canvas *and* the dock at once.
 
-### 7.2 The run rail (#7 §1, §3)
+### 7.2 The orchestrator rail, and the cast (#7 §1, §3; §4.3, §4.3a)
 
-Header: **"Runs (inferred)"** — the schema has no run id and the UI will not pretend otherwise.
+Header: **"Orchestrators."**
+
+It used to read *"Runs (inferred)"*, and it had to: a row **was** a guess, because the six-hour idle gap cut one terminal's tasks into several unrelated rows. The gap is now a **wave** on the canvas (§4.3), one terminal is one orchestrator, and there is nothing inferred about a column. The admission is retired because the thing it was admitting to is gone.
 
 A row is:
 
 ```
-● <earliest task's title, bold>
-  Jul 11, 20:54 · 8 tasks · 6 done / 1 failed        [green dot if live]
+● <earliest task's title, bold>                       [green dot if live] [⛔ if blocked]
+  term_6ffbd32d-4b14-3a39-4182-a139ace0f47f
+  Jul 11, 20:54 · 2 agents · 8 tasks · 6 done / 1 failed
 ```
 
-with a status dot at the left and the **full terminal handle in a tooltip**. Rows sort by most-recent activity. The synthetic **"Unattributed"** run is a normal row.
+The **handle is on the row**, not only in the tooltip: it is the orchestrator's *name* — the one identity it has anywhere in the schema — and a rail that lists orchestrators and never shows one has not quite said what it is listing. Rows sort by most-recent activity. The synthetic **"Unattributed"** row is a normal row, labelled as what it is.
 
-**On open, the most recently active run is auto-selected** (#7 §1). **Not an all-tasks view** — dumping all 76 tasks at once is exactly what produced the unusable ~50-wide singleton ribbon in #6.
+**The cast nests under the open row** (§4.3a) — nested, and not in a fourth column, because the hierarchy is *real*: an orchestrator **contains** its agents, and a list beside it would state no relationship at all.
+
+```
+THE CAST
+  ◇  The orchestrator     term_6ffbd32d-…            ← not a button: the whole canvas is already its
+  A1 Agent 1              fd18853c        7 tasks
+  A2 Agent 2              a38d266c        seen 12s ago   ← the badge replaces the count only while
+                                                            the agent is *recently* alive (§4.6)
+```
+
+**Selecting an agent is the tool's central gesture.** One click: the canvas dims to that agent's tasks (§7.5), and the conversation fills with that agent's half of the dialogue (§7.7). Two panels, one movement. Clicking it again lets go — the way out is where the way in was. Changing orchestrator drops the selection: an `A1` in one orchestration is a different terminal from the `A1` in the next.
+
+**On open, the most recently active orchestrator is auto-selected** (#7 §1). **Not an all-tasks view** — dumping all 76 tasks at once is exactly what produced the unusable ~50-wide singleton ribbon in #6.
 
 ### 7.3 History: the rail *is* the browser — a badge, not a mode (#7 §5)
 
@@ -493,14 +666,22 @@ Locked by #6 against the live prototype and confirmed by the dev on screen:
 
   Consequently a node carries **no outline at all** unless it is *selected* — which is exactly what makes the selection outline legible (§7.9).
 
-- **Assignee badge** — monospace chip, first 8 hex chars of `dispatch.assigneeHandle`; `✗N` when `failureCount > 0` (the circuit breaker trips at 3). **Quiet** — a tint of the card's own ink, not a solid slab of the foreground: it is a uuid you cannot read and would not act on, and it has no business being the first thing your eye lands on when what you came to the node for was its status.
+- **The agent: a 4px stripe and a monogram** (§4.3a). Two colour systems want this card — what state the work is in, and who did it — and **they cannot both win the same pixel**. So they take different channels: the **status keeps the fill** (those six hexes were signed off on screen, and retuning them to make room is re-approval, not refactoring), and the **agent takes the left stripe and an `A1` badge**, in a palette nothing else on the card was using (four hues, cycled). A canvas legend says it in five words: *fill = status · stripe = agent*.
+
+  This **replaces** the eight-hex assignee chip. That chip was the loudest object on the card, for a value you cannot read, cannot remember and would not act on — and, worse, it was the agent's *only* name, so "the failed node and the open gate are the same agent" was a fact you had to work out by comparing two strings of hex. `A2` is one glance, it is the *same* `A2` in the rail and in the conversation, and the handle rides in the tooltip in full. `✗N` stays, at the end of the row, when `failureCount > 0` (the breaker trips at 3): the monogram is *who*, and that is *how badly it is going*.
+
+  A task with **no agent** wears a faint stripe and no badge. Three true things come out the same way and all three are right: it was never dispatched, its dispatch names no assignee, or the orchestrator worked it itself — and in none of them was an *agent* spawned for the work.
+
+- **Dimming — the central gesture** (§7.2). While an agent is selected, every node that is not theirs fades to ~18%. **Faded, never hidden:** the shape of the orchestration survives the filter, so you can see *where* your agent's work sat inside it, which is the entire difference between focusing a canvas and emptying one. An edge dims unless **both** its ends are lit. (It is a motion state and not a CSS class, and that is not taste: the entrance animation writes `opacity: 1` into the inline style, and an inline style beats a class — a dim expressed as a class is silently overridden and the canvas never fades at all.)
+
+- **Waves — the six-hour rule, made visible** (§4.3). When an orchestrator worked in more than one burst, each is drawn in its own dashed region, captioned *"Wave 2 · after 14h idle"*. **The layout is partitioned, not merely captioned:** elkjs lays a graph out by its *dependencies*, so asking it to lay out both waves at once interleaves their nodes and a border round the result is a border round the whole canvas. Each wave is laid out on its own and the blocks are set down left to right in time order — which is the axis a wave actually means. A dependency crossing from one wave into the next still draws, as a long line between two blocks: that is exactly what "we picked the work up again 14 hours later, from where we stopped" looks like. **One wave ⇒ no region at all** — there is no boundary to point at, and a box round everything is furniture.
 - **Last-seen badge** — `"last seen 12s ago"` from `dispatch.lastHeartbeatAt`, **going stale-amber past a threshold** (#7 §7). *Spec-level default: 10 minutes*, i.e. 2× the 5-minute heartbeat cadence Orca instructs its workers to keep; make it a constant, not a magic number. Shown only while the dispatch is `dispatched`.
 - **Gate marker** — orange `⛔ gate` badge when the task has an open gate (§4.5).
 - **Retry marker** — surface `attemptCount > 1`; it is the only visible sign of a retry, and no task has retried in real data yet, so it must be right the first time it happens.
 
 **Edges:** dep edges from `deps`, arrowheads, **dashed + animated into `dispatched` nodes**. These are a **status affordance, never message flow** (#7 §6) — keeping them is what makes the message-flow rejection safe, because the canvas still moves when work is in flight.
 
-### 7.6 Message flow: feed **yes**, edge animation **rejected** (#7 §6)
+### 7.6 Message flow: node pulse **yes**, edge animation **rejected** (#7 §6)
 
 The map's fog item ("animation along DAG edges") is resolved as **no**, on evidence rather than taste:
 
@@ -508,28 +689,33 @@ The map's fog item ("animation along DAG edges") is resolved as **no**, on evide
 
 So instead:
 
-- **Feed keyed on `messages.sequence`** — the SSE cursor (#8) is also the feed's order.
-- **Node pulse:** a message referencing a task briefly flashes **that node** in its type's colour — `worker_done` **green**, `escalation` **red**, `decision_gate` **amber**. (*Spec-level default: ~1 s flash.*) Heartbeats **never** pulse (§7.7).
-- **Feed ↔ node bidirectional linking** — the real payoff: **click a feed row → its node highlights and centres; select a node → the feed filters to that task's messages.**
+- **Node pulse:** a message that has **just arrived** briefly flashes **the node it names**, in its type's colour — `worker_done` **green**, `escalation` **red**, `decision_gate` **orange** (the gate colour, which is deliberately *not* the amber a `dispatched` node wears: amber is work in flight, and a gate is the exact opposite of that). *Spec-level default: ~1 s.* Heartbeats **never** pulse, and neither does a reconstructed `dispatch` or `result` — those are readings of columns the file has always held, not events that *arrived*, and a node cannot flash at the moment a row was read.
+- **This is the whole remaining job of `StreamEvent.messages`** (§6.3). The conversation is re-derived whole on every push, so nothing on the page has to *remember* a message — except this: which of these rows landed a second ago is the one thing a snapshot, being a photograph, cannot tell you.
+- **Conversation ↔ node bidirectional linking** — the real payoff: **click a turn → its node highlights and centres; select a node → the dock swaps to that task's story, exchange included (§7.8).**
 
-### 7.7 The feed & heartbeats (#7 §7)
+### 7.7 The conversation, and heartbeats (#7 §7; §4.7)
 
-Heartbeats are **65 % of all messages** (302 of 466) and **all of them carry a `taskId`** — rendered straight, the feed becomes a heartbeat ticker with the real events lost in it, and pulsing them would strobe the canvas.
+**The dock's default panel is the conversation, not a feed.** The feed was the `messages` table as a flat list of rows, and it was wrong twice over:
 
-- **Heartbeats are filtered out of the feed by default**, behind a **"show heartbeats"** toggle.
-- Their value is *liveness*, not event-ness: they become the **last-seen badge** (§4.6, §7.5).
-- **Default feed content** is therefore `worker_done` + `decision_gate` + `escalation` + `status` — **164 rows over 4 days, which is actually readable.**
-- A feed row shows: type chip, `from → to` (short handles), subject, relative time; expandable to the body/payload. `read` / `delivered_at` are **not rendered** (#8 §3).
-- A message whose `taskId` does not resolve to a live task (post-reset orphan — §4.2 trap 8) still renders in the feed, simply unlinked.
+1. **It was half a dialogue.** The orchestrator writes **no message** when it dispatches (§4.2, trap 2), so the panel showed agents reporting back to an orchestrator that never said a word to them. The merge (§4.7) is what makes it whole.
+2. **A flat list cannot show who is talking to whom.** A message has a sender and a recipient, and that is the one thing a reader actually wants from a conversation.
+
+- **The orchestrator on one side, its agents on the other.** `out` right, `in` left. That layout *is* the argument: put the two speakers on two sides and "who is talking to whom" is legible without being read.
+- **Oldest first.** A conversation is a *story*; the feed read newest-first because it answered "what just happened", and that question is now the canvas's — a node flashes when it does (§7.6).
+- **A gate and its answer sit together**, threaded on `thread_id` (§4.5). The options show, and the one the answer names is ticked; an unanswered gate says **"waiting for an answer"**, which is why the run is stopped.
+- **Every turn carries its `source`** — the columns it was reconstructed from, in small grey type under the bubble. Four of these turns are not messages, and a bubble that pretended otherwise would be a lie. This is not a footnote; it is the point.
+- **Heartbeats collapse to one line per task** — 302 of 466 messages, all saying "alive". *"18 heartbeats · every ~5 min"*, with the cadence **measured** from two instants and a count rather than read off Orca's documentation. There is no "show heartbeats" toggle any more, and nothing is hidden: the two hundred rows the line replaces all say the same word, and their value — *liveness* — already reached the screen as the last-seen badge (§4.6).
+- **Scope: "This orchestrator" (default) / "All."** An agent selected in the rail narrows it further. "All" is not a convenience: a turn the server could not place belongs to no orchestrator (§4.4, rule 3), and it must still **appear, attached to nobody**, rather than be guessed into somebody's thread.
+- A turn whose `taskId` does not resolve to a live task (post-reset orphan — §4.2, trap 8) still renders, simply unlinked. `read` / `delivered_at` are **not rendered** (#8 §3).
 
 ### 7.8 The node inspector (#7 §8)
 
 Node click swaps the right dock. It is exactly what `GET /api/task/:id` exists for. Top to bottom:
 
 1. **Header** — `task_title`, status chip, **copyable `task_id`**.
-2. **Spec** (the full dispatch prompt) and **result** receipt — lazy-fetched on click.
+2. **Spec** (the full dispatch prompt) and **result** receipt — lazy-fetched on click, and **in full**: the conversation below shows the first 240 characters of each (§6.3), and this is where the rest of them are.
 3. **Dispatch attempt history** — **all** `dispatch_contexts` rows for the task ordered by `rowid`, **not just the latest**: assignee, status, dispatched/completed times, `failure_count`, `last_failure`. This is the only genuinely append-only per-task history in the schema, and the only place a retry / circuit-breaker story ever becomes visible.
-4. **Messages referencing this task** (`payload.taskId`), sequence-ordered.
+4. **The exchange** — this task's slice of the conversation, oldest first (§4.7), rendered with the same turn component the dock uses. It **replaces** the flat list of messages that used to sit here, and the upgrade is the whole feature: that list was *the half of the exchange that got written down*. The prompt the agent was dispatched with, the orchestrator's answer to a gate and the final receipt are not messages at all, so they could never have appeared in it. It comes from the **snapshot**, so a failed `GET /api/task/:id` costs the two bodies and the attempt history and leaves the conversation readable.
 5. **Gate Q&A** — derived from `decision_gate` **messages** (§4.5).
 6. **Deps in / out** as chips that select the neighbour node.
 
@@ -603,13 +789,14 @@ This is the payoff from the `node:sqlite` driver decision (#5 §2): **zero nativ
 The MVP ships when, against a real `orchestration.db`:
 
 1. `npx orca-viz` on a machine with Orca installed discovers the DB, starts on `127.0.0.1:4269`, and opens a browser.
-2. The rail lists the inferred runs, most-recent auto-selected, labelled by first-task title, with a live badge when Orca is running.
-3. The canvas renders that run's DAG — elkjs, TB, status colours, assignee + last-seen badges, dep edges animated into `dispatched` — and handles an **edgeless run** with the ordered grid and its one-liner.
-4. The feed streams over SSE, heartbeat-free by default, and links bidirectionally with the canvas.
-5. Clicking a node opens the inspector with spec, result, **every** dispatch attempt, its messages, and any gate.
-6. A run with an open gate shows the gate strip — **populated from `decision_gate` messages**.
-7. Closing Orca flips the badge to **stale** with an honest "last-known state from …" line, and **everything else keeps working**.
-8. Pointing it at a DB with a different `user_version` does not crash it.
+2. **The rail lists orchestrators** — one row per `created_by_terminal_handle` — most-recent auto-selected, with a live badge when Orca is running, and **the cast of the open one nested under it** (§4.3a).
+3. **Selecting an agent dims the canvas to its tasks and fills the conversation.** This is the tool's central gesture, and it is what the whole screen is for.
+4. The canvas renders that orchestrator's DAG — elkjs, TB, status colours, **agent stripe + monogram**, last-seen badges, dep edges animated into `dispatched` — handles an **edgeless run** with the ordered grid and its one-liner, and draws a **captioned wave region** wherever the terminal went quiet for more than six hours (§4.3).
+5. **The conversation shows both sides** (§4.7): the orchestrator's dispatch prompt, the agent's replies, a gate and the answer threaded on it, and the final result — each turn naming the columns it was reconstructed from, and heartbeats collapsed to one line.
+6. Clicking a node opens the inspector with the full spec, the result, **every** dispatch attempt, **that task's exchange**, and any gate.
+7. A run with an open gate shows the gate strip — **populated from `decision_gate` messages**.
+8. Closing Orca flips the badge to **stale** with an honest "last-known state from …" line, and **everything else keeps working**.
+9. Pointing it at a DB with a different `user_version` does not crash it — and a missing column costs **exactly** the feature that needed it, by name (§5): the cast, the orchestrator's side of the conversation and the waves each have their own entry in the degradation contract.
 
 ---
 

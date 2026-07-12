@@ -1,13 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Liveness, Run, StreamEvent, Task, TaskDetail } from '../shared/types.ts';
 import { type Attribution, buildAttribution } from './attribution.ts';
+import { conversationOf } from './conversation.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
-import { inferRuns } from './runs.ts';
+import { inferRuns, type TaskWithHandle } from './runs.ts';
 import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTaskDetail } from './task-detail.ts';
@@ -67,18 +68,25 @@ export class OrcaDatabase {
    * `curl` of `/api/snapshot` — means the whole feed.
    */
   snapshot(since = 0): StreamEvent {
-    const { liveness, runs, tasks, attribution } = this.derive();
+    const { liveness, entries, runs, tasks, attribution } = this.derive();
 
     // The gates, from the `decision_gate` *messages* that raise them and never from the empty
     // table they nominally belong to (SPEC §4.2, trap 1). They are placed by the same
-    // attribution the feed uses — a gate is a message, and it is placed like one — and then hung
-    // back on the runs they block (`hasOpenGates`) and the nodes they mark.
+    // attribution the conversation uses — a gate is a message, and it is placed like one — and
+    // then hung back on the runs they block (`hasOpenGates`) and the nodes they mark.
     //
     // They are read *here* rather than in `derive()` because they are the snapshot's alone: a
     // task detail already has its gates (they were in the snapshot the client is holding), and
     // making a node click scan `messages` twice over for them would be work done to be discarded.
     const gates = readGates(this.db, this.schema.columns, attribution);
     const gated = attachGates(runs, tasks, gates);
+
+    // **Every** message, once — and then used twice, which is the only way to read them once.
+    //
+    // The conversation is a whole thing or it is a fragment, so it needs the log entire; the
+    // client's cursor wants only what it has not seen. Reading the table twice would answer both
+    // and disagree with itself the moment Orca wrote a row between the two reads.
+    const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
 
     return {
       seq: this.highWaterMark(),
@@ -97,10 +105,18 @@ export class OrcaDatabase {
         runs: gated.runs,
         tasks: gated.tasks,
         gates,
+        // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
+        // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
+        // report out of `tasks.result`. It is the whole of what this screen is for, and the client
+        // does nothing to it but choose a scope.
+        turns: conversationOf({ entries, runs: gated.runs, gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },
-      messages: readMessages(this.db, this.schema.columns, { since, attribution }),
+      // The delta the client's cursor asked for. What it is still *for*, now that the conversation
+      // is not built out of it, is the one thing a snapshot cannot say — what just arrived — which
+      // is what flashes a node (SPEC §7.6).
+      messages: messages.filter((message) => message.sequence > since),
     };
   }
 
@@ -109,18 +125,19 @@ export class OrcaDatabase {
    * dispatch attempt the snapshot folded down to one. Null when no such task exists — a 404,
    * because an id that names nothing is not a task with nothing to say (`task-detail.ts`).
    *
-   * It runs the same derivation a snapshot does, and that is the point rather than the cost: a
-   * message in the inspector is placed by the very rules that placed it in the feed, so the two
-   * panels cannot disagree about which task was being talked about. The derivation is a read of
-   * 76 tasks and no bodies at all; the fetch it serves happens on a click.
+   * It no longer runs the snapshot's derivation. It used to, because it carried the task's
+   * messages and they had to be placed by the same rules the conversation places them by — and that whole
+   * list is now on the wire already, as the task-scoped slice of `snapshot.turns`, with both sides
+   * of the exchange in it rather than one. What is left here is what only a fetch can give: the
+   * two bodies, in full.
    */
   taskDetail(id: string): TaskDetail | null {
-    return readTaskDetail(this.db, this.schema.columns, id, this.derive().attribution);
+    return readTaskDetail(this.db, this.schema.columns, id);
   }
 
   /**
-   * The runs, the tasks, and where a message belongs — everything both routes need, and nothing
-   * either of them would throw away.
+   * The runs, the tasks, and where a message belongs — everything the snapshot needs, and nothing
+   * it would throw away.
    *
    * The one thing worth reading twice is that **liveness is decided before the runs are**. A run
    * is live only if Orca itself is (SPEC §7.3): the task rows still read `dispatched` for an
@@ -128,29 +145,38 @@ export class OrcaDatabase {
    * derived from the rows alone would be this tool's worst lie.
    *
    * Then the attribution (SPEC §4.4), built from what the run inference has just worked out — the
-   * run each task landed in, and every terminal that ever held one. It is the piece the detail
-   * route comes here for: a message in the inspector is placed by the very rules that placed it
-   * in the feed, so the two panels cannot disagree about which task was being talked about.
+   * run each task landed in, and every terminal that ever held one. That handle set is the **cast**
+   * (`cast.ts`) seen from the other side, which is why both are built out of the same attempts:
+   * "who worked for this orchestrator" and "whose messages belong to it" are one question.
    */
   private derive(): {
     liveness: LivenessReport;
+    /** The tasks, plus the handle, the attempts and the body previews the wire does not carry. */
+    entries: TaskWithHandle[];
     runs: Run[];
     tasks: Task[];
     attribution: Attribution;
   } {
     const liveness = readLiveness(this.path, this.probe);
-    const entries = readTasks(this.db, this.schema.columns);
-    const { runs, tasks } = inferRuns(entries, {
+    const read = readTasks(this.db, this.schema.columns);
+    const { runs, tasks } = inferRuns(read, {
       orcaIsLive: liveness.liveness === 'live',
     });
+
+    // A run is not a column, so it only lands on a task once the inference has run — and the
+    // conversation needs it *together with* the spec, the result and the attempts, which are
+    // precisely the things the wire contract keeps off a task. So the entries are re-joined to the
+    // tasks that now know their run, rather than the run being smuggled back onto the entry.
+    const placed = new Map(tasks.map((task) => [task.id, task]));
+    const entries = read.map((entry) => ({ ...entry, task: placed.get(entry.task.id)! }));
 
     const attribution = buildAttribution(
       runs,
       tasks,
-      new Map(entries.map((entry) => [entry.task.id, entry.assignees]))
+      new Map(entries.map((entry) => [entry.task.id, assigneesOf(entry)]))
     );
 
-    return { liveness, runs, tasks, attribution };
+    return { liveness, entries, runs, tasks, attribution };
   }
 
   /**
@@ -195,7 +221,7 @@ export class OrcaDatabase {
    *
    * Guarded on the column really being there, like every other read in this server (#21).
    * An Orca that renamed `sequence` — or dropped `messages`, which introspects to the same
-   * empty column set — costs the feed and the reset detector, and it must not cost the DAG:
+   * empty column set — costs the messages and the reset detector, and it must not cost the DAG:
    * asking SQLite for a column it does not have throws, and that would be a hard-fail this
    * tool has no right to (SPEC §5 — the DAG core is the only one).
    *
@@ -215,6 +241,26 @@ export class OrcaDatabase {
   close(): void {
     this.db.close();
   }
+}
+
+/**
+ * Every terminal that ever held this task, oldest attempt first, deduplicated.
+ *
+ * Not the latest attempt's assignee: a retry is dispatched to a *fresh* worktree with a fresh
+ * handle, so the first worker's handle exists nowhere else — and its messages are exactly the ones
+ * a post-mortem came for. The same list is what `cast.ts` names A1, A2, A3, from the other side of
+ * the same question.
+ */
+function assigneesOf(entry: TaskWithHandle): string[] {
+  const handles: string[] = [];
+
+  for (const attempt of entry.attempts) {
+    if (attempt.assigneeHandle !== '' && !handles.includes(attempt.assigneeHandle)) {
+      handles.push(attempt.assigneeHandle);
+    }
+  }
+
+  return handles;
 }
 
 /** Same connection as everywhere else; the failure is fatal *here*, so it is worded for a user. */

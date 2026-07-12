@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 /**
  * The cursor-follow highlight — a card that knows where you are pointing at it.
  *
- * It is one idea used in four places (a task node, a run row, a feed row, a dispatch attempt), and
+ * It is one idea used in four places (a task node, a rail row, a conversation bubble, a dispatch attempt), and
  * it is here rather than copied into each of them for the reason `theme.ts` exists: four
  * implementations of the same gesture would be four gestures.
  *
