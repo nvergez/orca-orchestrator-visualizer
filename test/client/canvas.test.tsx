@@ -2,7 +2,11 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import { STALE_HEARTBEAT_MS, STATUS_COLORS } from '../../src/client/canvas/graph.ts';
+import {
+  STALE_HEARTBEAT_MS,
+  STATUS_COLORS,
+  UNKNOWN_STATUS_COLOR,
+} from '../../src/client/canvas/theme.ts';
 import type { Dispatch, Meta, StreamEvent, Task } from '../../src/shared/types.ts';
 
 /**
@@ -98,8 +102,8 @@ describe('the task DAG on the canvas', () => {
     ]);
 
     // The one thing that lets you find the failed task by scanning rather than searching.
-    expect(node('task_failed')).toHaveStyle({ background: STATUS_COLORS.failed!.bg });
-    expect(node('task_done')).toHaveStyle({ background: STATUS_COLORS.completed!.bg });
+    expect(node('task_failed')).toHaveStyle({ background: STATUS_COLORS.failed.bg });
+    expect(node('task_done')).toHaveStyle({ background: STATUS_COLORS.completed.bg });
   });
 
   it('keeps completed work on the canvas — a finished run is the whole point of a post-mortem', async () => {
@@ -111,9 +115,10 @@ describe('the task DAG on the canvas', () => {
   it('renders a status it has never heard of in neutral grey, labelled with the raw string', async () => {
     await draw([task({ id: 'task_strange', status: 'quarantined' })]);
 
-    // Never dropped, never crashed on: a new Orca status shows up as *something* (SPEC §5).
+    // Never dropped, never crashed on: a new Orca status shows up as *something* (SPEC §5),
+    // in a colour that claims nothing about it.
     expect(within(node('task_strange')).getByText('quarantined')).toBeVisible();
-    expect(node('task_strange')).toHaveAttribute('data-known-status', 'false');
+    expect(node('task_strange')).toHaveStyle({ background: UNKNOWN_STATUS_COLOR.bg });
   });
 
   it('badges the node with who is working it, and how close they are to the breaker', async () => {
@@ -171,19 +176,59 @@ describe('the task DAG on the canvas', () => {
     expect(within(node('task_quiet')).getByTestId('last-seen')).toHaveAttribute('data-stale', 'true');
   });
 
-  it('shows the last-seen badge only while the task is dispatched', async () => {
-    // On a completed task the last heartbeat is just when the work stopped. An amber badge
-    // there would cry wolf about a run that finished perfectly well.
+  it('shows the last-seen badge only while the dispatch is dispatched', async () => {
     await draw([
+      // On a completed dispatch the last heartbeat is just when the work stopped. An amber
+      // badge there would cry wolf about a run that finished perfectly well.
       task({
         id: 'task_done',
         status: 'completed',
         dispatch: dispatch({ status: 'completed', lastHeartbeatAt: '2026-07-08T12:00:00.000Z' }),
         attemptCount: 1,
       }),
+      // And the task's status is *not* the question the badge answers: a task can still read
+      // `dispatched` while its latest attempt has already tripped the breaker. A "last seen
+      // 3h ago" there would report a hung agent where the schema says a burned attempt.
+      task({
+        id: 'task_burned',
+        status: 'dispatched',
+        dispatch: dispatch({ status: 'circuit_broken', lastHeartbeatAt: '2026-07-08T12:00:00.000Z' }),
+        attemptCount: 3,
+      }),
     ]);
 
     expect(within(node('task_done')).queryByTestId('last-seen')).toBeNull();
+    expect(within(node('task_burned')).queryByTestId('last-seen')).toBeNull();
+  });
+});
+
+/**
+ * Dependency edges are a **status affordance, never message flow** (SPEC §7.6): an edge into
+ * a dispatched task is dashed and animated, which is how the canvas shows where work is
+ * actually in flight.
+ *
+ * The assertions below read React Flow's *rendered output* — the `data-id` and `animated`
+ * class it documents for styling — never its store, its internals or any coordinate. What
+ * an edge is *worth* is that you can see the work moving, and that is a DOM fact.
+ */
+describe('the dependency edges', () => {
+  function edge(id: string): Element {
+    const found = document.querySelector(`.react-flow__edge[data-id="${id}"]`);
+    if (!found) throw new Error(`no edge ${id} on the canvas`);
+    return found;
+  }
+
+  it('animates an edge into work that is in flight, and leaves the settled ones still', async () => {
+    await draw([
+      task({ id: 'task_done', status: 'completed' }),
+      task({ id: 'task_running', status: 'dispatched', deps: ['task_done'], dispatch: dispatch() }),
+      task({ id: 'task_next', status: 'pending', deps: ['task_running'] }),
+    ]);
+
+    expect(edge('task_done->task_running')).toHaveClass('animated');
+    // Nothing is in flight into a pending task, and a canvas that animated everything would
+    // be telling you nothing.
+    expect(edge('task_running->task_next')).not.toHaveClass('animated');
   });
 });
 

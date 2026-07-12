@@ -239,7 +239,7 @@ describe('dispatch attempts', () => {
     expect(byId(tasks, 'task_once').dispatch?.assigneeHandle).toBe(WORKER);
   });
 
-  it('finds the retried task in the live-shape corpus, where exactly one task was retried', async () => {
+  it('counts every attempt of the three re-dispatched tasks in the live-shape corpus', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const { tasks } = (await harness.snapshot()).snapshot;
@@ -247,7 +247,7 @@ describe('dispatch attempts', () => {
 
     // Two tasks burned all three attempts into the circuit breaker; one completed on its
     // second. Retries are invisible everywhere else in the schema — this is the only sign.
-    expect(retried.map((task) => task.attemptCount).sort()).toEqual([2, 3, 3]);
+    expect(retried.map((task) => task.attemptCount).sort((a, b) => a - b)).toEqual([2, 3, 3]);
   });
 });
 

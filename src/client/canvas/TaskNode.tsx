@@ -1,13 +1,6 @@
 import { Handle, type NodeProps, Position, type Node } from '@xyflow/react';
 import type { Task } from '../../shared/types.ts';
-import {
-  colorOf,
-  isKnownStatus,
-  NODE_HEIGHT,
-  NODE_WIDTH,
-  shortHandle,
-  STALE_HEARTBEAT_MS,
-} from './graph.ts';
+import { colorOf, NODE_HEIGHT, NODE_WIDTH, shortHandle, STALE_HEARTBEAT_MS } from './theme.ts';
 
 /**
  * A task, as it appears on the canvas — the node component the dev approved on screen
@@ -28,8 +21,6 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
     <div
       data-testid="task-node"
       data-task={task.id}
-      data-status={task.status}
-      data-known-status={isKnownStatus(task.status)}
       style={{
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
@@ -129,14 +120,18 @@ function Assignee({ task }: { task: Task }) {
 /**
  * "last seen 12s ago" — a working agent told from a hung one (#12, story 7).
  *
- * Only while the task is dispatched: on a completed task the last heartbeat is just the
- * moment the work stopped, and an amber badge there would cry wolf about a finished run.
+ * Shown only while **the dispatch** is `dispatched` (SPEC §7.5) — not while the *task* is.
+ * The two come apart on real rows: a task can still read `dispatched` while its latest
+ * attempt has already `failed` or tripped the breaker, and an amber "last seen 3h ago" there
+ * would report a hung agent where the schema plainly says a burned attempt. On a completed
+ * dispatch the last heartbeat is just the moment the work stopped, and a badge would cry
+ * wolf about a run that finished perfectly well.
  */
 function LastSeen({ task, now }: { task: Task; now: number }) {
-  const lastHeartbeatAt = task.dispatch?.lastHeartbeatAt;
-  if (task.status !== 'dispatched' || !lastHeartbeatAt) return null;
+  const dispatch = task.dispatch;
+  if (dispatch?.status !== 'dispatched' || !dispatch.lastHeartbeatAt) return null;
 
-  const silentFor = now - Date.parse(lastHeartbeatAt);
+  const silentFor = now - Date.parse(dispatch.lastHeartbeatAt);
   if (Number.isNaN(silentFor)) return null;
 
   const stale = silentFor > STALE_HEARTBEAT_MS;

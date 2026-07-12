@@ -10,9 +10,10 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useState } from 'react';
 import type { Task } from '../../shared/types.ts';
-import { buildGraph, colorOf, type Graph, NODE_HEIGHT, NODE_WIDTH } from './graph.ts';
+import { buildGraph, type Edge, type Graph } from './graph.ts';
 import { layoutGraph, type Placement } from './layout.ts';
 import { TaskNode, type TaskFlowNode } from './TaskNode.tsx';
+import { colorOf, NODE_HEIGHT, NODE_WIDTH } from './theme.ts';
 
 /**
  * The DAG.
@@ -55,7 +56,7 @@ export function Canvas({ tasks }: { tasks: Task[] }) {
   const placements = laidOut?.graph === graph ? laidOut.placements : null;
 
   const nodes = useMemo(
-    () => (placements ? toNodes(graph.connected, graph.isolated, placements, showIsolated) : []),
+    () => (placements ? toNodes(graph, placements, showIsolated) : []),
     [graph, placements, showIsolated]
   );
 
@@ -142,15 +143,10 @@ const BUTTON_STYLE = {
  * otherwise flatten the graph into a ribbon nobody can read — but nothing is hidden by
  * *default* (SPEC §7.5), least of all completed work, which is the payload of a post-mortem.
  */
-function toNodes(
-  connected: Task[],
-  isolated: Task[],
-  placements: Placement[],
-  showIsolated: boolean
-): TaskFlowNode[] {
+function toNodes(graph: Graph, placements: Placement[], showIsolated: boolean): TaskFlowNode[] {
   const at = new Map(placements.map((placement) => [placement.id, placement]));
   const now = Date.now();
-  const shown = showIsolated ? [...connected, ...isolated] : connected;
+  const shown = showIsolated ? [...graph.connected, ...graph.isolated] : graph.connected;
 
   return shown.map((task) => ({
     id: task.id,
@@ -169,7 +165,7 @@ function toNodes(
  * actually in flight. It is not a message travelling: messages go between *handles*, and
  * animating one along a dep edge would draw a flow that does not exist.
  */
-function toEdges(edges: { id: string; source: string; target: string }[], tasks: Task[]): FlowEdge[] {
+function toEdges(edges: Edge[], tasks: Task[]): FlowEdge[] {
   const status = new Map(tasks.map((task) => [task.id, task.status]));
 
   return edges.map((edge) => {

@@ -9,8 +9,28 @@
  * testing #12 forbids. This file exists only so that the DOM exists to read.
  */
 
+/**
+ * jsdom has no layout engine, so nothing ever *notices* an element getting a size and a real
+ * `ResizeObserver` would never fire. This one delivers the element it was handed, once —
+ * which is enough for a canvas library to go and measure it (through `offsetWidth` below,
+ * which reads the size the element's own inline style declares). Without the delivery, nodes
+ * stay unmeasured and the edges between them are never drawn at all.
+ */
 class ResizeObserverShim {
-  observe(): void {}
+  private readonly notify: ResizeObserverCallback;
+
+  constructor(notify: ResizeObserverCallback) {
+    this.notify = notify;
+  }
+
+  observe(target: Element): void {
+    // Deferred: the observer is created during render, and calling back into React from
+    // inside its own render pass is a warning at best.
+    queueMicrotask(() => {
+      this.notify([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
+    });
+  }
+
   unobserve(): void {}
   disconnect(): void {}
 }

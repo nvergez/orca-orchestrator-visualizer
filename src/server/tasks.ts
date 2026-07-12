@@ -38,6 +38,19 @@ const TASK_COLUMNS = [
   'completed_at',
 ] as const;
 
+/**
+ * The bodies never cross the SQLite boundary in the first place.
+ *
+ * `spec` and `result` are only ever asked "are you there?" — so SQLite is asked that, and
+ * the 172 KB of agent prompt text a live database holds stays in the file. Reading it into
+ * the process to derive two booleans would be the same waste the snapshot exists to avoid
+ * (SPEC §6.3).
+ */
+const BODY_PRESENCE: Record<string, string> = {
+  spec: "(spec IS NOT NULL AND spec <> '') AS spec",
+  result: "(result IS NOT NULL AND result <> '') AS result",
+};
+
 const DISPATCH_COLUMNS = [
   'id',
   'task_id',
@@ -54,7 +67,7 @@ const DISPATCH_COLUMNS = [
 export function readTasks(db: DatabaseSync, columns: Columns): Task[] {
   const attempts = readAttempts(db, columns);
 
-  return selectPresent(db, 'tasks', columns.tasks, TASK_COLUMNS)
+  return selectPresent(db, 'tasks', columns.tasks, TASK_COLUMNS, BODY_PRESENCE)
     .map((row): Task => {
       const id = text(row.id) ?? '';
       const attempt = attempts.get(id);
@@ -74,8 +87,8 @@ export function readTasks(db: DatabaseSync, columns: Columns): Task[] {
         deps: parseDeps(row.deps),
         createdAt: isoInstant(row.created_at) ?? '',
         completedAt: isoInstant(row.completed_at),
-        hasSpec: hasBody(row.spec),
-        hasResult: hasBody(row.result),
+        hasSpec: isTrue(row.spec),
+        hasResult: isTrue(row.result),
         dispatch: attempt ? toDispatch(attempt.latest) : null,
         attemptCount: attempt?.count ?? 0,
       };
@@ -96,7 +109,7 @@ type Attempts = { latest: Row; count: number };
 function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Attempts> {
   const attempts = new Map<string, Attempts>();
 
-  for (const row of selectPresent(db, 'dispatch_contexts', columns.dispatch_contexts, DISPATCH_COLUMNS, 'rowid')) {
+  for (const row of selectPresent(db, 'dispatch_contexts', columns.dispatch_contexts, DISPATCH_COLUMNS)) {
     const taskId = text(row.task_id);
     if (!taskId) continue; // A dispatch context belonging to no task belongs to no node.
     attempts.set(taskId, { latest: row, count: (attempts.get(taskId)?.count ?? 0) + 1 });
@@ -122,19 +135,24 @@ function toDispatch(row: Row): Dispatch {
   };
 }
 
-/** SELECT only what the file really has: never name a column this Orca never added. */
+/**
+ * SELECT only what the file really has: never name a column this Orca never added.
+ *
+ * Always in `rowid` order, which is insertion order — the order the dispatch fold depends on
+ * for `MAX(rowid)`, and a stable base order for everything else.
+ */
 function selectPresent(
   db: DatabaseSync,
   table: string,
   present: ReadonlySet<string>,
   wanted: readonly string[],
-  orderBy?: string
+  projected: Record<string, string> = {}
 ): Row[] {
   const columns = wanted.filter((column) => present.has(column));
   if (columns.length === 0) return [];
 
-  const order = orderBy ? ` ORDER BY ${orderBy}` : '';
-  return db.prepare(`SELECT ${columns.join(', ')} FROM ${table}${order}`).all() as Row[];
+  const selected = columns.map((column) => projected[column] ?? column);
+  return db.prepare(`SELECT ${selected.join(', ')} FROM ${table} ORDER BY rowid`).all() as Row[];
 }
 
 /**
@@ -166,8 +184,9 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
-function hasBody(value: unknown): boolean {
-  return text(value) !== null;
+/** SQLite has no boolean type: a comparison comes back as the integer 1 or 0. */
+function isTrue(value: unknown): boolean {
+  return value === 1;
 }
 
 /** Creation order — for a task set with no edges at all, the only structure it has. */

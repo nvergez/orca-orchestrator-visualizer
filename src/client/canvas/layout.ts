@@ -1,6 +1,7 @@
 import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Task } from '../../shared/types.ts';
-import { type Edge, type Graph, NODE_HEIGHT, NODE_WIDTH } from './graph.ts';
+import type { Edge, Graph } from './graph.ts';
+import { NODE_HEIGHT, NODE_WIDTH } from './theme.ts';
 
 /**
  * Where the nodes go: elkjs for the DAG, a grid for the singletons (SPEC §7.5).
