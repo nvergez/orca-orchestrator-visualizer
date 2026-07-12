@@ -116,6 +116,36 @@ describe('the live-shape corpus', () => {
     ).toBe(13);
   });
 
+  it('writes gate messages in every shape the live database really holds', () => {
+    // The trap inside the trap (#19). Two writers produce a `decision_gate` message and they
+    // put the question in different places: `orchestration ask` writes {question, options}
+    // (docs/research/db-history.md §2), while a worker escalating by hand with `orchestration
+    // send --type decision_gate` writes {taskId, dispatchId} and puts the question in the
+    // **subject**. Tallied on the live database — 58 gate messages — the payload shapes are
+    // 25 {question,options}, 4 {question}, 22 {taskId,dispatchId}, 7 empty: so **half of them
+    // carry no payload question at all**, and a reader that takes the question from the
+    // payload alone renders a blank question over half the gates it shows.
+    const shapes = rows<{ question: string | null; taskId: string | null }>(
+      `SELECT json_extract(payload, '$.question') AS question, json_extract(payload, '$.taskId') AS taskId
+       FROM messages WHERE type = 'decision_gate'`
+    );
+
+    // The `ask` gates: a question in the payload, and — for 6 of them — a task as well, which
+    // is the shape SPEC §4.5 describes and the one the fixture must go on exercising.
+    expect(shapes.filter((gate) => gate.question !== null && gate.taskId === null)).toHaveLength(32);
+    expect(shapes.filter((gate) => gate.question !== null && gate.taskId !== null)).toHaveLength(6);
+
+    // The hand-written gates: a task, no payload question, and the question in the subject —
+    // where a payload-only reader will never look.
+    expect(shapes.filter((gate) => gate.question === null && gate.taskId !== null)).toHaveLength(15);
+    expect(
+      count(`SELECT COUNT(*) AS n FROM messages
+             WHERE type = 'decision_gate'
+               AND json_extract(payload, '$.question') IS NULL
+               AND subject LIKE 'Question %'`)
+    ).toBe(15);
+  });
+
   it('holds escalations — the loudest rows in the feed, and the ones it paints red', () => {
     // Few, and every one of them naming the task its worker got stuck on. Without them the
     // feed's default content would be three types, not the four the ruling names (SPEC §7.7).

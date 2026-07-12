@@ -98,7 +98,7 @@ function event(tasks: Task[]): StreamEvent {
     seq: 0,
     meta: META,
     // No tasks means no runs to have inferred them into — the empty database, honestly.
-    snapshot: { runs: tasks.length === 0 ? [] : [runOf(tasks)], tasks, coordinatorRuns: [] },
+    snapshot: { runs: tasks.length === 0 ? [] : [runOf(tasks)], tasks, gates: [], coordinatorRuns: [] },
     messages: [],
   };
 }

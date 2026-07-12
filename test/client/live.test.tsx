@@ -67,7 +67,7 @@ function event(over: { meta?: Partial<Meta>; runs?: Run[]; tasks?: Task[]; seq?:
   return {
     seq: over.seq ?? 0,
     meta: { ...META, ...over.meta },
-    snapshot: { runs: over.runs ?? [RUN], tasks: over.tasks ?? [TASK], coordinatorRuns: [] },
+    snapshot: { runs: over.runs ?? [RUN], tasks: over.tasks ?? [TASK], gates: [], coordinatorRuns: [] },
     messages: [],
   };
 }

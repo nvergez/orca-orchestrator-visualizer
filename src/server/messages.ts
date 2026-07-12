@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { taskIdOf } from '../shared/payload.ts';
+import { parsePayload, taskIdOf } from '../shared/payload.ts';
 import type { FeedMessage } from '../shared/types.ts';
 import type { Attribution } from './attribution.ts';
-import { type Columns, type Row, text } from './rows.ts';
+import { type Columns, type Row, selectWhere, text } from './rows.ts';
 import { hasColumn, MESSAGE_SEQUENCE } from './schema.ts';
 import { isoInstant } from './time.ts';
 
@@ -59,15 +59,12 @@ export function readMessages(db: DatabaseSync, columns: Columns, { since, attrib
   if (!hasColumn(columns, MESSAGE_SEQUENCE)) return [];
 
   // Never a column that has not been confirmed (#21) — the same rule `selectPresent` enforces
-  // for whole-table reads, applied by hand because this is the one read that is *not* one.
-  // The cursor is the point of it: `selectPresent` reads a table end to end, which is right for
-  // rows that are overwritten in place and wrong for an append-only log the client has already
-  // seen most of.
-  const present = MESSAGE_COLUMNS.filter((column) => columns.messages.has(column));
-
-  const rows = db
-    .prepare(`SELECT ${present.join(', ')} FROM messages WHERE sequence > ? ORDER BY sequence`)
-    .all(since) as Row[];
+  // for whole-table reads, through the sibling that keeps it for the reads that are *not* one.
+  // The cursor is the point of it: a table read end to end is right for rows that are
+  // overwritten in place, and wrong for an append-only log the client has already seen most of.
+  const rows = selectWhere(db, 'messages', columns.messages, MESSAGE_COLUMNS, 'WHERE sequence > ? ORDER BY sequence', [
+    since,
+  ]);
 
   return rows.map((row) => feedMessage(row, attribution));
 }
@@ -103,16 +100,4 @@ function feedMessage(row: Row, attribution: Attribution): FeedMessage {
     taskId,
     runId,
   };
-}
-
-/** The column is TEXT holding JSON. Whatever does not parse is passed through as it was written. */
-function parsePayload(value: unknown): unknown {
-  const raw = text(value);
-  if (raw === null) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
 }

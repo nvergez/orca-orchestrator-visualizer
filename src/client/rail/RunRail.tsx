@@ -106,6 +106,7 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
         <b style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {run.label}
         </b>
+        <BlockedFlag blocked={run.hasOpenGates} />
       </span>
 
       <span style={{ display: 'block', paddingLeft: 14, fontSize: 11, color: '#71717a' }}>
@@ -113,6 +114,30 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
         {breakdown && <> · {breakdown}</>}
       </span>
     </button>
+  );
+}
+
+/**
+ * ⛔ — this run is sitting on a question nobody has answered (`run.hasOpenGates`, #19).
+ *
+ * The rail's job is to let you pick the run worth opening without opening it (SPEC §7.2), and a
+ * blocked run is the most worth opening there is: it is not slow, it is *stopped*, and it will
+ * stay stopped until someone goes and answers it. The strip interrupts once you are inside the
+ * run; this is what tells you which run to be inside.
+ */
+function BlockedFlag({ blocked }: { blocked: boolean }) {
+  if (!blocked) return null;
+
+  return (
+    <span
+      data-testid="run-gate-marker"
+      role="img"
+      aria-label="blocked on an open decision gate"
+      title="Blocked on an open decision gate"
+      style={{ marginLeft: 'auto', fontSize: 11 }}
+    >
+      ⛔
+    </span>
   );
 }
 

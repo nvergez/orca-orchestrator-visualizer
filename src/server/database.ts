@@ -4,6 +4,7 @@ import { buildAttribution } from './attribution.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
+import { attachGates, readGates } from './gates.ts';
 import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns } from './runs.ts';
@@ -80,6 +81,13 @@ export class OrcaDatabase {
       new Map(entries.map((entry) => [entry.task.id, entry.assignees]))
     );
 
+    // The gates, from the `decision_gate` *messages* that raise them and never from the empty
+    // table they nominally belong to (SPEC §4.2, trap 1). They are placed by the same
+    // attribution the feed uses — a gate is a message, and it is placed like one — and then
+    // hung back on the runs they block (`hasOpenGates`) and the nodes they mark.
+    const gates = readGates(this.db, this.schema.columns, attribution);
+    const gated = attachGates(runs, tasks, gates);
+
     return {
       seq: this.highWaterMark(),
       meta: {
@@ -94,8 +102,9 @@ export class OrcaDatabase {
         resetDetected: detectReset(this.db, this.schema.columns),
       },
       snapshot: {
-        runs,
-        tasks,
+        runs: gated.runs,
+        tasks: gated.tasks,
+        gates,
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },

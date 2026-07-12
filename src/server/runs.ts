@@ -175,8 +175,10 @@ function describeRun(handle: string | null, segment: TaskWithHandle[], orcaIsLiv
     // No history mode: yesterday's run renders through this same code path, and the dot is
     // the whole difference. It takes a running Orca *and* work that could still move.
     live: orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status)),
-    // #19 derives gates from `decision_gate` messages and fills this in. Claiming open gates
-    // we have not looked for would raise a gate strip over an empty question.
+    // False here, and true only once the gates have actually been read: they come from
+    // `decision_gate` *messages* (`gates.ts`), which this module has never seen — it is handed
+    // tasks. `attachGates` flips it for the runs that a gate really is blocking, which is the
+    // one thing that can honestly raise a gate strip over the canvas.
     hasOpenGates: false,
     edgeCount: countEdges(tasks),
   };

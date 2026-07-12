@@ -92,12 +92,44 @@ export type Dispatch = {
   lastHeartbeatAt: string | null;
 };
 
+/**
+ * A decision blocking an orchestration — **derived from `decision_gate` messages, never from
+ * the `decision_gates` table** (SPEC §4.5, and the trap in §4.2 that the whole of #19 is).
+ *
+ * The locked shape of #12 is `{ messageId, question, options, status, resolution }`, and every
+ * one of those fields means exactly what it did. Four things are added to it, and each of them
+ * is a thing the locked rulings *require* and the locked shape had nowhere to put:
+ *
+ * - **`runId` / `taskId`.** "A gate with a `payload.taskId` attaches to that task; one without
+ *   attaches to its **run** and to **no node**." A gate is therefore not always a *task's*
+ *   gate — but the strip has to show it anyway, so it needs a home on the wire that a task
+ *   field cannot give it. They follow `FeedMessage`'s two fields exactly, and for the same
+ *   reason: both are answers to "where does this belong", and both are null when the schema
+ *   does not say (SPEC §4.4, rule 3).
+ * - **`id`.** Identity, for a list the client renders and keys. `messageId` cannot serve: the
+ *   additive `decision_gates` merge produces gates that no message ever carried.
+ * - …which is also why **`messageId` is nullable** — null is precisely "this gate exists only
+ *   as a table row". It is never null for a gate a real `orchestration.ask` created.
+ * - **`createdAt`.** When it was asked. The strip shows the oldest blocker first, and a gate
+ *   with no instant cannot be ordered against one that has one.
+ */
 export type Gate = {
-  messageId: string;
+  /** The gate message's id, or — for a table-only gate — the `decision_gates` row's. */
+  id: string;
+  /** The `decision_gate` message that asked it. Null when only the gate table knows about it. */
+  messageId: string | null;
+  /** The run it blocks. Null when nothing in the schema says which one. */
+  runId: string | null;
+  /** The task it blocks, when it names one that still exists. Null ⇒ it marks no node. */
+  taskId: string | null;
   question: string;
   options: string[];
+  /** Resolved ⇔ a reply threads on the gate message's id. There is no third state (SPEC §4.2, trap 9). */
   status: 'open' | 'resolved';
+  /** The reply's body. Null while the gate is open. */
   resolution: string | null;
+  /** Normalized to ISO, like every other instant on the wire. */
+  createdAt: string;
 };
 
 export type Task = {
@@ -117,6 +149,11 @@ export type Task = {
   dispatch: Dispatch | null;
   /** > 1 ⇒ this task was retried. */
   attemptCount: number;
+  /**
+   * The gate this node wears: the open one it is blocked on, or — when nothing is blocking —
+   * the last one it answered. A task can raise several, and `snapshot.gates` has them all; a
+   * *node* has room for the one that decides its ⛔ marker (SPEC §7.5).
+   */
   gate: Gate | null;
 };
 
@@ -154,7 +191,12 @@ export type StreamEvent = {
   /** The message high-water mark — also the SSE event id. */
   seq: number;
   meta: Meta;
-  snapshot: { runs: Run[]; tasks: Task[]; coordinatorRuns: CoordinatorRun[] };
+  /**
+   * `gates` is the fourth derived collection, beside the runs and the tasks — not a field of
+   * either, because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). The
+   * client filters it by the selected run to raise the strip; it never re-derives it.
+   */
+  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; coordinatorRuns: CoordinatorRun[] };
   /** Only messages after the client's last-seen sequence. */
   messages: FeedMessage[];
 };

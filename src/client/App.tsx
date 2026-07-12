@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import type { FeedMessage, Meta, Run, StreamEvent, Task } from '../shared/types.ts';
+import type { FeedMessage, Gate, Meta, Run, StreamEvent, Task } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { STATUS_COLORS } from './canvas/theme.ts';
 import { useFeed, usePulses } from './feed/feed.ts';
 import { Feed } from './feed/Feed.tsx';
+import { GateStrip } from './gates/GateStrip.tsx';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
@@ -32,13 +33,20 @@ import { useRunSelection } from './rail/selection.ts';
  * - **A node → its story.** The feed filters to that task's messages, end to end. Clicking the
  *   same node again clears the filter, so the way out is where the way in was.
  *
- * The gate strip (#19) and the node inspector (#20) are still to come; the dock the inspector
- * will swap into is this one, and until it does, the feed is what it shows.
+ * **The gate strip is the third thing the shell owns** (#19), and for the same reason: it sits
+ * above the canvas, it belongs to the selected *run*, and clicking it selects a *task* — three
+ * pieces of state that live in three different panels and meet nowhere else. It is here, and
+ * not in the dock, because a question that has stopped your orchestration has to be in your
+ * way; and it is rendered only while that run has an open gate, so it stays a signal.
+ *
+ * The node inspector (#20) is still to come; the dock it will swap into is this one, and until
+ * it does, the feed is what it shows.
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
 const NO_RUNS: Run[] = [];
 const NO_TASKS: Task[] = [];
+const NO_GATES: Gate[] = [];
 
 export function App({ event }: { event: StreamEvent | null }) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
@@ -56,6 +64,18 @@ export function App({ event }: { event: StreamEvent | null }) {
   // client never re-derives the grouping — it only picks which one to draw.
   const tasks = useMemo(
     () => (event && selected ? event.snapshot.tasks.filter((task) => task.runId === selected.id) : NO_TASKS),
+    [event, selected]
+  );
+
+  // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
+  // them. Which question is still open, and which run it blocks, are answers the server has
+  // already worked out from the `decision_gate` messages (`server/gates.ts`); re-deriving
+  // either here would be re-implementing the one trap the ticket exists to avoid.
+  const openGates = useMemo(
+    () =>
+      event && selected
+        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.status === 'open')
+        : NO_GATES,
     [event, selected]
   );
 
@@ -79,6 +99,16 @@ export function App({ event }: { event: StreamEvent | null }) {
   /** A node. Clicking it again is how you let go of it. */
   function selectTask(taskId: string): void {
     setSelectedTaskId((current) => (current === taskId ? null : taskId));
+  }
+
+  /**
+   * A gate, or anything else that names a task rather than toggling one. It *selects* — it does
+   * not toggle: clicking the question a second time meaning "never mind" would be a strange
+   * thing for a blocker to offer, and the way out of a selection is the node, where the way in
+   * to it was.
+   */
+  function showTask(taskId: string): void {
+    setSelectedTaskId(taskId);
   }
 
   if (!event) {
@@ -108,13 +138,23 @@ export function App({ event }: { event: StreamEvent | null }) {
           newRunId={newRunId}
         />
 
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Canvas
-            tasks={tasks}
-            selectedTaskId={selectedTask?.id ?? null}
-            onSelectTask={selectTask}
-            pulses={pulses}
-          />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          {/*
+            Above the canvas, and only while something is blocked (#19). It is not a panel in
+            the dock and it is not a tab: a question that has stopped your orchestration has to
+            be in your way, or it is a question you will not see until you go looking for it —
+            and you go looking for it only once you have already noticed nothing is moving.
+          */}
+          <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
+
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <Canvas
+              tasks={tasks}
+              selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={selectTask}
+              pulses={pulses}
+            />
+          </div>
         </div>
 
         <Feed

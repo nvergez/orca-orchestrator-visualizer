@@ -94,7 +94,9 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
           id,
           // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
           runId: '',
-          // #19 derives gates from `decision_gate` messages, never the empty gates table.
+          // Filled by `attachGates` — from the `decision_gate` *messages* that raise a gate,
+          // never from the `decision_gates` table, which is empty on every real database
+          // (SPEC §4.2, trap 1). Nothing about a task row says it is blocked.
           gate: null,
           parentId: text(row.parent_id),
           title: name ?? shortId(id),

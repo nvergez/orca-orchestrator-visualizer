@@ -1,4 +1,26 @@
 /**
+ * The `payload` column: TEXT holding JSON, with nothing anywhere enforcing that it is either.
+ *
+ * **Whatever does not parse is passed through as it was written.** A payload we cannot read is
+ * still something a person can read, and the feed shows it (SPEC §5, render what parses). Every
+ * reader below is a *shape check* rather than a cast, so a payload that came back as a raw
+ * string simply answers "no" to each of them instead of throwing.
+ *
+ * One implementation, because two would drift — and the row that fell between them would be
+ * exactly the malformed one this is careful about. Both server readers go through it: the feed
+ * (`messages.ts`) and the gates (`gates.ts`), which reads the same column for the question.
+ */
+export function parsePayload(value: unknown): unknown {
+  if (typeof value !== 'string' || value === '') return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
  * `payload.taskId` — the one field of an unvalidated JSON blob that the whole tool leans on.
  *
  * It carries **83% of message → run attribution** (SPEC §4.4) and it is the only thing that
