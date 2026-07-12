@@ -2,7 +2,7 @@
 
 **A read-only web visualizer for Orca's orchestration database.**
 
-Status: **locked.** This is the implementation-ready specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). Every decision below traces to a resolved ticket, cited inline as (#n). An implementation session should be able to build the MVP from this document plus [`HANDOFF.md`](./HANDOFF.md) without further deliberation.
+Status: **MVP locked; post-MVP roadmap approved.** Sections 1–11 are the implementation-ready MVP specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). Section 12 adds the approved quantitative post-mortem roadmap from [#52](https://github.com/nvergez/orca-viz/issues/52) without reopening the MVP's read-only or render-what-parses invariants.
 
 **Reading order for the implementer:** `HANDOFF.md` (verified ground truth about Orca's DB — do not re-derive it) → this document. The three research docs under [`docs/research/`](./docs/research/) are the evidence behind the rulings; consult them when you need the `file:line` citations, not to make decisions.
 
@@ -43,10 +43,10 @@ These are not preferences. Violating any of them is a bug, not a trade-off.
 From the map's Out of scope (#1) and the decision tickets:
 
 - **Any mutation or action** — ruled out during charting to keep the tool trivially safe against a live orchestrator (#1).
-- **A recorder/replay component** capturing history beyond what the DB itself stores (#1). We show what the rows retain; we do not build a shadow event store.
+- **A recorder/replay component** capturing history beyond what the DB itself stores (#1). We show what the rows retain; we do not build a shadow event store. Section 12 approves only a user-triggered archive of one selected run's rows retained at export time; it does not record past or future events.
 - **Upstreaming into Orca** — this is a standalone external tool (#1).
 - **Any dependency on the `orca` CLI or the running app.** Zero CLI spawns in the MVP; the tool works identically post-mortem with Orca closed (#5, #7 §2).
-- **Repo/project grouping in the navigation.** The dev asked for it in #6 and, on evidence, **declined the narrow re-open** in #7 §2: no repo/worktree/path column exists anywhere in the DB (the file is global per machine, mixing every repo), and the only source — `orca terminal list` — resolves just *2 of 12* historical handles because terminal handles are ephemeral and never persisted (#7 coordinator note). Repo grouping is not deliverable for history at any price. **The accepted cost is explicit: you cannot filter runs by repo.**
+- **Authoritative repo/project grouping in the navigation.** The dev asked for it in #6 and, on evidence, **declined the narrow re-open** in #7 §2: no repo/worktree/path column exists anywhere in the DB (the file is global per machine, mixing every repo), and the only authoritative enrichment considered — `orca terminal list` — resolves just *2 of 12* historical handles because terminal handles are ephemeral and never persisted (#7 coordinator note). Section 12 permits only explicitly uncertain, provenance-bearing repo hints from retained task evidence; hints never define run identity or primary navigation.
 - **Agent roster panel** — cut in #7 §4 as a panel with no unique information (assignee and failure count already live on the node badge).
 - **Message-flow animation along DAG edges** — rejected on evidence in #7 §6, not deferred. See §7.6.
 - **A `parent_id` hierarchy toggle** and deep compound layout — real data has zero `parent_id` rows (#7 §9).
@@ -807,3 +807,179 @@ The MVP ships when, against a real `orchestration.db`:
 - The two graduated fog items — **history browsing** and **message-flow animation** — were both resolved in #7 (§5, §6).
 
 Three places in this document fill a mechanical gap the tickets did not need to reach, each marked **spec-level** inline and none of them re-litigating a ruling: the message-attribution tie rule (§4.4), the additive merge of `decision_gates` rows when they exist (§4.5), and the concrete numbers for the heartbeat-stale threshold and pulse duration (§7.5, §7.6). An implementer may change these without reopening a ticket. **Everything else is locked.**
+
+---
+
+## 12. Quantitative post-mortem roadmap (#52)
+
+This section is an approved multi-session roadmap. Its slices are independently shippable and must land through separate implementation tickets; it is not permission to build the roadmap in one branch. The hard invariants in §1.2 continue to govern every slice.
+
+### 12.1 Problem Statement
+
+orca-viz reconstructs a strong qualitative account of an orchestrator run: its DAG, cast, gates, attempts, and conversation. It does not yet turn the retained evidence into answers for the common post-mortem questions: how long the work took, when an agent first showed life, which agent finished sooner, what each task produced, where time accumulated along dependencies, or how one task compares with the rest of retained history.
+
+Those answers already exist in the retained timestamps, messages, task results, and completion payloads. Today they appear as point-in-time ages, similarly titled cards, or truncated JSON. The challenge is to expose the recognized facts without claiming that overwritten state transitions, unknown payload shapes, agent identity, or repository identity are more authoritative than the database allows.
+
+The current transport also re-derives and re-sends all retained tasks and conversation turns whenever the database changes. Because the database is never pruned, quantitative history features must not make that unbounded snapshot larger.
+
+### 12.2 Solution
+
+Add a post-mortem report for each orchestrator run, beginning with three slices: honest duration observations, structured outcome receipts, and a per-agent scoreboard. Then add critical-path analysis, a paginated cross-history dispatch report, a dispatch timeline, evidence hints, and a versioned one-shot run archive with unmistakably offline replay.
+
+Scale history through a cursor-paginated run index and complete on-demand selected-run snapshots. A selected run remains whole: its tasks, attempts, gates, conversation, and archive are never silently time-windowed or truncated. The live stream carries lossless message deltas and enough invalidation identity to refresh affected summaries, report pages, and the selected run without re-shipping the machine's full history.
+
+### 12.3 User Stories
+
+1. As an Orca user reading a completed run, I want to see its elapsed span, so that I know how long the orchestration occupied wall-clock time.
+2. As an Orca user reading a task, I want to see a dispatch duration when both dispatch timestamps exist, so that the clock reflects the worker attempt rather than task setup time.
+3. As an Orca user whose dispatch timestamps are incomplete, I want a clearly labelled task-span fallback, so that a useful approximation is not presented as dispatch time.
+4. As an Orca user looking at an incomplete task, I want elapsed time labelled “so far,” so that a live interval is not mistaken for a completed duration.
+5. As an Orca user, I want unreadable or missing timestamps to render as unknown, so that bad retained evidence never becomes zero or an epoch date.
+6. As an Orca user, I want attempt durations in the inspector, so that retries can be compared without manually subtracting timestamps.
+7. As an Orca user, I want recognized completion files rendered as copyable chips, so that I can inspect the produced work quickly.
+8. As an Orca user, I want recognized PR, issue, ticket, and review URLs rendered as ordinary provider-neutral links, so that GitHub is not assumed to be the only outcome provider.
+9. As an Orca user, I want branch, report path, ticket, and completing-agent fields surfaced when retained, so that useful receipt facts are not buried in JSON.
+10. As an Orca user with a completion shape or field this build does not know, I want the raw value preserved and rendered verbatim, so that schema tolerance applies to outcomes too.
+11. As an Orca user, I want the conversation to summarize recognized outcome receipts while the inspector keeps the full raw evidence, so that the story is readable without losing detail.
+12. As an Orca user comparing agents in one run, I want each cast member's wall-clock span, time to first heartbeat, heartbeat count, non-heartbeat message count, failures, escalations, and outcome links, so that I can compare cost and responsiveness.
+13. As an Orca user reading a one-agent run, I want a compact rollup instead of an empty comparison grid, so that the same metrics remain useful.
+14. As an Orca user, I do not want a synthetic overall winner or composite score, so that agents assigned different work are not ranked by a false equivalence.
+15. As an Orca user, I want a critical path over the selected run's dependency graph, so that I can see where retained duration accumulated.
+16. As an Orca user, I want unknown-duration tasks to remain traversable on the critical path, so that missing timing does not sever real dependencies.
+17. As an Orca user with an edgeless or cyclic dependency graph, I want critical-path analysis omitted with an honest explanation, so that the tool never invents a path.
+18. As an Orca user, I want a cross-history report with one row per retained task, so that I can search and rank work without drawing every task on one canvas.
+19. As an Orca user, I want never-dispatched tasks to remain in that report with an explicit missing-dispatch value, so that stalled work does not disappear.
+20. As an Orca user, I want server-side sorting, filtering, and pagination over retained task history, so that the report stays usable as the database grows.
+21. As an Orca user selecting a history row, I want to open its orchestrator run and task inspector, so that the table is an entry point into the existing qualitative story.
+22. As an Orca user, I want to toggle the selected run's centre between DAG and timeline, so that I can switch between dependency structure and concurrency without changing scope.
+23. As an Orca user, I want one timeline lane per cast member plus an honest unassigned/orchestrator lane, so that dispatch ownership stays visible.
+24. As an Orca user, I want every retained dispatch attempt shown as its own bar and gate, escalation, and completion evidence shown as markers, so that retries and interruptions are not folded away.
+25. As an Orca user, I want a task without enough timing evidence to remain reachable from an untimed list, so that missing timestamps cost placement rather than the task.
+26. As an Orca user, I want an uncertain agent-kind label only when one known kind is supported by retained evidence, so that a useful hint never masquerades as identity.
+27. As an Orca user, I want ambiguous or absent agent-kind evidence to produce no hint, so that guessing is visibly refused.
+28. As an Orca user, I want a best-effort repository hint when retained absolute-path evidence agrees, so that I can recognize likely project context without making it the run key.
+29. As an Orca user, I want every evidence hint marked with `?` and its provenance available, so that I know both the inference and its source.
+30. As an Orca user, I want older run summaries behind explicit “Load older history” pagination, so that the default view is bounded without pretending older runs vanished.
+31. As an Orca user, I want the selected run loaded completely even when it is old, so that scaling never weakens a post-mortem.
+32. As an Orca user, I want to export exactly one selected run at a moment I choose, so that I can preserve or share its retained post-mortem without copying the machine-global database.
+33. As an Orca user opening an archive, I want unmistakable archived/offline wording and no live controls or liveness claim, so that a saved artifact cannot be mistaken for current state.
+34. As an Orca user, I want archives to include full task bodies and attempts plus only messages attributed to that run, so that they are self-contained without including unrelated or unattributed machine history.
+35. As an Orca user, I want archive format mismatches to degrade visibly and safely, so that an older replay reader never crashes or silently mislabels evidence.
+
+### 12.4 Implementation Decisions
+
+#### First milestone: duration + outcomes + scoreboard
+
+The first milestone answers: **who finished first, what did they produce, and at what retained cost?** It lands as three separate slices in this order where dependencies require it: duration observations and outcome receipts can proceed independently; the scoreboard consumes both.
+
+**Duration observations** carry their clock and provenance, not just a number:
+
+- A completed dispatch duration prefers readable `dispatch_contexts.dispatched_at → dispatch_contexts.completed_at` from the same attempt.
+- When dispatch completion is unavailable, a completed task may expose `tasks.created_at → tasks.completed_at` as a visibly labelled **task span**, never as dispatch duration.
+- An incomplete interval may be displayed from its readable start to the client wall clock only as **elapsed so far**. It must stop advancing when the evidence says the interval completed and must not depend on a new SSE push to age.
+- Missing or unreadable endpoints make the observation absent. They never become zero, the Unix epoch, or a negative interval.
+- Run duration is a **run span**, from earliest readable task creation to latest readable task completion/creation. It is wall-clock occupancy, not summed agent time or compute time.
+- Every wire-level duration observation identifies its source clock, start, optional end, and whether it is complete. Derived milliseconds are optional and must agree with those endpoints.
+
+**Outcome receipt readers** are never-throw shape readers over both `tasks.result` and `worker_done.payload`:
+
+- Recognized facts include string file lists, report paths, branches, completing-agent fields, ticket identifiers, and valid `http:`/`https:` PR, issue, ticket, or review URLs, regardless of provider.
+- Recognized fields are additive. The original parsed value or raw string remains available; unknown objects, arrays, scalars, fields, malformed JSON, and conflicting sources render verbatim rather than disappearing.
+- File and path facts are copyable text, not claims that the current machine can open them. URLs are linkified only after normal URL validation.
+- When a task result and worker completion message repeat the same fact, the report may deduplicate the presentation but retains source provenance. Conflicting values remain separately visible.
+- Conversation turns may use a compact recognized summary. The inspector remains the source for complete raw receipts.
+- A missing result column disables receipt enhancement by name through `meta.degraded`; ordinary unknown receipt shapes do not count as schema degradation.
+
+**The per-agent scoreboard** is derived for the selected orchestrator run from all retained attempts and attributed messages:
+
+- Agent elapsed is the wall-clock span from that cast member's first dispatch to its latest retained completion. Incomplete work is “so far”; absent endpoints are unknown.
+- Time to first heartbeat is earliest attributed heartbeat minus first dispatch. No retained heartbeat is unknown, not zero.
+- Heartbeat count counts retained heartbeat rows. Attributed message count excludes heartbeats because they have their own metric.
+- Failure count sums the maximum retained cumulative `failure_count` per task held by the agent; it does not sum cumulative values across attempts and overcount retries.
+- Escalation count counts attributed escalation messages. Outcome links are deduplicated recognized receipt URLs.
+- The grid is sortable by individual facts but has no composite score, no universal winner, and no claim that agents received equivalent work.
+- A single-agent cast renders the same information as a compact rollup rather than a comparison grid.
+
+#### Critical-path analysis
+
+- Compute a duration-weighted longest path only over dependency edges whose endpoints are tasks in the selected run.
+- A task's weight is its completed dispatch duration, then its completed task-span fallback, then zero when duration is unknown. Zero-weight tasks remain traversable.
+- Analysis is reported only for a completed run. In-flight work has no final critical path.
+- Edgeless runs omit the result. Missing dependency nodes cost only those edges. A cycle or otherwise non-DAG retained shape omits the result under an explicit data note; it never throws or breaks the canvas.
+- Equal paths resolve deterministically by retained task order and id.
+- The DAG uses a static highlight. Critical-path analysis does not introduce motion and does not invent unretained status transitions.
+
+#### Cross-history dispatch report
+
+- The report contains one row per retained task across all loaded history, including tasks never dispatched. It is a ranking/search instrument, not an all-tasks canvas.
+- Each row carries the orchestrator run, task title, latest cast member, dispatch time, honest duration observation, attempt count, non-overcounted failure count, current status, and compact outcome summary.
+- Sorting and filtering are server-side and use stable cursor pagination with a deterministic id tie-break. The initial page is bounded; older pages are explicit.
+- Filters may include run, status, cast member, time range, outcome presence, and evidence hints. A missing value remains filterable as missing.
+- Selecting a row loads its complete selected-run snapshot and opens the existing task inspector. The report creates no second task-detail truth.
+
+#### Dispatch timeline
+
+- The centre gains a sibling **DAG / Timeline** toggle scoped to exactly one selected run. The DAG remains the default.
+- The timeline has one lane per cast member and an explicitly named lane for work with no spawned agent or with the orchestrator as assignee.
+- Every retained dispatch attempt is a separate bar because the selected-run snapshot is complete and attempts are already the retry record. Attempts for one task remain visually related.
+- Gate questions, escalation messages, and retained task/attempt completions appear as point markers at their recorded instants. The timeline does not synthesize `pending → ready`, `blocked → ready`, or other unrecorded transitions.
+- A bar without a readable end is open-ended and labelled “so far.” A task without enough time evidence remains in an untimed list and can still open the inspector.
+
+#### Evidence hints
+
+- Supported agent-kind tokens are a small, versioned allowlist. Evidence readers inspect only high-confidence token positions in retained branch/result/spec evidence; they do not search arbitrary prose for casual mentions.
+- A cast member receives a hint only when exactly one supported kind survives across its evidence. The visible form is uncertain, for example `A1 · claude?`, with provenance such as `from branch` available beside it. No evidence or conflicting kinds produces no hint.
+- A repo hint may be derived only when high-confidence absolute-path evidence within a run agrees on one project candidate. It is marked `?` with provenance such as `from task specs`; ambiguity produces no hint.
+- Hints never change orchestrator-run identity, cast identity, dependency attribution, or the primary rail grouping. Repo hints may be displayed and used as optional report filters, but are never authoritative project grouping.
+- The feature remains SQLite-only. It does not call the Orca CLI or require referenced paths to still exist.
+
+#### History scaling and windowing
+
+- Replace the unbounded full-history stream snapshot with a stable cursor-paginated **run index** and a complete on-demand **selected-run snapshot**.
+- The default run-index page contains the 50 most recently active summaries, ordered by activity plus run id. “Load older history” follows an opaque stable cursor; there is no silent date cutoff.
+- A selected-run snapshot contains the run summary, every task and dispatch attempt, all gates, the complete reconstructed conversation, coordinator-run evidence that belongs to it, and schema-degradation metadata. It is never time-windowed or truncated.
+- Cross-history reports paginate independently on the server.
+- SSE retains the lossless message cursor and carries enough affected-run/report identity to invalidate only relevant run summaries, pages, and the selected run. Reconnect uses the same lossless cursor contract and must recover changes that happened while disconnected.
+- Introduce the new read contracts before retiring full-history arrays so a migration can remain green at every step. Unknown or missing columns continue to disable only dependent features by name.
+
+#### One-shot run archive and archived replay
+
+- A run archive is created only by an explicit user action on one selected run. It is a versioned, self-contained artifact containing the selected-run snapshot, full task specs/results and all attempts, and only raw messages attributed to that run at export time.
+- The archive excludes the machine-global database, other runs, unattributed/global messages, future rows, and automatic retention. Export starts no watcher, recorder, or background job.
+- The artifact records its format version, export instant, source schema support, and derivation provenance. It must not include a live database path as meaningful identity.
+- Archived replay opens the artifact without an Orca database and uses the ordinary selected-run presentation wherever possible. It is visibly **archived/offline**, has no liveness badge that implies a process is running, performs no polling, and offers no mutation.
+- A newer artifact version degrades under a visible compatibility warning. An unreadable required core fails with an actionable archive error; optional unknown fields and receipt shapes render verbatim.
+
+### 12.5 Testing Decisions
+
+The primary server seam is observable HTTP behavior: the selected-run contract, paginated run index, paginated cross-history report, and archive export/replay contract. Tests should make requests against live-shaped fixture databases and assert user-visible contract behavior, rather than private query structure.
+
+Pure derivation tests are justified where a small algorithm has a dense error surface:
+
+- dispatch versus task-span provenance, unreadable timestamps, negative intervals, and incomplete “so far” clocks;
+- malformed, unknown, repeated, and conflicting outcome receipt shapes;
+- cumulative failure counts across retry attempts;
+- agent-kind and repo evidence that is unique, absent, or ambiguous;
+- missing dependency endpoints, edgeless graphs, deterministic ties, and dependency cycles.
+
+Client presentation continues to use canned wire events and HTTP responses. It must cover single- versus multi-agent scoreboards, missing values, report pagination and selection, DAG/timeline state, untimed tasks, uncertain hints and provenance, archived/offline wording, and reduced-motion behavior.
+
+Archive tests perform an export-to-replay round trip and assert that full selected-run evidence survives while unrelated and unattributed messages do not. Existing fixture/schema-degradation suites remain the prior art: each missing optional column must cost only the feature that reads it, with a visible degradation reason.
+
+### 12.6 Out of Scope
+
+- Background recording, a shadow event store, automatic snapshots, future-row capture, or recovery of evidence Orca overwrote or deleted.
+- Exporting the machine-global database, unrelated runs, unattributed/global messages, or claiming an archive is a security redaction format.
+- Mutations, retries, gate resolution, or any other control-plane action.
+- An all-history task canvas or a second global DAG.
+- Inventing task-status transitions or attempt boundaries the retained rows do not timestamp.
+- A composite agent performance score, an overall winner, or a claim that different agents received comparable work.
+- Authoritative agent-kind or repository identity, primary repo-grouped navigation, CLI enrichment, or filesystem-dependent historical lookup.
+- Live-supervision attention queues, notifications, kiosk mode, or task-health changes tracked by #51.
+- Fixing reset-shape detection tracked by #50.
+
+### 12.7 Further Notes
+
+The implementation order is nine tracer-bullet sessions: durations; structured outcomes; scoreboard; scalable history transport; cross-history dispatch report; critical path; timeline; evidence hints; archive and replay. Durations and outcomes can begin independently, while the scoreboard requires both. Later slices declare only their genuine data-contract blockers; roadmap order alone is not a blocking edge.
+
+The archive boundary is recorded in ADR 0001. The complete-selected-run history boundary is recorded in ADR 0002. The domain glossary defines retained evidence, post-mortem report, outcome receipt, run archive, archived replay, run index, selected-run snapshot, and evidence hint.
