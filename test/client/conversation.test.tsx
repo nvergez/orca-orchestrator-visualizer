@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { CannedApp } from './canned.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import { GATE_THEME, STATUS_THEME } from '../../src/client/canvas/theme.ts';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
-import type { CastMember, FeedMessage, Meta, Run, StreamEvent, Task, Turn } from '../../src/shared/types.ts';
+import type { CastMember, FeedMessage, Meta, Run, Task, Turn } from '../../src/shared/types.ts';
 
 /**
  * **The conversation** — the panel this whole feature exists for (SPEC §4.7, §7.7).
@@ -128,7 +128,7 @@ function message(over: Partial<FeedMessage> = {}): FeedMessage {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
     affected: { all: true, runIds: [], unplaced: false },
@@ -146,7 +146,7 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
 }
 
 /** An event with a conversation in it, and nothing else to distract from it. */
-function withTurns(rows: Turn[], over: Partial<StreamEvent> = {}): StreamEvent {
+function withTurns(rows: Turn[], over: Partial<CannedEvent> = {}): CannedEvent {
   const base = event(over);
   return { ...base, snapshot: { ...base.snapshot, turns: rows } };
 }

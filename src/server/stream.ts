@@ -27,8 +27,10 @@ import { UNPLACED_KEY } from './digests.ts';
  * behind is fine; one that spins the fan is not.
  *
  * Every push — first connect, tick, reconnect — is one `StreamEvent` built by one call to
- * `snapshot(cursor)`. There is no resync mode, because there is nothing for a resync mode
- * to do differently.
+ * `push(cursor)`. There is no resync mode, because there is nothing for a resync mode to do
+ * differently. What a push *carries* changed with #69: it names what moved (`affected`) and
+ * hands over the lossless message delta, and the history itself lives behind `GET /api/runs`
+ * and `GET /api/run/:id` — the wire no longer re-ships every retained run on every change.
  */
 
 /** All the loop needs from a database — which is what lets a test hand it a counting stub. */
@@ -36,11 +38,12 @@ export type StreamSource = {
   dataVersion(): number;
   liveness(): Liveness;
   /**
-   * One event, plus one fingerprint per run (`history.ts`). The event arrives claiming
+   * One event, plus one fingerprint per run (`digests.ts`). The event arrives claiming
    * `affected.all` — the right claim for a connect — and the loop is what narrows it on a
-   * tick, by diffing the digests against what each subscriber last saw.
+   * tick, by diffing the digests against what each subscriber last saw. Null — a first
+   * connect — means no message delta: a client that has seen nothing has missed nothing.
    */
-  push(since?: number): { event: StreamEvent; digests: Map<string, string> };
+  push(since: number | null): { event: StreamEvent; digests: Map<string, string> };
 };
 
 /** One connected browser, as this module sees it: something to push to, and to close. */
@@ -80,13 +83,13 @@ export class EventStream {
   }
 
   /**
-   * Attach a browser and push it its first event immediately: one full snapshot plus every
-   * message after `since`.
+   * Attach a browser and push it its first event immediately.
    *
-   * On a fresh connect `since` is 0 and that is the whole feed. On a reconnect it is the
-   * `Last-Event-ID` the browser replayed, and the event carries exactly what was missed. It
-   * is the same call either way — *the same call a tick makes* — which is why there is no
-   * resync path here to get wrong.
+   * On a fresh connect `since` is null and the event carries no message delta — a client that
+   * has seen nothing has missed nothing, and history is the paged endpoints' to serve (#69).
+   * On a reconnect it is the `Last-Event-ID` the browser replayed, and the event carries
+   * exactly what was missed. It is the same call either way — *the same call a tick makes* —
+   * which is why there is no resync path here to get wrong.
    *
    * `since` is already a cursor: the HTTP edge (`server.ts`) is what turns an untrusted
    * `Last-Event-ID` header into one, and it is the only place that gets to decide what a
@@ -97,14 +100,18 @@ export class EventStream {
    * *send* can throw too — a browser that hung up while we were reading — and that unregisters
    * again rather than leaving the loop polling SQLite on behalf of a socket that is gone.
    */
-  subscribe(client: StreamClient, since = 0): () => void {
+  subscribe(client: StreamClient, since: number | null = null): () => void {
     const version = this.source.dataVersion();
     const { event, digests } = this.source.push(since);
 
     // The first event says `affected.all` — built that way by the source — because a connect
     // and a reconnect are the two moments the server cannot know what this client missed:
     // task rows are overwritten in place and leave no cursor behind (#69).
-    const subscriber: Subscriber = { client, cursor: since, version, liveness: event.meta.liveness, digests };
+    //
+    // A fresh connect (`since` null) starts its cursor at 0 — `deliver` advances it to the
+    // event's own id before anything else can happen, and 0 filters nothing out of an event
+    // that carries nothing.
+    const subscriber: Subscriber = { client, cursor: since ?? 0, version, liveness: event.meta.liveness, digests };
     this.subscribers.add(subscriber);
     this.start();
 

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { selectTurns } from '../../src/client/conversation/select.ts';
-import { agentOfTurn, type StreamEvent, type Turn } from '../../src/shared/types.ts';
+import { agentOfTurn, type Turn } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor, syntheticId } from '../fixtures/builder.ts';
 import { liveShapeCorpus } from '../fixtures/corpus.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
-import { type Harness, serve } from './harness.ts';
+import { type Harness, serve, type SnapshotView } from './harness.ts';
 
 /**
  * **The conversation — and the trap the whole feature turns on** (SPEC §4.7).
@@ -49,9 +49,11 @@ function at(offsetMs: number): Date {
   return new Date(AT.getTime() + offsetMs);
 }
 
-async function snapshotOf(builder: FixtureBuilder): Promise<StreamEvent> {
+async function snapshotOf(builder: FixtureBuilder): Promise<SnapshotView> {
   harness = await serve(builder.write(tempDbPath()));
-  return harness.snapshot();
+  // `since: 0` keeps the raw message log on the view: the zero-`dispatch`-rows assertion below
+  // must read real rows, not an empty first-connect delta that would pass it vacuously.
+  return harness.snapshot(0);
 }
 
 async function turnsOf(builder: FixtureBuilder): Promise<Turn[]> {
@@ -476,14 +478,20 @@ describe('against the live-shaped corpus', () => {
     expect(snapshot.turns.filter((turn) => turn.kind === 'dispatch').length).toBeGreaterThan(50);
   });
 
-  it('orders the whole conversation by a normalized instant', async () => {
+  it('orders each selected run’s conversation by a normalized instant', async () => {
+    // The unit of order is the selected-run snapshot now (#69): that list — the run's own
+    // turns and the unplaced ones, interleaved — is what a reader is ever shown, so it is what
+    // has to be chronological. Every run of the corpus is read the way the dock would read it.
     const { snapshot } = await snapshotOf(liveShapeCorpus());
 
-    const instants = snapshot.turns.map((turn) => Date.parse(turn.at)).filter((at) => !Number.isNaN(at));
+    for (const run of snapshot.runs) {
+      const view = (await (await harness!.run(run.id)).json()) as { turns: Turn[] };
+      const instants = view.turns.map((turn) => Date.parse(turn.at)).filter((at) => !Number.isNaN(at));
 
-    expect(instants.length).toBe(snapshot.turns.length);
-    for (let i = 1; i < instants.length; i++) {
-      expect(instants[i]!).toBeGreaterThanOrEqual(instants[i - 1]!);
+      expect(instants.length).toBe(view.turns.length);
+      for (let i = 1; i < instants.length; i++) {
+        expect(instants[i]!).toBeGreaterThanOrEqual(instants[i - 1]!);
+      }
     }
   });
 

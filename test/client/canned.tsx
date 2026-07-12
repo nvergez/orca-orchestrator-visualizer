@@ -3,7 +3,17 @@ import { App } from '../../src/client/App.tsx';
 import type { HistoryLoaders } from '../../src/client/history.ts';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import { pageRuns, type RunEvidence, snapshotRun } from '../../src/server/history.ts';
-import type { Dispatch, RunIndexPage, RunSnapshot, StreamEvent } from '../../src/shared/types.ts';
+import type {
+  CoordinatorRun,
+  Dispatch,
+  Gate,
+  Run,
+  RunIndexPage,
+  RunSnapshot,
+  StreamEvent,
+  Task,
+  Turn,
+} from '../../src/shared/types.ts';
 
 /**
  * Seam 2 (#12), after #69: `<App>` driven by a canned world.
@@ -29,7 +39,17 @@ import type { Dispatch, RunIndexPage, RunSnapshot, StreamEvent } from '../../src
  * HTTP in `test/server/history.test.ts`.
  */
 
-export function historyOf(event: StreamEvent, attempts: Record<string, Dispatch[]> = {}): HistoryLoaders {
+/**
+ * A stream event with the canned world riding beside it — the shape the presentation suites
+ * have always written. The wire's `StreamEvent` stopped carrying `snapshot` (#69); here it is
+ * the *fixture*: `historyOf` turns it into the loaders the paged contracts would have served
+ * it through, and `CannedApp` hands `<App>` only the wire part.
+ */
+export type CannedEvent = StreamEvent & {
+  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; turns: Turn[]; coordinatorRuns: CoordinatorRun[] };
+};
+
+export function historyOf(event: CannedEvent, attempts: Record<string, Dispatch[]> = {}): HistoryLoaders {
   const evidence: RunEvidence = {
     runs: event.snapshot.runs,
     tasks: event.snapshot.tasks,
@@ -67,7 +87,7 @@ const NO_HISTORY: HistoryLoaders = {
   },
 };
 
-export function CannedApp({ event, loadTask }: { event: StreamEvent | null; loadTask?: TaskLoader }) {
+export function CannedApp({ event, loadTask }: { event: CannedEvent | null; loadTask?: TaskLoader }) {
   // Rebuilt when the event is: a rerender with a new world is a new database state, and the
   // event's `affected.all` is what makes `useHistory` re-read it — exactly a real reconnect.
   const loadHistory = useMemo(() => (event === null ? NO_HISTORY : historyOf(event)), [event]);

@@ -1,11 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { CannedApp } from './canned.tsx';
-import type { Meta, StreamEvent } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
+import type { Meta } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<CannedApp>` fed a canned `StreamEvent`. `StreamEvent` is already the client's
- * only input, so this is the highest available frontend seam and it costs nothing new — and
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the stream event plus the
+ * loaders' data, so this is the highest available frontend seam and it costs nothing new — and
  * the same fixtures feed both seams, so the contract cannot drift between them.
  *
  * What #14 owes the screen is **honesty about what is being read**. Every case below is a
@@ -24,7 +24,7 @@ const META: Meta = {
   resetDetected: false,
 };
 
-function event(meta: Partial<Meta> = {}): StreamEvent {
+function event(meta: Partial<Meta> = {}): CannedEvent {
   return {
     seq: 0,
     affected: { all: true, runIds: [], unplaced: false },

@@ -1,16 +1,16 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { CannedApp } from './canned.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import {
   STALE_HEARTBEAT_MS,
   STATUS_THEME,
   UNKNOWN_STATUS_THEME,
 } from '../../src/client/canvas/theme.ts';
-import type { CastMember, Dispatch, Meta, Run, StreamEvent, Task, Wave } from '../../src/shared/types.ts';
+import type { CastMember, Dispatch, Meta, Run, Task, Wave } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<CannedApp>` fed a canned `StreamEvent` — the client's only input, and therefore
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the client's only input, and therefore
  * the highest frontend seam there is.
  *
  * What is asserted is the DOM the user reads: the title on the node, the status chip, the
@@ -122,7 +122,7 @@ function runOf(tasks: Task[], over: Partial<Run> = {}): Run {
   };
 }
 
-function event(tasks: Task[], over: Partial<Run> = {}): StreamEvent {
+function event(tasks: Task[], over: Partial<Run> = {}): CannedEvent {
   return {
     seq: 0,
     affected: { all: true, runIds: [], unplaced: false },

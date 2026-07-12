@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CannedApp } from './canned.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type {
   CastMember,
@@ -9,14 +9,13 @@ import type {
   Gate,
   Meta,
   Run,
-  StreamEvent,
   Task,
   TaskDetail,
   Turn,
 } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<CannedApp>` fed a canned `StreamEvent` — and, for this ticket, a canned loader.
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — and, for this ticket, a canned loader.
  *
  * Clicking a task is where the graph stops being a picture and starts being an account of what
  * happened: the spec the agent was handed, the result that came back, **every** dispatch attempt
@@ -82,7 +81,7 @@ function run(over: Partial<Run> = {}): Run {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
     affected: { all: true, runIds: [], unplaced: false },
@@ -495,7 +494,7 @@ describe('the exchange', () => {
     }),
   ];
 
-  function withExchange(): StreamEvent {
+  function withExchange(): CannedEvent {
     return event({
       snapshot: {
         runs: [run({ cast: [AGENT] })],
@@ -569,7 +568,7 @@ describe('the gate Q&A', () => {
     };
   }
 
-  function withGates(gates: Gate[]): StreamEvent {
+  function withGates(gates: Gate[]): CannedEvent {
     return event({
       snapshot: { runs: [run()], tasks: [task({ gate: gates[0] ?? null })], gates, turns: [], coordinatorRuns: [] },
     });
@@ -633,7 +632,7 @@ describe('the dependencies', () => {
   const HERE = task({ id: TASK_ID, deps: ['task_before'] });
   const AFTER = task({ id: 'task_after', title: 'The one after', status: 'pending', deps: [TASK_ID] });
 
-  function chain(): StreamEvent {
+  function chain(): CannedEvent {
     return event({
       snapshot: {
         runs: [run({ edgeCount: 2, taskCount: 3 })],

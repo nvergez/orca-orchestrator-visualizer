@@ -95,7 +95,7 @@ export function createServer({
     }
 
     if (urlPath === '/api/snapshot') {
-      sendSnapshot(database, res);
+      sendSnapshot(database, url.searchParams.get('since'), res);
       return;
     }
 
@@ -179,24 +179,39 @@ function openStream(stream: EventStream, req: IncomingMessage, res: ServerRespon
 }
 
 /**
- * The cursor a reconnecting `EventSource` replays. Absent (a first connect) or nonsense (a
- * hand-rolled client) mean the same thing: start from the top — which is a whole feed, and
- * never an error.
+ * The cursor a reconnecting `EventSource` replays — or null when there is none to honor.
+ *
+ * Absent means a first connect: the client has seen nothing, has therefore missed nothing,
+ * and gets no backfill — history is `GET /api/runs` and `GET /api/run/:id`'s to serve (#69).
+ * Present — **zero included**, because a browser that last saw event id 0 will replay exactly
+ * that — means "everything after this", losslessly. Nonsense from a hand-rolled client is
+ * treated as absent: there is no cursor in it to be lossless *from*.
  */
-function lastEventId(req: IncomingMessage): number {
+function lastEventId(req: IncomingMessage): number | null {
   const header = req.headers['last-event-id'];
   const value = Number(Array.isArray(header) ? header[0] : header);
-  return Number.isInteger(value) && value > 0 ? value : 0;
+  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 /**
  * A snapshot can throw — the database can be deleted, or Orca can checkpoint it out from
  * under a read. A 500 with the reason keeps the process up and tells the user which of
  * those it was; a thrown exception here would take the whole tool down mid-poll.
+ *
+ * `?since=<seq>` is the reconnect view, `curl`-able: the same lossless message delta a
+ * replayed `Last-Event-ID` gets. Explicit and unusable is a 400, never a silent default —
+ * the flag-that-does-not-work rule (SPEC §3) again.
  */
-function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
+function sendSnapshot(database: OrcaDatabase, since: string | null, res: ServerResponse): void {
+  const cursor = since === null ? null : Number(since);
+  if (cursor !== null && (!Number.isInteger(cursor) || cursor < 0)) {
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: `Not a message cursor: ${JSON.stringify(since)}. since must be a non-negative integer.` }));
+    return;
+  }
+
   try {
-    const body = JSON.stringify(database.snapshot());
+    const body = JSON.stringify(database.snapshot(cursor));
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(body);
   } catch (error) {

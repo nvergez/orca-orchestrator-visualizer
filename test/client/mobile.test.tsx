@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CannedApp } from './canned.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import { COPY_ON_HOVER } from '../../src/client/copy.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import { DOCK_CLASS } from '../../src/client/surface.ts';
-import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../../src/shared/types.ts';
+import type { CastMember, Gate, Meta, Run, Task, Turn } from '../../src/shared/types.ts';
 import { FakeMatchMedia, MOBILE_QUERY } from './fake-match-media.ts';
 
 /**
@@ -142,7 +142,7 @@ function gate(over: Partial<Gate> = {}): Gate {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
     affected: { all: true, runIds: [], unplaced: false },
@@ -160,7 +160,7 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
 }
 
 /** The default event with a conversation in it, and nothing else changed. */
-function withTurns(rows: Turn[]): StreamEvent {
+function withTurns(rows: Turn[]): CannedEvent {
   const base = event();
   return { ...base, snapshot: { ...base.snapshot, turns: rows } };
 }

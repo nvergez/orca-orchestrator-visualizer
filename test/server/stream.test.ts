@@ -18,12 +18,14 @@ import { type Harness, serve } from './harness.ts';
  *
  * The three properties, all of them about the wire:
  *
- * 1. A change produces one push, whose `seq` advanced and whose `messages` carry what is
- *    new and nothing older.
+ * 1. A change produces one push, whose `seq` advanced, whose `messages` carry what is new
+ *    and nothing older, and whose `affected` names the runs the change touched (#69) — the
+ *    push is the doorbell; the data is `GET /api/runs` and `GET /api/run/:id`.
  * 2. **No change produces no push at all** — the `data_version` gate. An idle tick is not a
  *    push with an empty delta; it is silence.
- * 3. A reconnect replaying `Last-Event-ID` gets one full snapshot plus only what it missed,
- *    down the same code path as a normal tick.
+ * 3. A reconnect replaying `Last-Event-ID` gets only the messages it missed, plus
+ *    `affected.all` for the graph side — which has no cursor to be lossless from — down the
+ *    same code path as a normal tick.
  */
 
 const AT = new Date('2026-07-08T12:00:00Z');
@@ -64,8 +66,16 @@ describe('GET /api/stream', () => {
     const push = await stream.next();
 
     // Same code path, asserted the only way that means anything: the two are the same event.
+    // (The harness rides the reassembled history on `snapshot` for other suites; the wire
+    // event is the four fields compared here, and nothing else.)
+    const oneShot = await harness.snapshot();
     expect(stream.contentType).toBe('text/event-stream');
-    expect(push.event).toEqual(await harness.snapshot());
+    expect(push.event).toEqual({
+      seq: oneShot.seq,
+      meta: oneShot.meta,
+      affected: oneShot.affected,
+      messages: oneShot.messages,
+    });
 
     // The SSE event id *is* the message high-water mark — which is what makes a browser's
     // automatic `Last-Event-ID` replay land on our cursor without a line of code.
@@ -80,7 +90,10 @@ describe('GET /api/stream', () => {
     const stream = await harness.stream();
     const first = await stream.next();
     expect(first.event.seq).toBe(1);
-    expect(first.event.messages.map((message) => message.subject)).toEqual(['Build it']);
+    // A first connect carries no backfill (#69): this client has seen nothing, so it has
+    // missed nothing — the message already in the file is history, and history is the paged
+    // endpoints' to serve. What it does get is the cursor to be lossless *from*.
+    expect(first.event.messages).toEqual([]);
 
     // Orca gets on with it. Nothing tells the server; it finds out for itself.
     const sequence = writer.message({
@@ -113,9 +126,9 @@ describe('GET /api/stream', () => {
       taskId: 'task_build',
     });
 
-    // The graph, by contrast, comes whole every time — it is overwritten in place, so there
-    // is no delta of it that could be trusted (SPEC §6.3).
-    expect(push.event.snapshot.tasks).toHaveLength(2);
+    // The graph, by contrast, is not on the push at all any more — the push *names* the run
+    // the message landed in, and the selected-run snapshot is where the data lives (#69).
+    expect(push.event.affected).toEqual({ all: false, runIds: [`run_${CODER}`], unplaced: false });
   });
 
   it('pushes a status flip that adds no message — the cursor stands still, the graph moves', async () => {
@@ -133,9 +146,16 @@ describe('GET /api/stream', () => {
 
     const push = await stream.next();
 
-    expect(push.event.snapshot.tasks.find((task) => task.id === 'task_ship')?.status).toBe('dispatched');
+    // The push names the run the flip happened in; refetching it is how the client sees the
+    // new status — and the refetched selected run really does carry it.
+    expect(push.event.affected.runIds).toEqual([`run_${CODER}`]);
     expect(push.event.seq).toBe(1);
     expect(push.event.messages).toEqual([]);
+
+    const view = (await (await harness.run(`run_${CODER}`)).json()) as {
+      tasks: { id: string; status: string }[];
+    };
+    expect(view.tasks.find((task) => task.id === 'task_ship')?.status).toBe('dispatched');
   });
 
   it('pushes nothing at all while the database does not change', async () => {
@@ -163,9 +183,10 @@ describe('GET /api/stream', () => {
     const stream = await harness.stream(1);
     const push = await stream.next();
 
-    // One full snapshot — the graph is never a delta — plus only the messages after sequence 1.
-    expect(push.event.snapshot.tasks).toHaveLength(2);
-    expect(push.event.snapshot.runs).toHaveLength(1);
+    // Only the messages after sequence 1 — lossless, and never the whole feed. The graph side
+    // has no cursor of its own, so it is claimed whole: `all` tells the client to refetch what
+    // it displays, which is bounded by the screen and not by history (#69).
+    expect(push.event.affected.all).toBe(true);
     expect(push.event.messages.map((message) => message.sequence)).toEqual([2, 3]);
     expect(push.event.messages.map((message) => message.subject)).toEqual(['Halfway', 'Built it']);
 
@@ -229,9 +250,14 @@ describe('GET /api/stream', () => {
     writer.setTaskStatus('task_ship', 'dispatched');
     const push = await stream.next();
 
-    expect(push.event.snapshot.tasks.find((task) => task.id === 'task_ship')?.status).toBe('dispatched');
+    expect(push.event.affected.runIds).toEqual([`run_${CODER}`]);
     expect(push.event.seq).toBe(0);
     expect(push.event.messages).toEqual([]);
+
+    const view = (await (await harness.run(`run_${CODER}`)).json()) as {
+      tasks: { id: string; status: string }[];
+    };
+    expect(view.tasks.find((task) => task.id === 'task_ship')?.status).toBe('dispatched');
   });
 
   it('flips the badge to stale when Orca is closed, though the database never changes again', async () => {
@@ -255,10 +281,10 @@ describe('GET /api/stream', () => {
 
     expect(push.event.meta.liveness).toBe('stale');
     expect(push.event.meta.orcaPid).toBe(4242);
-    // ...and everything else keeps working: the run, its DAG, and the feed are all still there.
-    expect(push.event.snapshot.tasks).toHaveLength(2);
     expect(push.event.messages).toEqual([]);
     expect(push.event.seq).toBe(1);
+    // ...and everything else keeps working: the run and its DAG are still there to fetch.
+    expect((await harness.snapshot()).snapshot.tasks).toHaveLength(2);
   });
 });
 
@@ -308,7 +334,6 @@ class CountingSource implements StreamSource {
         resetDetected: false,
       },
       affected: { all: true, runIds: [], unplaced: false },
-      snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
       messages: [],
     } satisfies StreamEvent;
     return { event, digests: new Map() };

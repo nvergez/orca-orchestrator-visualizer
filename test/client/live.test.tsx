@@ -131,7 +131,6 @@ function event(over: { meta?: Partial<Meta>; affected?: Partial<Affected>; seq?:
     seq: over.seq ?? 0,
     affected: { all: true, runIds: [], unplaced: false, ...over.affected },
     meta: { ...META, ...over.meta },
-    snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
   };
 }

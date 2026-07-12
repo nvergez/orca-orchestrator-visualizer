@@ -1,11 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { CannedApp } from './canned.tsx';
-import type { CastMember, CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
+import type { CastMember, CoordinatorRun, Meta, Run, Task } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<CannedApp>` fed a canned `StreamEvent` — the client's only input.
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the client's only input.
  *
  * **The rail lists orchestrators, and the cast is the pivot.** 76 tasks in one graph is unreadable;
  * the rail is what makes the canvas mean something. It used to be headed "Runs (inferred)" and it
@@ -72,7 +72,7 @@ function task(over: Partial<Task> = {}): Task {
   };
 }
 
-function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): StreamEvent {
+function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): CannedEvent {
   return { seq: 0, affected: { all: true, runIds: [], unplaced: false }, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
 }
 

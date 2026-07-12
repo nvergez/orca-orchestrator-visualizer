@@ -67,49 +67,37 @@ export class OrcaDatabase {
   /**
    * The `StreamEvent` behind `GET /api/snapshot` and every SSE push — first connect, normal
    * tick and reconnect alike. One event type, one code path, no resync mode (SPEC §6.2).
-   *
-   * The order here is the one thing worth reading twice: **liveness is decided before the
-   * runs are**. A run is live only if Orca itself is (SPEC §7.3) — the task rows still read
-   * `dispatched` for an orchestration that was killed mid-flight, and nothing will ever
-   * rewrite them, so a green dot derived from the rows alone would be this tool's worst lie.
-   *
-   * `since` is the client's last-seen `messages.sequence`. The graph comes whole every time
-   * (it is overwritten in place, so a delta would have to be reconstructed and could drift);
-   * the messages come as the delta after that cursor, because they are append-only and a
-   * delta is therefore both cheap and *correct* (SPEC §6.3). 0 — a first connect, or a
-   * `curl` of `/api/snapshot` — means the whole feed.
    */
-  snapshot(since = 0): StreamEvent {
+  snapshot(since: number | null = null): StreamEvent {
     return this.push(since).event;
   }
 
   /**
    * One event, plus one fingerprint per run over the evidence its selected-run snapshot serves
-   * (`history.ts`). The stream diffs two of those maps to fill `affected` on a tick — which is
-   * how a push *names* the runs a change touched instead of carrying the whole of history.
+   * (`digests.ts`). The stream diffs two of those maps to fill `affected` on a tick — which is
+   * how a push *names* the runs a change touched instead of carrying the whole of history (#69).
    *
    * The event's own `affected` says `all`: this method backs the first connect, the reconnect
    * and `/api/snapshot`, and for all three the honest claim is "your whole view may be stale".
    * Only the poll loop knows a client's previous view, so only it narrows the claim (`stream.ts`).
+   *
+   * `since` is the client's last-seen `messages.sequence`, and the messages are the lossless
+   * delta after it — append-only rows, so a delta is both cheap and *correct* (SPEC §6.3).
+   * **Null — a first connect — means no delta at all**: a client that has seen nothing has
+   * missed nothing, and the history behind the cursor is the paged endpoints' to serve, not
+   * this event's to backfill. (A replayed `Last-Event-ID: 0` still means "everything after 0":
+   * losslessness is owed to a cursor, however small.)
    */
-  push(since = 0): { event: StreamEvent; digests: Map<string, string> } {
+  push(since: number | null = null): { event: StreamEvent; digests: Map<string, string> } {
     const { liveness, evidence, messages } = this.readEvidence();
 
     const event: StreamEvent = {
       seq: this.highWaterMark(),
       meta: this.metaOf(liveness),
       affected: { all: true, runIds: [], unplaced: false },
-      snapshot: {
-        runs: evidence.runs,
-        tasks: evidence.tasks,
-        gates: evidence.gates,
-        turns: evidence.turns,
-        coordinatorRuns: evidence.coordinatorRuns,
-      },
-      // The delta the client's cursor asked for. What it is still *for*, now that the conversation
-      // is not built out of it, is the one thing a snapshot cannot say — what just arrived — which
-      // is what flashes a node (SPEC §7.6).
-      messages: messages.filter((message) => message.sequence > since),
+      // What the delta is still *for* is the one thing a snapshot cannot say — what just
+      // arrived — which is what flashes a node (SPEC §7.6).
+      messages: since === null ? [] : messages.filter((message) => message.sequence > since),
     };
 
     return { event, digests: digestRuns(evidence) };

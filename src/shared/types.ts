@@ -307,14 +307,13 @@ export type Turn = {
   source: string;
 
   /*
-   * Everything below is **optional on the wire, and absent when it is the default** — which is not
-   * micro-optimisation, it is the difference between a snapshot this tool can re-send every five
-   * seconds and one it cannot.
+   * Everything below is **optional on the wire, and absent when it is the default**.
    *
-   * The snapshot is pushed **whole on every tick** (SPEC §6.3), and a conversation is ~360 turns on
-   * a live database. `"options":[],"answer":null,"beatCount":0,"truncated":false,"endedAt":null` is
-   * 75 bytes of nothing, and 75 bytes of nothing on 360 turns, five seconds apart, is 27 KB of
-   * nothing. So a field that has nothing to say does not say it.
+   * A selected run's conversation is refetched whole every time a push names the run (#69) —
+   * seconds apart, on a live orchestration — and it is ~360 turns on a live database.
+   * `"options":[],"answer":null,"beatCount":0,"truncated":false,"endedAt":null` is 75 bytes of
+   * nothing, and 75 bytes of nothing on 360 turns, refetch after refetch, is 27 KB of nothing.
+   * So a field that has nothing to say does not say it.
    */
 
   /** True ⇒ `body` is the first `BODY_PREVIEW_CHARS` of a longer one. The inspector has the rest. */
@@ -334,9 +333,9 @@ export type Turn = {
  * than an orchestrator is a filter on.
  *
  * Derived rather than carried. It is always one of the two handles already on the turn, so putting
- * it on the wire would be a third copy of a uuid in an object that is re-sent every five seconds —
- * 21 KB per push, to save one line of arithmetic. It lives here, beside the type, so the client and
- * the server cannot answer it differently.
+ * it on the wire would be a third copy of a uuid in an object a live run refetches seconds apart —
+ * 21 KB per fetch, to save one line of arithmetic. It lives here, beside the type, so the client
+ * and the server cannot answer it differently.
  */
 export function agentOfTurn(turn: Turn): string | null {
   const handle = turn.direction === 'in' ? turn.fromHandle : turn.toHandle;
@@ -450,12 +449,13 @@ export type RunSnapshot = {
  *   only genuinely append-only per-task history in this schema, and the retry and
  *   circuit-breaker story is not visible anywhere else (SPEC §7.5, §7.8).
  *
- * What is *not* here is as considered: the gate Q&A, the dependencies **and now the messages** are
- * already on the wire. `snapshot.gates` carries every gate — answered ones included — with the
- * task it blocks (#19), `Task.deps` carries the edges, and `snapshot.turns` carries this task's
- * whole exchange, *both sides of it*, filtered by `taskId`. Re-sending any of them would be a
- * second copy that could disagree with the first — which is why the flat `messages` list that
- * used to live here is gone: it was the weaker half of a conversation the wire now carries whole.
+ * What is *not* here is as considered: the gate Q&A, the dependencies **and now the messages**
+ * are already in the selected-run snapshot. Its `gates` carry every gate — answered ones
+ * included — with the task it blocks (#19), `Task.deps` carries the edges, and its `turns`
+ * carry this task's whole exchange, *both sides of it*, filtered by `taskId`. Re-sending any of
+ * them would be a second copy that could disagree with the first — which is why the flat
+ * `messages` list that used to live here is gone: it was the weaker half of a conversation the
+ * wire now carries whole.
  */
 export type TaskDetail = {
   id: string;
@@ -470,6 +470,12 @@ export type TaskDetail = {
 /**
  * One event type: first connect, normal tick and SSE reconnect all have this shape, so
  * there is no separate resync path to get wrong (SPEC §6.2).
+ *
+ * It used to carry the whole of retained history — every run, task, gate and turn, re-sent on
+ * every push — and the database is never pruned, so that payload grew without bound (§12.1).
+ * The event is now the **doorbell**: `affected` names what moved, and the data lives behind
+ * `GET /api/runs` (the paged index) and `GET /api/run/:id` (one run, complete), fetched for
+ * what is actually on screen (#69, ADR 0002).
  */
 export type StreamEvent = {
   /** The message high-water mark — also the SSE event id. */
@@ -477,23 +483,18 @@ export type StreamEvent = {
   meta: Meta;
   /**
    * What this push means the client should fetch again (#69): run ids on a tick, `all` on a
-   * connect or reconnect. The stream stopped being the data and became the *doorbell* — the
-   * data is `GET /api/runs` and `GET /api/run/:id`, fetched for what is actually on screen.
+   * connect or reconnect.
    */
   affected: Affected;
   /**
-   * `gates` is a derived collection beside the runs and the tasks — not a field of either,
-   * because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). `turns` is the
-   * same, and for the same reason: a turn belongs to a run, and it is scoped down to an agent or
-   * a task by the panel that shows it. The client filters both; it re-derives neither.
-   */
-  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; turns: Turn[]; coordinatorRuns: CoordinatorRun[] };
-  /**
-   * Only messages after the client's last-seen sequence.
+   * The messages that arrived after the client's last-seen sequence — the lossless delta a
+   * reconnect replays via `Last-Event-ID`, and empty on a *first* connect, where nothing was
+   * missed and the history behind it is the endpoints' to serve.
    *
-   * The **conversation** is `snapshot.turns`, not this: a feed of messages is exactly the half of
-   * the dialogue that got written down (SPEC §4.7). What this is still for is the one thing a
-   * snapshot cannot say — *what just arrived* — which is what flashes a node (SPEC §7.6).
+   * The **conversation** is the selected-run snapshot's `turns`, not this: a feed of messages
+   * is exactly the half of the dialogue that got written down (SPEC §4.7). What this is for is
+   * the one thing a snapshot cannot say — *what just arrived* — which is what flashes a node
+   * (SPEC §7.6).
    */
   messages: FeedMessage[];
 };

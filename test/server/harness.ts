@@ -1,7 +1,16 @@
 import type { AddressInfo } from 'node:net';
 import { type DatabaseDeps, OrcaDatabase } from '../../src/server/database.ts';
 import { createServer } from '../../src/server/server.ts';
-import type { StreamEvent } from '../../src/shared/types.ts';
+import type {
+  CoordinatorRun,
+  Gate,
+  Run,
+  RunIndexPage,
+  RunSnapshot,
+  StreamEvent,
+  Task,
+  Turn,
+} from '../../src/shared/types.ts';
 import { openStream, type SseStream } from './sse.ts';
 
 /**
@@ -9,10 +18,41 @@ import { openStream, type SseStream } from './sse.ts';
  * driver mock, no test-only route — a test sees exactly what `curl` sees.
  */
 
+/**
+ * The whole of retained history, reassembled from the paged contracts of #69 — every index
+ * page walked, every run's selected-run snapshot fetched, and the pieces merged back into the
+ * shape the wire used to carry.
+ *
+ * The derivation suites (runs, tasks, gates, the conversation) assert against this, and that
+ * is deliberate: the wire stopped shipping full history, but "what does the server derive from
+ * this database" is still the question those suites ask — so the harness asks it the only way
+ * a client now can, through `GET /api/runs` and `GET /api/run/:id`. Nothing here peeks behind
+ * the HTTP edge.
+ *
+ * Order within a run is the server's (creation order for tasks, chronology for turns); runs
+ * are merged in index order, and the turns nothing places — which every selected-run snapshot
+ * carries — appear once, at the end.
+ */
+export type MergedHistory = {
+  runs: Run[];
+  tasks: Task[];
+  gates: Gate[];
+  turns: Turn[];
+  coordinatorRuns: CoordinatorRun[];
+};
+
+/** A stream event, with the reassembled history riding beside it for assertions. */
+export type SnapshotView = StreamEvent & { snapshot: MergedHistory };
+
 export type Harness = {
   origin: string;
   dbPath: string;
-  snapshot(): Promise<StreamEvent>;
+  /**
+   * `GET /api/snapshot` — plus the reassembled `snapshot` (see `MergedHistory`). `since`
+   * mirrors a replayed `Last-Event-ID`: omitted is a first connect (no message backfill);
+   * a number is the lossless delta after that cursor.
+   */
+  snapshot(since?: number): Promise<SnapshotView>;
   /** An SSE client on `/api/stream`, optionally resuming from a `Last-Event-ID` (#17). */
   stream(lastEventId?: number): Promise<SseStream>;
   /**
@@ -46,14 +86,54 @@ export async function serve(dbPath: string, { pollIntervalMs = 20, ...deps }: Se
 
   const streams: SseStream[] = [];
 
+  async function getJson<T>(path: string): Promise<T> {
+    const response = await fetch(`${origin}${path}`);
+    if (!response.ok) throw new Error(`GET ${path} → ${response.status}`);
+    return (await response.json()) as T;
+  }
+
+  /** Walk the paged contracts and merge — see `MergedHistory`. */
+  async function history(): Promise<MergedHistory> {
+    const runs: Run[] = [];
+    let coordinatorRuns: CoordinatorRun[] | undefined;
+    let cursor: string | null = null;
+
+    do {
+      const query: string = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+      const page = await getJson<RunIndexPage>(`/api/runs${query}`);
+      runs.push(...page.runs);
+      coordinatorRuns = page.coordinatorRuns;
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+
+    const tasks: Task[] = [];
+    const gates: Gate[] = [];
+    const turns: Turn[] = [];
+    // Every selected-run snapshot carries the turns nothing places (SPEC §4.4, rule 3), so the
+    // merge would otherwise repeat them once per run.
+    const unplaced = new Map<string, Turn>();
+
+    for (const run of runs) {
+      const snapshot = await getJson<RunSnapshot>(`/api/run/${encodeURIComponent(run.id)}`);
+      tasks.push(...snapshot.tasks);
+      gates.push(...snapshot.gates);
+      for (const turn of snapshot.turns) {
+        if (turn.runId === run.id) turns.push(turn);
+        else unplaced.set(turn.id, turn);
+      }
+    }
+
+    return { runs, tasks, gates, turns: [...turns, ...unplaced.values()], coordinatorRuns: coordinatorRuns ?? [] };
+  }
+
   return {
     origin,
     dbPath,
 
-    async snapshot() {
-      const response = await fetch(`${origin}/api/snapshot`);
-      if (!response.ok) throw new Error(`GET /api/snapshot → ${response.status}`);
-      return (await response.json()) as StreamEvent;
+    async snapshot(since) {
+      const query = since === undefined ? '' : `?since=${since}`;
+      const event = await getJson<StreamEvent>(`/api/snapshot${query}`);
+      return { ...event, snapshot: await history() };
     },
 
     async stream(lastEventId) {

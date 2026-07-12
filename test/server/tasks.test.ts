@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Task } from '../../src/shared/types.ts';
-import { FixtureBuilder, handleFor, syntheticId } from '../fixtures/builder.ts';
+import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { liveShapeCorpus } from '../fixtures/corpus.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
@@ -89,23 +89,20 @@ describe('the tasks in a snapshot', () => {
     expect(JSON.stringify(tasks)).not.toContain('the receipt');
   });
 
-  it('keeps the re-sent snapshot bounded — the bodies stay in the file (SPEC §6.3)', async () => {
+  it('keeps the payloads bounded — the bodies stay in the file (SPEC §6.3)', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const event = await harness.snapshot();
 
-    // **A budget on the half of the payload that is re-sent on every push**, and a feature that
-    // grows it has to come here and say so. Two have.
+    // **A budget on what a fetch of history costs**, and a feature that grows it has to come
+    // here and say so. The wire stopped re-sending this on every push (#69) — the tick carries
+    // `affected` and the message delta, and the graph travels one selected run at a time — but
+    // the bound still matters: it is what a client pays to read the *whole* corpus back
+    // through the paged contracts, and `spec` text is still the thing that must not be in it.
     //
-    // The graph is ~74 KB of tasks, runs and the 53 gates. The conversation (SPEC §4.7) is the rest:
-    // ~360 turns, and it is what this whole screen exists to show. It is bounded by the *row count*
-    // of a database that holds 76 tasks and 466 messages — which is why it is allowed to be here at
-    // all, and the 172 KB of `spec` text is not: that grows with how much a person typed at their
-    // agents, without limit, and it is exactly what the omission in §6.3 was defending against.
-    //
-    // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec and
-    // says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let alone
-    // the wire. The bodies are one click away, in full, on `GET /api/task/:id`.
+    // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec
+    // and says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let
+    // alone the wire. The bodies are one click away, in full, on `GET /api/task/:id`.
     expect(event.snapshot.tasks).toHaveLength(76);
     expect(event.snapshot.gates).toHaveLength(53);
     expect(event.snapshot.turns.length).toBeGreaterThan(300);
@@ -316,6 +313,15 @@ describe('the live-shape corpus', () => {
     expect(tasks.filter((task) => task.deps.length > 0)).not.toHaveLength(0);
     // ~50 of 76 are fully isolated singletons — the canvas has to own that, not fight it.
     expect(tasks.filter((task) => task.dispatch !== null).length).toBeGreaterThan(0);
-    expect(syntheticId('task', 'run-0-task-0')).toBe(tasks[0]!.id); // ordered by created_at
+
+    // Creation order, *within each run* — the only structure an edgeless run has, and the
+    // order its canvas grid draws (SPEC §7.5). The merged view groups runs by recency (#69),
+    // so the old whole-file read order is nobody's to promise any more; a run's own is.
+    for (const runId of new Set(tasks.map((task) => task.runId))) {
+      const created = tasks.filter((task) => task.runId === runId).map((task) => Date.parse(task.createdAt));
+      for (let i = 1; i < created.length; i++) {
+        expect(created[i]!).toBeGreaterThanOrEqual(created[i - 1]!);
+      }
+    }
   });
 });

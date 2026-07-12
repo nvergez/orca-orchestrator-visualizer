@@ -1,9 +1,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { CannedApp } from './canned.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
-import type { Gate, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { Gate, Meta, Run, Task } from '../../src/shared/types.ts';
 
 /**
  * Clicking a gate selects the task it blocks, which swaps the dock to the inspector (#20) — and
@@ -13,7 +13,7 @@ import type { Gate, Meta, Run, StreamEvent, Task } from '../../src/shared/types.
 const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
 
 /**
- * Seam 2 (#12): `<CannedApp>` fed a canned `StreamEvent` — the client's only input, and the same
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the client's only input, and the same
  * event a seam-1 server emits.
  *
  * The gate strip is the one panel in this tool that is allowed to *interrupt*. It appears above
@@ -96,7 +96,7 @@ function run(over: Partial<Run> = {}): Run {
  * the run it blocks says `hasOpenGates`, and the node it marks carries it. A fixture that set
  * only one of the three would be testing an event the server cannot produce.
  */
-function event(gates: Gate[], tasks: Task[] = [task()], runs: Run[] = [run()]): StreamEvent {
+function event(gates: Gate[], tasks: Task[] = [task()], runs: Run[] = [run()]): CannedEvent {
   const open = new Set(gates.filter((each) => each.status === 'open').map((each) => each.runId));
 
   return {
