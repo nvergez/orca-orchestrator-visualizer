@@ -95,7 +95,7 @@ describe('the tasks in a snapshot', () => {
     const event = await harness.snapshot();
 
     // **A budget on the half of the payload that is re-sent on every push**, and a feature that
-    // grows it has to come here and say so. Four have.
+    // grows it has to come here and say so. Five have.
     //
     // The graph is ~74 KB of tasks, runs and the 53 gates. The conversation (SPEC §4.7) is the rest:
     // ~360 turns, and it is what this whole screen exists to show. It is bounded by the *row count*
@@ -112,6 +112,11 @@ describe('the tasks in a snapshot', () => {
     // turn, and by `RECEIPT_PREVIEW_FACTS` per turn, so a worker that names four hundred files
     // costs eight chips and a count, never four hundred. The whole receipt stays on
     // `GET /api/task/:id` with the bodies.
+    //
+    // The fifth is the scoreboard (#68): one small scorecard per cast member — a handful of
+    // counts, at most two duration observations, and *deduplicated* recognized URLs. Bounded by
+    // the cast size (a few agents per run), and the links by the same receipt recognition that
+    // bounds the turns above; nothing in it is text anybody typed.
     //
     // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec and
     // says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let alone

@@ -266,6 +266,46 @@ const FEATURES: Feature[] = [
     degraded:
       'Run span ends — this Orca has no tasks.completed_at column, so a finished run’s span can end only on its latest task creation, and understates any run whose work outlived it.',
   },
+  {
+    // The scoreboard's message metrics (#68). All three or none: `sequence` is what makes the
+    // log readable at all, `type` is what tells a heartbeat from every other row, and
+    // `from_handle` is what ties a row to the cast member who sent it. Missing any of them,
+    // every count would read 0 — not "none retained" but "none readable" — and a zero nobody
+    // measured is exactly the number the scoreboard promises never to show.
+    allOf: [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle'],
+    degraded:
+      'Scoreboard message counts — this Orca is missing one of messages.sequence/type/from_handle, so heartbeats, other messages and escalations cannot be counted per cast member: the scoreboard shows unknown counts rather than zeros nobody measured.',
+  },
+  {
+    // The same columns plus the instant a beat was written: a heartbeat that cannot be found,
+    // attributed or placed in time cannot be measured *to*.
+    allOf: [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle', 'messages.created_at'],
+    degraded:
+      'Time to first heartbeat — this Orca is missing one of messages.sequence/type/from_handle/created_at, so no heartbeat can be found, attributed and placed in time: the scoreboard shows unknown rather than zero.',
+  },
+  {
+    // The breaker's own counter (#68). Its `?? 0` default on the wire is indistinguishable from
+    // a real zero, so the scoreboard has to be told the column is absent — a member showing
+    // "0 failures" out of a database that cannot count failures would be an invented clean sheet.
+    anyOf: ['dispatch_contexts.failure_count'],
+    degraded:
+      'Scoreboard failure counts — this Orca has no dispatch_contexts.failure_count column, so how often a cast member’s tasks failed cannot be counted: the scoreboard shows unknown rather than zero.',
+  },
+  {
+    // The agent span and the time to first heartbeat both start at the first dispatch (#68) —
+    // the same fallback chain as the attempt clock above, and a *different* feature, so it gets
+    // its own sentence (the pattern MESSAGE_PAYLOAD sets).
+    anyOf: ['dispatch_contexts.dispatched_at', 'dispatch_contexts.created_at'],
+    degraded:
+      'Agent spans — this Orca records no instant an attempt was dispatched at (neither dispatch_contexts.dispatched_at nor created_at), so a cast member’s span and its time to first heartbeat have no start, and the scoreboard shows neither.',
+  },
+  {
+    // …and the span's end reads the attempts' completions. Without the column, only in-flight
+    // work can still show a span ("so far"); everything finished shows none.
+    anyOf: ['dispatch_contexts.completed_at'],
+    degraded:
+      'Agent span ends — this Orca has no dispatch_contexts.completed_at column, so a cast member’s span can close on no retained completion: in-flight work still shows "so far", and finished work shows no span.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */

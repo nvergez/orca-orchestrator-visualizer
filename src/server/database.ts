@@ -9,6 +9,7 @@ import { attachGates, readGates } from './gates.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
+import { attachScoreboards } from './scoreboard.ts';
 import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTaskDetail } from './task-detail.ts';
@@ -88,6 +89,11 @@ export class OrcaDatabase {
     // and disagree with itself the moment Orca wrote a row between the two reads.
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
 
+    // The scoreboard (#68): the cast, quantified. A second pass, like the gates above and for
+    // the same reason — the cast is cast while the runs are inferred, but its metrics need the
+    // attributed message log, which can only be read once the runs exist to attribute against.
+    const scored = attachScoreboards(gated.runs, { entries, messages, columns: this.schema.columns });
+
     return {
       seq: this.highWaterMark(),
       meta: {
@@ -102,14 +108,14 @@ export class OrcaDatabase {
         resetDetected: detectReset(this.db, this.schema.columns),
       },
       snapshot: {
-        runs: gated.runs,
+        runs: scored,
         tasks: gated.tasks,
         gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
         // report out of `tasks.result`. It is the whole of what this screen is for, and the client
         // does nothing to it but choose a scope.
-        turns: conversationOf({ entries, runs: gated.runs, gates, messages }),
+        turns: conversationOf({ entries, runs: scored, gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },

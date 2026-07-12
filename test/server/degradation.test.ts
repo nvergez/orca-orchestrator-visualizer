@@ -292,7 +292,10 @@ describe('durations degrade by name, clock by clock', () => {
     );
 
     expect(matching(meta.degraded, DISPATCH_DURATIONS)).toHaveLength(1);
-    expect(meta.degraded).toHaveLength(1);
+    // The scoreboard's agent span closes on the same column (#68), and it is a different
+    // feature, so the user is owed a second sentence.
+    expect(matching(meta.degraded, /^agent span ends/i)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(2);
 
     // The clock that is gone, and the fallback doing exactly what its label promises.
     const task = byId(snapshot.tasks, CHARTED);
@@ -309,6 +312,8 @@ describe('durations degrade by name, clock by clock', () => {
     );
 
     expect(matching(meta.degraded, DISPATCH_DURATIONS)).toHaveLength(1);
+    // No dispatch instant is also no start for the scoreboard's agent span (#68).
+    expect(matching(meta.degraded, /^agent spans/i)).toHaveLength(1);
 
     const task = byId(snapshot.tasks, CHARTED);
     expect(task.dispatch?.duration).toBeUndefined();
@@ -364,6 +369,46 @@ describe('durations degrade by name, clock by clock', () => {
  * column, every other table — degrades. These are the two halves of that rule, and the second
  * is the one worth writing: a database this tool *could* have refused, and does not.
  */
+/**
+ * The scoreboard's counts (#68) are the one place a missing column and a real zero could wear
+ * the same digit: zero heartbeats *counted* and zero heartbeats *countable* both read `0`. So
+ * the counts are degradation-guarded — absent, and named — while the metrics whose absence is
+ * already honest value by value (the spans) keep working on whatever columns remain.
+ */
+describe('the scoreboard degrades by name, count by count', () => {
+  it('costs the message counts — unknown, not zero — when heartbeats cannot be told apart', async () => {
+    const { meta, snapshot } = await snapshotOf(orchestration({ omitColumns: { messages: ['type'] } }));
+
+    expect(matching(meta.degraded, /^scoreboard message counts/i)).toHaveLength(1);
+    expect(matching(meta.degraded, /^time to first heartbeat/i)).toHaveLength(1);
+
+    const worker = snapshot.runs.find((run) => run.handle === CODER)!.cast[0]!;
+    expect(worker.score?.heartbeats).toBeUndefined();
+    expect(worker.score?.messages).toBeUndefined();
+    expect(worker.score?.escalations).toBeUndefined();
+    expect(worker.score?.firstHeartbeat).toBeUndefined();
+
+    // …while the metrics that never read a message column keep working: the attempt is still
+    // in flight, so the span is honestly open, and the breaker column still counts.
+    expect(worker.score?.span).toMatchObject({ clock: 'agent-span', complete: false });
+    expect(worker.score?.failures).toBe(0);
+  });
+
+  it('costs the failure counts — unknown, not a clean sheet — without the breaker column', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      orchestration({ omitColumns: { dispatch_contexts: ['failure_count'] } })
+    );
+
+    expect(matching(meta.degraded, /^scoreboard failure counts/i)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(1);
+
+    const worker = snapshot.runs.find((run) => run.handle === CODER)!.cast[0]!;
+    expect(worker.score?.failures).toBeUndefined();
+    // The message metrics never read that table, and survive whole.
+    expect(worker.score?.heartbeats).toBe(1);
+  });
+});
+
 describe('the only legal hard-fail', () => {
   it('refuses a tasks table with no dependency edges, and says what to do about it', () => {
     const dbPath = orchestration({ omitColumns: { tasks: ['deps'] } }).write(tempDbPath());
