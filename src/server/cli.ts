@@ -16,6 +16,11 @@ export type Options = {
   pollIntervalMs: number;
   /** Auto-open the browser. `--no-open` turns it off; so do a pipe, CI and SSH. */
   open: boolean;
+  /**
+   * `--orca-enrichment` (#61): ask the `orca` CLI for live worktree/activity context.
+   * **Off by default** — while it is off, no Orca command runs, ever.
+   */
+  orcaEnrichment: boolean;
   help: boolean;
   version: boolean;
 };
@@ -36,6 +41,10 @@ Options:
   --host <host>          Address to bind (default ${DEFAULT_HOST}). Loopback by design: the
                          database holds your task specs, agent prompts and message bodies.
   --poll-interval <ms>   How often to re-read the database (default ${DEFAULT_POLL_INTERVAL_MS}).
+  --orca-enrichment      Also ask the orca CLI what live workers are doing right now
+                         (worktree, current tool call) — two read-only commands on their own
+                         timer, only while Orca is running. Off by default; failure never
+                         touches the database view.
   --no-open              Do not open a browser. Also suppressed automatically when stdout
                          is not a terminal, or over SSH, or with no display.
   --version              Print the version and exit.
@@ -77,6 +86,7 @@ export function parseOptions(argv: string[]): Options {
         ? DEFAULT_POLL_INTERVAL_MS
         : integerOption('--poll-interval', values['poll-interval'], { min: 100, max: 3_600_000 }),
     open: !(values['no-open'] ?? false),
+    orcaEnrichment: values['orca-enrichment'] ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
   };
@@ -88,6 +98,7 @@ const OPTION_SPEC = {
   port: { type: 'string' },
   host: { type: 'string' },
   'poll-interval': { type: 'string' },
+  'orca-enrichment': { type: 'boolean' },
   'no-open': { type: 'boolean' },
   version: { type: 'boolean' },
   help: { type: 'boolean' },

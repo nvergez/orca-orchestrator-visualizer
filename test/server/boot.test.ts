@@ -210,6 +210,25 @@ describe('booting', () => {
     await expect(run(['--db', fixtureDb(), '--port', 'banana'])).rejects.toThrow(/--port/);
   });
 
+  it('carries no enrichment on the wire unless --orca-enrichment asked for it (#61)', async () => {
+    const { booted } = await run(['--db', fixtureDb(), '--port', '0']);
+
+    const snapshot = (await (await fetch(`${booted!.url}/api/snapshot`)).json()) as Record<string, unknown>;
+    expect('enrichment' in snapshot).toBe(false);
+  });
+
+  it('turns the live-context adapter on behind --orca-enrichment, and says so', async () => {
+    // `probe: () => false` keeps this honest to run anywhere: Orca is stale in a temp home,
+    // so the live-only adapter suspends and no real `orca` process is ever spawned by a test.
+    const { lines, booted } = await run(['--db', fixtureDb(), '--port', '0', '--orca-enrichment']);
+
+    const snapshot = (await (await fetch(`${booted!.url}/api/snapshot`)).json()) as {
+      enrichment?: { state: string; workers: unknown[] };
+    };
+    expect(snapshot.enrichment).toEqual({ state: 'suspended', fetchedAt: null, workers: [] });
+    expect(lines.join('\n')).toContain('live Orca context');
+  });
+
   it('rejects a poll interval that is not a duration', async () => {
     await expect(run(['--db', fixtureDb(), '--poll-interval', '-5'])).rejects.toThrow(/--poll-interval/);
   });

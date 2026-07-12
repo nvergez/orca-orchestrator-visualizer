@@ -65,7 +65,13 @@ export async function boot(options: BootOptions): Promise<Booted> {
   const database = new OrcaDatabase(dbPath, { probe });
 
   try {
-    const { server, close: stopServing } = createServer({ database, pollIntervalMs: cli.pollIntervalMs });
+    const { server, close: stopServing } = createServer({
+      database,
+      pollIntervalMs: cli.pollIntervalMs,
+      // The #61 opt-in, passed as presence: absent means the adapter is never constructed
+      // and no `orca` command can run. `{}` is the real CLI with its defaults.
+      enrichment: cli.orcaEnrichment ? {} : undefined,
+    });
     await listen(server, cli);
 
     const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
@@ -76,6 +82,9 @@ export async function boot(options: BootOptions): Promise<Booted> {
     print(`orca-viz  reading ${dbPath}`);
     print(`          ${describeState(meta)}`);
     for (const line of describeSchema(meta)) print(`          ${line}`);
+    // Said out loud because it is the one thing this tool does beyond reading a file: it
+    // will spawn `orca worktree ps` / `orca terminal list` — reads, on their own timer.
+    if (cli.orcaEnrichment) print('          live Orca context: on (orca worktree ps, read-only, while Orca runs)');
     print(`          listening on ${url}`);
 
     if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);

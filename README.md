@@ -60,6 +60,7 @@ npx orca-viz@latest --port 8080 --no-open
 | `--port <n>` | Port to listen on (default `4269`). A port that is already taken is an error, **not** a hop to another one — a hunted port would break the URL orca-viz just opened and any bookmark of it. |
 | `--host <host>` | Address to bind (default `127.0.0.1`). Loopback by design; see the warning above before changing it. |
 | `--poll-interval <ms>` | How often to re-read the database (default `5000`). |
+| `--orca-enrichment` | Also show what a live worker is *doing right now* — its worktree, branch and current tool call — by asking the `orca` CLI (`worktree ps`, `terminal list`: two **read-only** commands, on their own timer, only while Orca is running). **Off by default.** Context attaches only on an exact terminal-handle match — never guessed from names or timing — and if the CLI is slow, gone or unreadable the database view is untouched and the tool says the context is unavailable. |
 | `--no-open` | Do not open a browser. Also suppressed automatically when stdout is not a terminal, or over SSH, or with no display — so it does the right thing on a headless box without being told. |
 | `--version` | Print the version and exit. |
 | `--help` | Print the flags and exit. |

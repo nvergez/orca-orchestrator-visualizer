@@ -294,6 +294,10 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             selectedAgent={selectedAgent}
             onSelectAgent={selectAgent}
             newRunId={newRunId}
+            // Live Orca context (#61) — absent unless the server was started with the opt-in.
+            // It lands on the cast rows and nowhere else: the canvas never sees it, which is
+            // half of how an enrichment push can never remount the DAG.
+            enrichment={event.enrichment}
             fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
