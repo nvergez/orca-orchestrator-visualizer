@@ -109,6 +109,11 @@ export class EventStream {
       const version = this.source.dataVersion();
       const liveness = this.source.liveness();
 
+      // Those two reads succeeding *is* the recovery: the file is readable again. Reset here
+      // rather than after a successful push, or a database that failed and then came back to
+      // an idle orchestration would never re-arm — and the *next* failure would be silent.
+      this.failing = false;
+
       const stale = [...this.subscribers].filter(
         (subscriber) => subscriber.version !== version || subscriber.liveness !== liveness
       );
@@ -130,7 +135,6 @@ export class EventStream {
         subscriber.liveness = event.meta.liveness;
         this.deliver(subscriber, event);
       }
-      this.failing = false;
     } catch (error) {
       // The file can be deleted, or checkpointed out from under a read. A throw inside a
       // `setInterval` is an unhandled exception that takes the whole tool down mid-poll —

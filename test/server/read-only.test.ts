@@ -56,6 +56,15 @@ describe('the read-only invariant', () => {
     // Every route the server answers at this ticket, including the ones that fail.
     await harness.snapshot();
     await harness.snapshot(); // …twice: a second read must not checkpoint anything either.
+
+    // The stream, from both ends of its cursor (#17): a first connect, which reads the whole
+    // feed, and a reconnect resuming from a `Last-Event-ID`. It is the one route that holds a
+    // connection open and goes on reading SQLite on a timer, so it is the one with the most
+    // opportunity to write — and `PRAGMA data_version`, which it polls, is the read most
+    // likely to be mistaken for a write.
+    await (await harness.stream()).next();
+    await (await harness.stream(400)).next();
+
     await fetch(`${harness.origin}/`);
     await fetch(`${harness.origin}/assets/index.js`);
     await fetch(`${harness.origin}/nothing-here.js`);
