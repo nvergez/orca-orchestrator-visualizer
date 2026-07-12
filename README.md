@@ -64,8 +64,8 @@ npx orca-viz --port 8080 --no-open
 
 ### Where it looks for the database
 
-First hit wins, and every candidate is validated (it opens, and it has a task table) before
-it is accepted:
+First hit wins, and every candidate is validated before it is accepted — the file exists,
+SQLite can actually open it read-only, and its `PRAGMA user_version` reads:
 
 1. `--db`
 2. `ORCA_VIZ_DB`
@@ -156,6 +156,7 @@ exist, and builds its queries from those:
 | The schema it was built for | Everything. |
 | A **newer** Orca | Everything renders, under a banner: *some data may be missing or mislabeled.* |
 | An **older** Orca | Per-feature degradation. A missing column disables exactly the feature that needed it — you lose a badge, not the tool — and the banner names what you lost. |
+| The right version number, but a column it expected is gone | The same per-feature degradation, under its own banner: *this Orca is missing columns this build expects.* The columns are the fact; the version number is only a claim. |
 | A status or message type it has never seen | Rendered in a neutral style with its raw name. Never dropped. |
 | No readable task table at all | This, and only this, is a hard error. |
 

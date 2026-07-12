@@ -37,6 +37,25 @@ const manifest = JSON.parse(readFileSync(repoFile('package.json'), 'utf8')) as {
 
 const readme = readFileSync(repoFile('README.md'), 'utf8');
 
+/**
+ * The README, up to a heading — and a loud failure when that heading is not there.
+ *
+ * `indexOf` returns -1 for a heading that has been renamed, and `slice(0, -1)` is *the whole
+ * document*: every positional assertion below would keep passing while asserting nothing about
+ * position, which is the one thing they exist to assert.
+ */
+function readmeBefore(heading: string): string {
+  const at = readme.indexOf(heading);
+  if (at < 0) throw new Error(`the README must have a "${heading}" section — the section order is the test`);
+  return readme.slice(0, at);
+}
+
+function readmeFrom(heading: string): string {
+  const at = readme.indexOf(heading);
+  if (at < 0) throw new Error(`the README must have a "${heading}" section — the section order is the test`);
+  return readme.slice(at);
+}
+
 describe('the npx claim: nothing to install, nothing to compile', () => {
   it('has no runtime dependencies of any kind — so there is no native build to fail', () => {
     expect(manifest.dependencies ?? {}).toEqual({});
@@ -58,9 +77,13 @@ describe('the npx claim: nothing to install, nothing to compile', () => {
     expect(existsSync(repoFile('bin/orca-viz.mjs'))).toBe(true);
   });
 
-  it("the bin shim only reaches for files the package actually ships", () => {
+  it('the bin shim only reaches for files the package actually ships', () => {
     const shim = readFileSync(repoFile('bin/orca-viz.mjs'), 'utf8');
-    const imports = [...shim.matchAll(/from '([^']+)'|import\('([^']+)'\)/g)].map((match) => match[1] ?? match[2]);
+    // Both quote styles: a bare specifier smuggled in as `from "left-pad"` is exactly the back
+    // door this guards, and a regex that only saw single quotes would hold the door open.
+    const imports = [...shim.matchAll(/from\s+['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g)].map(
+      (match) => match[1] ?? match[2]
+    );
 
     expect(imports.length).toBeGreaterThan(0);
     for (const specifier of imports) {
@@ -93,12 +116,7 @@ describe('the README, before a stranger points this at their machine', () => {
    * README starts telling you how to install and run the thing. A reader cannot reach the
    * instructions without having passed the disclosure.
    */
-  const instructionsAt = readme.indexOf('## Requirements');
-  const opening = readme.slice(0, instructionsAt);
-
-  it('discloses before it instructs', () => {
-    expect(instructionsAt, 'the README must have a ## Requirements section').toBeGreaterThan(0);
-  });
+  const opening = readmeBefore('## Requirements');
 
   it('says unofficial, third-party, read-only and unaffiliated up front, not in a footnote', () => {
     for (const promise of [/unofficial/i, /third-party/i, /read-only/i, /not affiliated/i, /never writes/i]) {
@@ -116,7 +134,7 @@ describe('the README, before a stranger points this at their machine', () => {
     // The table is the documentation half of render-what-parses: the banner tells a user they
     // are past what we verified, and the table says what that verification was. Bump the
     // schema floor in code and this test makes you say so out loud.
-    const table = readme.slice(readme.indexOf('## Compatibility'));
+    const table = readmeFrom('## Compatibility');
     const [major = '0', minor = '0'] = manifest.version.split('.');
 
     expect(table).toContain(`${major}.${minor}.x`);
