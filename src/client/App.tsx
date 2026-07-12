@@ -56,7 +56,8 @@ import { useIsMobile } from './viewport.tsx';
  * deserves the width.
  *
  * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
- * rail beside today's and renders through the exact same code path; live-ness is a green dot.
+ * rail beside today's and renders through the exact same code path; each row wears its
+ * `active | silent | finished` health, and the Orca process has its own pill (SPEC §12).
  *
  * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
  * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a

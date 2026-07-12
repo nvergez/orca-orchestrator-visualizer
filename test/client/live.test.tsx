@@ -39,6 +39,8 @@ const RUN: Run = {
   handle: 'term_9f8e7d6c-1234-4321-8888-aabbccddeeff',
   label: 'Ship the visualizer',
   startedAt: '2026-07-11T20:54:00.000Z',
+  lastActivityAt: '2026-07-11T21:30:00.000Z',
+  converged: false,
   endedAt: '2026-07-11T21:30:00.000Z',
   taskCount: 1,
   cast: [],

@@ -25,6 +25,12 @@ import { readTasks } from './tasks.ts';
 export type DatabaseDeps = {
   /** Injected so a test can decide what is alive without forking a process. */
   probe?: ProcessProbe;
+  /**
+   * The snapshot's wall clock, injected so a test can hold it still. It feeds exactly one
+   * thing: the deprecated `live` projection (SPEC §12.4). Health is the client's derivation,
+   * against the client's own clock — never computed here (SPEC §12.3).
+   */
+  now?: () => number;
 };
 
 export class OrcaDatabase {
@@ -34,10 +40,12 @@ export class OrcaDatabase {
   private readonly db: DatabaseSync;
   private readonly schema: SchemaReport;
   private readonly probe: ProcessProbe;
+  private readonly now: () => number;
 
-  constructor(path: string, { probe = probeProcess }: DatabaseDeps = {}) {
+  constructor(path: string, { probe = probeProcess, now = Date.now }: DatabaseDeps = {}) {
     this.path = path;
     this.probe = probe;
+    this.now = now;
     this.db = open(path);
     try {
       this.schema = inspectSchema(this.db);
@@ -161,6 +169,7 @@ export class OrcaDatabase {
     const read = readTasks(this.db, this.schema.columns);
     const { runs, tasks } = inferRuns(read, {
       orcaIsLive: liveness.liveness === 'live',
+      now: this.now(),
     });
 
     // A run is not a column, so it only lands on a task once the inference has run — and the

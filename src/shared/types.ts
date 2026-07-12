@@ -126,6 +126,21 @@ export type Run = {
   handle: string | null;
   label: string;
   startedAt: string;
+  /**
+   * When recorded work on this run last happened: the newest readable instant across every
+   * task's creation and completion and every dispatch attempt's dispatch, completion, last
+   * heartbeat and last failure — all attempts, not just the surviving one (SPEC §12.2). It is
+   * evidence of activity, never proof that a process is still running; health is derived from
+   * it, and from `converged`, by `runHealth` (`run-health.ts`).
+   */
+  lastActivityAt: string;
+  /**
+   * Every task has a known terminal status — `completed` or `failed` (SPEC §12.1). `pending`,
+   * `ready`, `dispatched`, `blocked` and any status this build has never heard of are not
+   * converged: render-what-parses cannot prove an unknown status terminal.
+   */
+  converged: boolean;
+  /** @deprecated Exact alias of `lastActivityAt` during the additive migration (SPEC §12.4). */
   endedAt: string;
   taskCount: number;
   /** The agents this orchestrator spawned, in first-dispatch order (`cast.ts`). */
@@ -139,6 +154,12 @@ export type Run = {
    * a task the rail lies about.
    */
   statusCounts: Record<TaskStatus | string, number>;
+  /**
+   * @deprecated Snapshot-time compatibility projection — `meta.liveness === 'live' &&
+   * runHealth(run, snapshotNow) === 'active'` (SPEC §12.4). It fixes the old false-positive
+   * green dots but cannot say `silent` from `finished`; new clients ignore it and derive
+   * `RunHealth` themselves. Removed only under a separately versioned breaking wire contract.
+   */
   live: boolean;
   hasOpenGates: boolean;
   /** 0 ⇒ the edgeless empty state (SPEC §7.5). */

@@ -6,6 +6,7 @@ import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
+import { runHealth, type RunHealth } from '../../shared/run-health.ts';
 import type { CoordinatorRun, Run } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
@@ -33,9 +34,12 @@ import { formatRunDate, statusBreakdown } from './summary.ts';
  *    orchestrator *contains* its agents, and a fourth column would state no relationship at all.
  *    Selecting one dims the canvas to their tasks and fills the conversation with their half of the
  *    dialogue. That single click is what the tool is for.
- * 2. **Which one is actually live.** The database is never pruned, so yesterday's orchestration sits
- *    in the rail beside today's and renders through the exact same code path. There is no history
- *    mode — there is a list, and a green dot on the one that is still running.
+ * 2. **How each one stands.** The database is never pruned, so yesterday's orchestration sits in
+ *    the rail beside today's and renders through the exact same code path. There is no history
+ *    mode — there is a list, and each row wears its health: `active | silent | finished`, derived
+ *    here from `converged`, `lastActivityAt` and the shared wall clock (SPEC §12.3). It is
+ *    evidence, not a diagnosis — a silent run is never called ended, dead or stuck — and it is not
+ *    the Orca process, whose own state the shell's pill reports separately (SPEC §12.1).
  *
  * The hover highlight **slides** from row to row rather than fading in under each (SPEC §7.9). It is
  * one element with one `layoutId`, so the browser moves it; and it is the difference between a list
@@ -91,7 +95,9 @@ export function RunRail({
   // about itself.
   const [hovered, setHovered] = useState<string | null>(null);
 
-  // One clock for every "last seen" badge in the cast, so the list ages in step.
+  // One clock for every health dot and every "last seen" badge, so the list ages in step — and
+  // it ticks on its own (`WALL_CLOCK_TICK_MS`), because a run must cross `active → silent`
+  // while the database is pushing nothing at all (SPEC §12.3).
   const now = useNow(runs);
 
   // What the summary row has to say while the list is clipped: which run, and — if the canvas is
@@ -143,7 +149,7 @@ export function RunRail({
     >
       {/*
         The band's summary row — everything the fold owes you while the list is clipped: which run,
-        is it alive, is it blocked, am I filtered. Two *sibling* buttons, because a button inside a
+        how it stands, is it blocked, am I filtered. Two *sibling* buttons, because a button inside a
         button is not a thing HTML has (the Cast.tsx rule): the toggle owns the row, the `[A2 ✕]`
         chip stands beside it so agent-dimming stays escapable while the canvas is showing (CANVAS
         report §2). Desktop never passes `fold`, so desktop never renders this.
@@ -158,7 +164,11 @@ export function RunRail({
             onClick={fold.onToggle}
             className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-4 text-left"
           >
-            <RadarDot live={selectedRun?.live ?? false} />
+            {selectedRun ? (
+              <HealthDot health={runHealth(selectedRun, now)} />
+            ) : (
+              <RadarDot live={false} />
+            )}
             <b className="truncate text-[13px] font-semibold">{selectedRun?.label ?? 'Orchestrators'}</b>
             {selectedRun?.hasOpenGates && (
               <OctagonAlert
@@ -246,6 +256,7 @@ export function RunRail({
                 <li key={run.id}>
                   <RunRow
                     run={run}
+                    now={now}
                     selected={run.id === selectedId}
                     hovered={hovered === run.id}
                     onHover={() => setHovered(run.id)}
@@ -280,12 +291,15 @@ export function RunRail({
  */
 function RunRow({
   run,
+  now,
   selected,
   hovered,
   onHover,
   onSelect,
 }: {
   run: Run;
+  /** The rail's shared wall clock — health has to age without a push (SPEC §12.3). */
+  now: number;
   selected: boolean;
   hovered: boolean;
   onHover: () => void;
@@ -343,15 +357,7 @@ function RunRow({
       <Spotlight />
 
       <span className="relative flex items-center gap-2">
-        <RadarDot
-          live={run.live}
-          className="size-2"
-          // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "which of
-          // these is still going", and it is the only place it is said.
-        />
-        <span data-testid="live-dot" data-live={run.live} className="sr-only">
-          {run.live ? 'running now' : 'ended'}
-        </span>
+        <HealthDot health={runHealth(run, now)} className="size-2" />
         <b className="truncate text-[13px] font-semibold">{run.label}</b>
         <BlockedFlag blocked={run.hasOpenGates} />
       </span>
@@ -384,6 +390,40 @@ function RunRow({
 
 function Dot() {
   return <span className="opacity-40">·</span>;
+}
+
+/**
+ * The words each state says out loud — the glossary's (CONTEXT.md), and nobody else's. A silent
+ * run is *not* "ended", "dead" or "stuck": the model reports retained evidence, and those three
+ * are diagnoses the database cannot support (SPEC §12.3).
+ */
+const HEALTH_WORDS: Record<RunHealth, string> = {
+  active: 'active — recent activity',
+  silent: 'silent — unfinished, no recent activity',
+  finished: 'finished',
+};
+
+/**
+ * A run's health, worn as the row's dot. Three looks for three states, and only one of them
+ * moves: `active` radars green — the page's one "this is not finished" gesture (SPEC §7.9) —
+ * `silent` holds still in amber over work that has not converged, and `finished` holds still in
+ * the muted grey of a story that is over. The sr-only twin says it in the glossary's words,
+ * because a colour a screen reader cannot reach was never said at all.
+ */
+function HealthDot({ health, className }: { health: RunHealth; className?: string }) {
+  return (
+    <>
+      <RadarDot
+        live={health === 'active'}
+        className={cn(className, health === 'silent' && 'bg-status-dispatched/70')}
+        // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "how
+        // does this run stand", and the sr-only twin below is how it reaches everyone.
+      />
+      <span data-testid="health-dot" data-health={health} className="sr-only">
+        {HEALTH_WORDS[health]}
+      </span>
+    </>
+  );
 }
 
 /**

@@ -18,9 +18,9 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   SELECTED_RING,
-  STALE_HEARTBEAT_MS,
   themeOf,
 } from './theme.ts';
+import { STALE_HEARTBEAT_MS } from '../../shared/run-health.ts';
 
 /**
  * A task, as it appears on the canvas.
