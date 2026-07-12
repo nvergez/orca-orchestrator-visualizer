@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import { SessionActivity } from './activity/SessionActivity.tsx';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -320,6 +321,15 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
                 refitSignal={refitSignal}
               />
             </div>
+
+            {/*
+              The session ticker (#58), under the canvas the activity happened on. Global, like
+              the diff it renders — a transition in an unselected orchestration is still activity,
+              and clicking its entry hops there (`showTask`). Always mounted, because its whole
+              memory lives inside it and an unmount would be the reload the ticket says clears it;
+              it draws nothing until this session has actually observed something.
+            */}
+            <SessionActivity event={event} tasks={allTasks} onSelectTask={showTask} />
           </div>
 
           {/*
