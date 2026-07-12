@@ -15,6 +15,11 @@ export type Harness = {
   snapshot(): Promise<StreamEvent>;
   /** An SSE client on `/api/stream`, optionally resuming from a `Last-Event-ID` (#17). */
   stream(lastEventId?: number): Promise<SseStream>;
+  /**
+   * `GET /api/task/:id` — the lazy detail (#20). The raw `Response`, not the parsed body: this
+   * is the one route with a 404 in it, and a helper that threw on it would hide the case.
+   */
+  task(id: string): Promise<Response>;
   close(): Promise<void>;
 };
 
@@ -51,6 +56,10 @@ export async function serve(dbPath: string, { pollIntervalMs = 20, ...deps }: Se
       const stream = await openStream(origin, lastEventId);
       streams.push(stream);
       return stream;
+    },
+
+    async task(id) {
+      return fetch(`${origin}/api/task/${encodeURIComponent(id)}`);
     },
 
     async close() {

@@ -184,6 +184,37 @@ export type FeedMessage = {
 };
 
 /**
+ * What clicking a node fetches — `GET /api/task/:id`, and the only payload in this tool that
+ * is not a `StreamEvent` (SPEC §6.4, §7.8).
+ *
+ * It exists because of two deliberate absences in the snapshot, and it is exactly their inverse:
+ *
+ * - **The bodies.** `spec` and `result` are omitted from every snapshot — a live 71-task dump
+ *   was 172 KB, almost entirely spec text (SPEC §6.3). The snapshot says whether they exist
+ *   (`hasSpec` / `hasResult`); this says what they are, once, for the one task you asked about.
+ * - **The attempts.** A snapshot task carries the *latest* dispatch (`MAX(rowid)`) plus
+ *   `attemptCount`. This carries **all** of them, in `rowid` order — `dispatch_contexts` is the
+ *   only genuinely append-only per-task history in this schema, and the retry and
+ *   circuit-breaker story is not visible anywhere else (SPEC §7.5, §7.8).
+ *
+ * What is *not* here is as considered: the gate Q&A and the dependencies are already on the
+ * wire. `snapshot.gates` carries every gate — answered ones included — with the task it blocks
+ * (#19), and `Task.deps` carries the edges. Re-sending either would be a second copy that could
+ * disagree with the first.
+ */
+export type TaskDetail = {
+  id: string;
+  /** The prompt the agent was dispatched with. Null when the task has none. */
+  spec: string | null;
+  /** What came back. Null while the task is still working, or if it never reported. */
+  result: string | null;
+  /** **Every** dispatch attempt, oldest first — never just the latest one. */
+  attempts: Dispatch[];
+  /** Every message whose `payload.taskId` is this task, in `sequence` order. Heartbeats included. */
+  messages: FeedMessage[];
+};
+
+/**
  * One event type: first connect, normal tick and SSE reconnect all have this shape, so
  * there is no separate resync path to get wrong (SPEC §6.2).
  */
