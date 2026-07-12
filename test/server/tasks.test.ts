@@ -98,8 +98,14 @@ describe('the tasks in a snapshot', () => {
     // *whole* event is bigger, because from #17 it also carries the message feed — and that
     // is the deal the payload was designed around (SPEC §6.3): the graph is re-sent whole on
     // every push, so it has to stay small, while the feed is sent once and then incrementally.
+    //
+    // The ceiling is what the snapshot *legitimately* holds, and nothing more: ~44 KB of tasks
+    // and runs, plus ~20 KB for #19's 53 gates and the one each gated node repeats. The bodies
+    // would put 172 KB back. It is a budget on the re-sent half of the payload, so a feature
+    // that grows it should have to say so here — which is exactly what #19 just did.
     expect(event.snapshot.tasks).toHaveLength(76);
-    expect(JSON.stringify(event.snapshot).length).toBeLessThan(50_000);
+    expect(event.snapshot.gates).toHaveLength(53);
+    expect(JSON.stringify(event.snapshot).length).toBeLessThan(70_000);
   });
 });
 

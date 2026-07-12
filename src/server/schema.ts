@@ -31,6 +31,18 @@ export type TableName = (typeof TABLES)[number];
 export const MESSAGE_SEQUENCE = 'messages.sequence';
 
 /**
+ * What it takes to derive a gate from a `decision_gate` message — the primary and required
+ * source, and the only one the live database actually has (`gates.ts`, SPEC §4.5).
+ *
+ * All four, or none. `type` finds the gate, `payload` carries the question, and `id` +
+ * `thread_id` are the *only* record anywhere in this schema that a gate was ever answered.
+ * Without the last two, every gate in the file reads open forever — and a strip raised over
+ * 53 questions that were all settled days ago is worse than no strip at all. So the feature
+ * degrades whole rather than degrading into a lie.
+ */
+export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.payload', 'messages.id', 'messages.thread_id'];
+
+/**
  * A feature the visualizer offers, the column it cannot live without, and what the user is
  * told when that column is not there. These strings go straight to the screen — the user
  * is owed an explanation of *why* a badge vanished, not a silent absence.
@@ -40,11 +52,15 @@ export const MESSAGE_SEQUENCE = 'messages.sequence';
  * first, then the column, then what the user gets instead. A feature with no entry degrades
  * silently, which is the failure this ticket exists to prevent.
  *
- * `anyOf` is satisfied when *any* one of its columns is present — a single column is the
- * ordinary case, and a pair is how two interchangeable columns (the two title columns) are
- * spelled.
+ * A feature names its columns one of two ways, and they are not the same question:
+ *
+ * - `anyOf` — *any* one of them is enough. The ordinary case is a single column; a pair is how
+ *   two interchangeable ones are spelled (the two title columns).
+ * - `allOf` — it needs **all** of them. That is a feature whose columns are not alternatives
+ *   but parts: lose one and what is left is not a lesser version of the feature, it is a
+ *   wrong one (the gate columns, above).
  */
-const FEATURES: { anyOf: string[]; degraded: string }[] = [
+const FEATURES: { anyOf?: string[]; allOf?: string[]; degraded: string }[] = [
   {
     // Both are v5. Either one alone still names the task, so only losing both degrades.
     anyOf: ['tasks.task_title', 'tasks.display_name'],
@@ -71,6 +87,14 @@ const FEATURES: { anyOf: string[]; degraded: string }[] = [
     anyOf: [MESSAGE_SEQUENCE],
     degraded:
       'Reset detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
+  },
+  {
+    // Gates come from *messages*, never from the `decision_gates` table (SPEC §4.2, trap 1) —
+    // so the columns a gate needs are the message columns, and this is what their absence costs.
+    // The table is still merged in additively when it has rows; it just almost never does.
+    allOf: GATE_MESSAGE_COLUMNS,
+    degraded:
+      'Decision gates — this Orca is missing one of messages.type/payload/id/thread_id, so a gate cannot be read from the messages that raise it, or told apart from one that was already answered.',
   },
 ];
 
@@ -106,6 +130,11 @@ export function hasColumn(columns: SchemaReport['columns'], qualified: string): 
   if (present === undefined) throw new Error(`not a table in Orca's schema: ${table} (from "${qualified}")`);
 
   return present.has(column);
+}
+
+/** A feature survives when *any* of the columns it can choose between, and *all* of the ones it is made of, are there. */
+function satisfied(feature: { anyOf?: string[]; allOf?: string[] }, has: (column: string) => boolean): boolean {
+  return (feature.anyOf?.some(has) ?? true) && (feature.allOf?.every(has) ?? true);
 }
 
 function columnsOf(db: DatabaseSync, table: TableName): ReadonlySet<string> {
@@ -150,7 +179,7 @@ export function inspectSchema(db: DatabaseSync): SchemaReport {
     support: supportFor(version),
     // Driven by the columns that are really absent, not by the version number: a database
     // can carry any version and still be missing anything.
-    degraded: FEATURES.filter((feature) => !feature.anyOf.some(has)).map((feature) => feature.degraded),
+    degraded: FEATURES.filter((feature) => !satisfied(feature, has)).map((feature) => feature.degraded),
     columns,
   };
 }

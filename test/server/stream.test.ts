@@ -307,7 +307,7 @@ class CountingSource implements StreamSource {
         dbMtime: AT.toISOString(),
         resetDetected: false,
       },
-      snapshot: { runs: [], tasks: [], coordinatorRuns: [] },
+      snapshot: { runs: [], tasks: [], gates: [], coordinatorRuns: [] },
       messages: [],
     } satisfies StreamEvent;
   }
