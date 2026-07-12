@@ -5,6 +5,7 @@ import { StartupError } from './errors.ts';
 import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { detectReset, inspectSchema, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
+import { readTasks } from './tasks.ts';
 
 /**
  * The read-only view of Orca's orchestration database.
@@ -47,9 +48,9 @@ export class OrcaDatabase {
   /**
    * The `StreamEvent` behind `GET /api/snapshot` and, from #17, every SSE push.
    *
-   * The arrays are empty until #15 derives runs and tasks and #17 derives the feed. `meta`
-   * is real *now*, because the failure this tool exists to prevent is showing you a
-   * database that is not the one you meant — and meta is the whole of that answer.
+   * `tasks` is the whole database as one graph — no run scoping, which is #16's job and is
+   * the reason 76 tasks currently render as a soup. `runs` and `coordinatorRuns` wait for
+   * #16, and `messages` for #17; an empty array is the honest thing to send until then.
    */
   snapshot(): StreamEvent {
     return {
@@ -65,7 +66,7 @@ export class OrcaDatabase {
         dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
         resetDetected: detectReset(this.db),
       },
-      snapshot: { runs: [], tasks: [], coordinatorRuns: [] },
+      snapshot: { runs: [], tasks: readTasks(this.db, this.schema.columns), coordinatorRuns: [] },
       messages: [],
     };
   }
