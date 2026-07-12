@@ -182,6 +182,14 @@ function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
 }
 
 function sendError(res: ServerResponse, error: unknown): void {
+  // A stream that already pushed has already sent its 200, and there is no taking it back:
+  // `writeHead` would throw ERR_HTTP_HEADERS_SENT and turn a handled failure into a crash.
+  // Hanging up is all that is left to say, and `EventSource` reads it as what it is.
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+
   res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ error: (error as Error).message }));
 }

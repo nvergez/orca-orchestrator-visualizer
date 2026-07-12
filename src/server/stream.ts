@@ -75,38 +75,55 @@ export class EventStream {
    * is the same call either way — *the same call a tick makes* — which is why there is no
    * resync path here to get wrong.
    *
-   * Throws whatever the first read throws, **before** the client is registered, so the
-   * caller can still answer with an HTTP error instead of an SSE stream that never speaks.
+   * `since` is already a cursor: the HTTP edge (`server.ts`) is what turns an untrusted
+   * `Last-Event-ID` header into one, and it is the only place that gets to decide what a
+   * bad one means.
+   *
+   * Throws whatever the first read throws, and registers nothing when it does, so the caller
+   * can still answer with an HTTP error instead of an SSE stream that never speaks. The first
+   * *send* can throw too — a browser that hung up while we were reading — and that unregisters
+   * again rather than leaving the loop polling SQLite on behalf of a socket that is gone.
    */
   subscribe(client: StreamClient, since = 0): () => void {
-    const cursor = Number.isInteger(since) && since > 0 ? since : 0;
     const version = this.source.dataVersion();
-    const event = this.source.snapshot(cursor);
+    const event = this.source.snapshot(since);
 
-    const subscriber: Subscriber = { client, cursor, version, liveness: event.meta.liveness };
+    const subscriber: Subscriber = { client, cursor: since, version, liveness: event.meta.liveness };
     this.subscribers.add(subscriber);
     this.start();
-    this.deliver(subscriber, event);
 
-    return () => {
-      this.subscribers.delete(subscriber);
-      // Nobody listening is not a slow loop, it is no loop: the pragma stops being read at all.
-      if (this.subscribers.size === 0) this.stopTimer();
-    };
+    try {
+      this.deliver(subscriber, event);
+    } catch (error) {
+      this.drop(subscriber);
+      throw error;
+    }
+
+    return () => this.drop(subscriber);
   }
 
   /**
-   * One tick. Public because the gate is the ticket, and a test should be able to demand a
-   * tick and watch nothing happen rather than sleep and hope.
+   * One tick. Public because the gate is the ticket: a test hands this class a counting
+   * `StreamSource` and demands a tick, which is the only way to assert that an unchanged
+   * `data_version` costs *no queries* — and not merely no push (`test/server/stream.test.ts`).
    */
   tick(): void {
     if (this.subscribers.size === 0) return;
 
+    let version: number;
+    let event: StreamEvent;
+    let stale: Subscriber[];
+
+    // Only the *reads* are guarded. The file can be deleted, or checkpointed out from under
+    // us, and a throw inside a `setInterval` is an unhandled exception that would take the
+    // whole tool down mid-poll — so a failed read is swallowed, said once, and retried on the
+    // next tick. Nothing here has touched a subscriber yet, so their `version` is unchanged
+    // and a recovery pushes them everything they missed.
     try {
       // The two things that can have changed under us, and the *only* two reads an idle tick
       // makes: SQLite's commit counter, and whether Orca is still alive. One pragma, one stat,
       // one signal-0 — no queries against a single table, and nothing at all sent to the browser.
-      const version = this.source.dataVersion();
+      version = this.source.dataVersion();
       const liveness = this.source.liveness();
 
       // Those two reads succeeding *is* the recovery: the file is readable again. Reset here
@@ -114,36 +131,43 @@ export class EventStream {
       // an idle orchestration would never re-arm — and the *next* failure would be silent.
       this.failing = false;
 
-      const stale = [...this.subscribers].filter(
+      stale = [...this.subscribers].filter(
         (subscriber) => subscriber.version !== version || subscriber.liveness !== liveness
       );
       if (stale.length === 0) return;
 
       // Read the graph once, from the oldest cursor among the clients that need it, and give
       // each client the slice it has not seen. Two tabs are not two round trips to SQLite.
-      const event = this.source.snapshot(Math.min(...stale.map((subscriber) => subscriber.cursor)));
-
-      for (const subscriber of stale) {
-        // The version we *read before the snapshot*, never one read after it: a write landing
-        // mid-read then leaves us holding the older version, so the next tick sees a change and
-        // pushes again. The other order would record a version this snapshot never saw and lose
-        // that change forever — a client silently stale until the next unrelated write.
-        subscriber.version = version;
-        // Liveness, though, is taken from the event we actually sent: `snapshot()` re-derives
-        // it, and recording the one *we* read a moment earlier would leave the two disagreeing
-        // and push a duplicate on the next tick.
-        subscriber.liveness = event.meta.liveness;
-        this.deliver(subscriber, event);
-      }
+      event = this.source.snapshot(Math.min(...stale.map((subscriber) => subscriber.cursor)));
     } catch (error) {
-      // The file can be deleted, or checkpointed out from under a read. A throw inside a
-      // `setInterval` is an unhandled exception that takes the whole tool down mid-poll —
-      // so the tick swallows it, says so once, and tries again in five seconds. The clients
-      // stay connected and their `version` is unchanged, so a recovery pushes what they missed.
-      if (!this.failing) {
-        this.failing = true;
-        console.error(`orca-viz: could not read the database — ${(error as Error).message}`);
+      this.reportFailure(error);
+      return;
+    }
+
+    for (const subscriber of stale) {
+      // Delivered *first*, and marked current only once it lands. The other order marks a
+      // client up to date with an event a broken socket swallowed, and it then sits silently
+      // stale until some unrelated write happens to move `data_version` again.
+      //
+      // A write that throws is a browser that is gone, not a database that is broken: it is
+      // this one client's stream that ends, and neither the other subscribers' push nor the
+      // poll loop itself is allowed to fail with it.
+      try {
+        this.deliver(subscriber, event);
+      } catch {
+        this.drop(subscriber);
+        continue;
       }
+
+      // The version we *read before the snapshot*, never one read after it: a write landing
+      // mid-read then leaves us holding the older version, so the next tick sees a change and
+      // pushes again. The other order would record a version this snapshot never saw and lose
+      // that change forever — a client silently stale until the next unrelated write.
+      subscriber.version = version;
+      // Liveness, though, is taken from the event we actually sent: `snapshot()` re-derives
+      // it, and recording the one *we* read a moment earlier would leave the two disagreeing
+      // and push a duplicate on the next tick.
+      subscriber.liveness = event.meta.liveness;
     }
   }
 
@@ -158,10 +182,30 @@ export class EventStream {
     const messages = event.messages.filter((message) => message.sequence > subscriber.cursor);
     subscriber.client.send(messages.length === event.messages.length ? event : { ...event, messages });
 
-    // Never backwards. A `Last-Event-ID` from before an `orchestration reset` can be *ahead*
-    // of everything the file still holds; rewinding the cursor there would replay old messages
-    // as though they were new. `meta.resetDetected` is how the user is told the history is gone.
-    subscriber.cursor = Math.max(subscriber.cursor, event.seq);
+    // The cursor is exactly the id we just put on the wire, because that id is what the browser
+    // will replay to us as `Last-Event-ID`. The two must not be allowed to disagree.
+    //
+    // Which decides the one case where they could: a client resuming from a sequence *ahead* of
+    // everything the file holds — a database restored from a backup, replaced, or reset. Keeping
+    // the higher cursor there (`Math.max`) would filter every future message out for the life of
+    // that connection, and the feed would simply never speak again. So the cursor follows the
+    // file down, and the client picks up from the real high-water mark. `meta.resetDetected` is
+    // how the user is told that the history behind it is gone.
+    subscriber.cursor = event.seq;
+  }
+
+  /** One client gone: unregistered, and — if it was the last — the poll loop with it. */
+  private drop(subscriber: Subscriber): void {
+    this.subscribers.delete(subscriber);
+    // Nobody listening is not a slow loop, it is no loop: the pragma stops being read at all.
+    if (this.subscribers.size === 0) this.stopTimer();
+  }
+
+  /** A failing database says so once, not every five seconds until the user gives up and quits. */
+  private reportFailure(error: unknown): void {
+    if (this.failing) return;
+    this.failing = true;
+    console.error(`orca-viz: could not read the database — ${(error as Error).message}`);
   }
 
   private start(): void {
