@@ -79,6 +79,15 @@ export type CanvasProps = {
   refitSignal?: number;
 };
 
+type LayoutInput = {
+  key: string;
+  graph: Graph;
+  waves: Wave[];
+  tasks: Task[];
+};
+
+type ReadyLayout = LayoutInput & { layout: Layout };
+
 export function Canvas({
   tasks,
   cast = NO_CAST,
@@ -90,24 +99,45 @@ export function Canvas({
   refitSignal = 0,
 }: CanvasProps) {
   const graph = useMemo(() => buildGraph(tasks), [tasks]);
-  const [laidOut, setLaidOut] = useState<{ graph: Graph; waves: Wave[]; layout: Layout } | null>(null);
+  const layoutKey = useMemo(() => layoutKeyOf(graph, waves), [graph, waves]);
+  const layoutInput = useRef<LayoutInput>({ key: layoutKey, graph, waves, tasks });
+  const [laidOut, setLaidOut] = useState<ReadyLayout | null>(null);
   const [showIsolated, setShowIsolated] = useState(true);
+
+  // Keep the input a topology-keyed effect will read current without making every fresh snapshot
+  // a reason for that effect to run. Effects execute in declaration order, so a changed key sees
+  // this render's graph before the layout request below starts.
+  useEffect(() => {
+    layoutInput.current = { key: layoutKey, graph, waves, tasks };
+  }, [layoutKey, graph, waves, tasks]);
 
   useEffect(() => {
     let current = true;
+    const requested = layoutInput.current;
     // elkjs is async. Nodes are drawn once they have somewhere to be — a canvas of overlapping
-    // nodes at (0, 0) for a frame is worse than a canvas that arrives whole.
-    void layoutGraph(graph, waves).then((layout) => {
-      if (current) setLaidOut({ graph, waves, layout });
+    // nodes at (0, 0) for a frame is worse than a canvas that arrives whole. After that first
+    // usable layout, the mounted canvas stays visible while a changed topology gets replacements.
+    void layoutGraph(requested.graph, requested.waves).then((layout) => {
+      if (current) setLaidOut({ ...requested, layout });
     });
     return () => {
       current = false;
     };
-  }, [graph, waves]);
+  }, [layoutKey]);
 
-  // A layout belongs to the graph *and the waves* it was computed for. Holding on to both rather
-  // than clearing the placements is what keeps a stale layout off a canvas whose tasks changed.
-  const layout = laidOut?.graph === graph && laidOut.waves === waves ? laidOut.layout : null;
+  // Fresh SSE snapshots rebuild every object. Placement identity is narrower: task identity and
+  // order, dependency topology, and wave membership. When that key still matches, the old
+  // positions dress the newest task/status/cast data immediately. When it changes, the previous
+  // graph remains the usable canvas until elk supplies a complete replacement.
+  const drawn = useMemo(
+    () =>
+      laidOut && laidOut.key === layoutKey
+        ? { graph, waves, tasks, layout: laidOut.layout }
+        : laidOut
+          ? refreshPresentation(laidOut, tasks)
+          : null,
+    [laidOut, layoutKey, graph, waves, tasks]
+  );
 
   // Which tasks the selected agent ever held — including the ones a later attempt handed to
   // somebody else, because those are still tasks that agent worked on and hid nothing about.
@@ -118,16 +148,24 @@ export function Canvas({
 
   const nodes = useMemo(
     () =>
-      layout
+      drawn
         ? [
-            ...toWaveNodes(layout.boxes),
-            ...toTaskNodes(graph, layout, showIsolated, { cast, agentTasks, selectedTaskId, pulses }),
+            ...toWaveNodes(drawn.layout.boxes, drawn.waves),
+            ...toTaskNodes(drawn.graph, drawn.layout, showIsolated, {
+              cast,
+              agentTasks,
+              selectedTaskId,
+              pulses,
+            }),
           ]
         : [],
-    [graph, layout, showIsolated, cast, agentTasks, selectedTaskId, pulses]
+    [drawn, showIsolated, cast, agentTasks, selectedTaskId, pulses]
   );
 
-  const edges = useMemo(() => toEdges(graph.edges, tasks, agentTasks), [graph.edges, tasks, agentTasks]);
+  const edges = useMemo(
+    () => (drawn ? toEdges(drawn.graph.edges, drawn.tasks, agentTasks) : []),
+    [drawn, agentTasks]
+  );
 
   if (tasks.length === 0) {
     return (
@@ -139,7 +177,7 @@ export function Canvas({
     );
   }
 
-  if (!layout) {
+  if (!drawn) {
     return (
       <Empty>
         <p role="status" className="max-w-sm text-balance">
@@ -185,16 +223,16 @@ export function Canvas({
         <CentreOnSelection selectedTaskId={selectedTaskId} nodes={nodes} />
         <Refit signal={refitSignal} selectedTaskId={selectedTaskId} />
 
-        {graph.edges.length === 0 && (
+        {drawn.graph.edges.length === 0 && (
           <Panel position="top-center">
             {/* `max-lg:mt-11` drops it below the isolated toggle — at 360px the two chips share a row's worth of width and would collide. */}
             <p data-testid="edgeless-note" className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs max-lg:mt-11')}>
-              No dependencies in this run — {tasks.length} tasks dispatched independently.
+              No dependencies in this run — {drawn.tasks.length} tasks dispatched independently.
             </p>
           </Panel>
         )}
 
-        {graph.isolated.length > 0 && (
+        {drawn.graph.isolated.length > 0 && (
           <Panel position="top-left">
             <Button
               type="button"
@@ -205,7 +243,7 @@ export function Canvas({
               className={cn(CANVAS_CHIP_CLASS, 'hover:bg-accent h-7 gap-1 px-3 text-xs max-lg:h-10')}
             >
               {showIsolated ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-              Isolated tasks ({graph.isolated.length})
+              Isolated tasks ({drawn.graph.isolated.length})
             </Button>
           </Panel>
         )}
@@ -404,19 +442,62 @@ function Refit({ signal, selectedTaskId }: { signal: number; selectedTaskId: str
  * field belongs: a task that depends on a task in the previous wave draws a line across the
  * border, and the line is the fact — the border is the context.
  */
-function toWaveNodes(boxes: WaveBox[]): WaveFlowNode[] {
+function toWaveNodes(boxes: WaveBox[], waves: Wave[]): WaveFlowNode[] {
+  const current = new Map(waves.map((wave) => [wave.index, wave]));
   return boxes.map((box) => ({
     id: `wave-${box.wave.index}`,
     type: 'wave' as const,
     position: { x: box.x, y: box.y },
     width: box.width,
     height: box.height,
-    data: { wave: box.wave, caption: spanOf(box.wave) },
+    // Times and the idle-gap caption can change without moving a task. Keep the geometry and
+    // refresh that presentation from the newest snapshot instead of making it a layout input.
+    data: {
+      wave: current.get(box.wave.index) ?? box.wave,
+      caption: spanOf(current.get(box.wave.index) ?? box.wave),
+    },
     draggable: false,
     selectable: false,
     focusable: false,
     zIndex: -1,
   }));
+}
+
+/**
+ * The values that can move a node — and only those values.
+ *
+ * Status, dispatch, heartbeat, gate, cast, message and selection data all repaint the existing
+ * nodes. A wave's task ids are its spatial membership/bounds; its timestamps only caption the box
+ * and cannot move it. Including presentation data here would turn an ordinary stream push into an
+ * elk run and make object allocation observable as a viewport reset (issue #46).
+ */
+function layoutKeyOf(graph: Graph, waves: Wave[]): string {
+  return JSON.stringify({
+    connected: graph.connected.map((task) => task.id),
+    isolated: graph.isolated.map((task) => task.id),
+    edges: graph.edges.map(({ source, target }) => [source, target]),
+    waves: waves.map((wave) => ({ index: wave.index, taskIds: wave.taskIds })),
+  });
+}
+
+/**
+ * Keep the previous placement topology during an elk run, but repaint every task that still exists
+ * from the newest snapshot. A push can add an edge and complete a task at the same instant; layout
+ * may wait, but the completion is already a fact and must not.
+ */
+function refreshPresentation(previous: ReadyLayout, tasks: Task[]): ReadyLayout {
+  const current = new Map(tasks.map((task) => [task.id, task]));
+  const refresh = (task: Task): Task => current.get(task.id) ?? task;
+
+  return {
+    ...previous,
+    graph: {
+      connected: previous.graph.connected.map(refresh),
+      isolated: previous.graph.isolated.map(refresh),
+      edges: previous.graph.edges,
+    },
+    tasks: previous.tasks.map(refresh),
+  };
 }
 
 /** "Jul 11, 20:10 → 23:47" — when this burst of work happened, in the reader's own timezone. */

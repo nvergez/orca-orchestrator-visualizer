@@ -310,6 +310,10 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
               <Canvas
+                // Continuity belongs to one orchestrator's stream updates. Picking another one is
+                // an explicit navigation to a different graph, whose initial fit is useful and
+                // whose viewport must not inherit the last run's framing (mobile.md §6).
+                key={selected?.id ?? 'empty'}
                 tasks={tasks}
                 cast={selected?.cast}
                 waves={selected?.waves}
