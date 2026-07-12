@@ -1,4 +1,5 @@
 import type { CastMember, Task, TaskStatus } from '../../shared/types.ts';
+export { STALE_HEARTBEAT_MS } from '../worker-health.ts';
 
 /**
  * How a task *looks* — the visual decisions the dev signed off on screen against the live

@@ -291,6 +291,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
         <div className="flex min-h-0 flex-1 gap-2 max-lg:flex-col">
           <RunRail
             runs={runs}
+            tasks={allTasks}
             coordinatorRuns={event.snapshot.coordinatorRuns}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}

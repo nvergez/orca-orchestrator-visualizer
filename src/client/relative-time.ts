@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 
 /**
  * How often the shared wall clock advances on its own, push or no push (SPEC §12.3).
@@ -10,6 +10,36 @@ import { useEffect, useState } from 'react';
  */
 export const WALL_CLOCK_TICK_MS = 30_000;
 
+let wallClockNow = Date.now();
+let wallClockInterval: ReturnType<typeof setInterval> | null = null;
+const wallClockListeners = new Set<() => void>();
+
+function readWallClock(): number {
+  return wallClockNow;
+}
+
+function tickWallClock(): void {
+  wallClockNow = Date.now();
+  for (const listener of wallClockListeners) listener();
+}
+
+function subscribeWallClock(listener: () => void): () => void {
+  wallClockListeners.add(listener);
+
+  if (wallClockInterval === null) {
+    tickWallClock();
+    wallClockInterval = setInterval(tickWallClock, WALL_CLOCK_TICK_MS);
+  }
+
+  return () => {
+    wallClockListeners.delete(listener);
+    if (wallClockListeners.size === 0 && wallClockInterval !== null) {
+      clearInterval(wallClockInterval);
+      wallClockInterval = null;
+    }
+  };
+}
+
 /**
  * **The instant a panel measures its ages from** — one clock, so a list ages in step.
  *
@@ -18,21 +48,17 @@ export const WALL_CLOCK_TICK_MS = 30_000;
  * in their own render: a value that changes *every time React happens to re-render*, so two rows
  * measured a frame apart would be measured against two different "now"s.
  *
- * This seeds the clock once at mount (a lazy initializer — read once, not on every render) and
- * then re-reads it at two well-defined moments: **on every push** — the dependency is the data
- * the panel is showing, and a new one means the stream just delivered (`Live.tsx`) — and **every
- * 30 seconds while mounted**, because run health has to cross the ten-minute boundary on
- * wall-clock time alone, without any SSE event (SPEC §12.3). The mount seed matters to health
- * too: a first render measured against `now = 0` would clamp every age to zero and flash every
- * unfinished run `active` for a frame.
+ * Every mounted consumer subscribes to this one module clock instead. It re-reads the wall
+ * clock at two well-defined moments: **on every push** — the dependency is the data the panel
+ * is showing, and a new one means the stream just delivered (`Live.tsx`) — and **every 30
+ * seconds while any consumer is mounted**, because run health has to cross the ten-minute
+ * boundary on wall-clock time alone, without any SSE event (SPEC §12.3).
  */
 export function useNow(pushed: unknown): number {
-  const [now, setNow] = useState(() => Date.now());
+  const now = useSyncExternalStore(subscribeWallClock, readWallClock, readWallClock);
 
   useEffect(() => {
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), WALL_CLOCK_TICK_MS);
-    return () => clearInterval(tick);
+    tickWallClock();
   }, [pushed]);
 
   return now;

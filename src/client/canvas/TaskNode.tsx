@@ -9,18 +9,17 @@ import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../conversation/theme.ts';
 import { enter, NODE_IN, nodeDelay, SPRING } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
+import { hasCurrentActivityEvidence, type WorkerHealth, taskWorkerHealth } from '../worker-health.ts';
 import {
   type AgentLook,
   GATE_THEME,
   glowOf,
-  isAlive,
   MONOGRAM_CLASS,
   NODE_HEIGHT,
   NODE_WIDTH,
   SELECTED_RING,
   themeOf,
 } from './theme.ts';
-import { STALE_HEARTBEAT_MS } from '../../shared/run-health.ts';
 
 /**
  * A task, as it appears on the canvas.
@@ -78,7 +77,8 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   const theme = themeOf(task.status);
   const spotlight = useSpotlight();
 
-  const alive = isAlive(task.status);
+  const health = taskWorkerHealth(task, now);
+  const alive = hasCurrentActivityEvidence(health);
 
   return (
     <motion.div
@@ -91,6 +91,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       // that a heartbeat never did, and neither of those is a question about a colour.
       data-pulse={pulse?.type}
       data-alive={alive}
+      data-health={health.state}
       variants={NODE_IN}
       initial={enter('hidden')}
       // A *variant*, and not an `opacity-20` class: `shown` writes `opacity: 1` into the inline
@@ -191,7 +192,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
 
       <div className="relative line-clamp-2 text-[11.5px] leading-tight font-medium">{task.title}</div>
 
-      <LastSeen task={task} now={now} />
+      <LastSeen health={health} />
 
       <Handle type="source" position={Position.Bottom} className="!size-1.5 !border-0 !opacity-0" />
     </motion.div>
@@ -330,14 +331,14 @@ function FailureCount({ task }: { task: Task }) {
  * dispatch the last heartbeat is just the moment the work stopped, and a badge would cry
  * wolf about a run that finished perfectly well.
  */
-function LastSeen({ task, now }: { task: Task; now: number }) {
-  const dispatch = task.dispatch;
-  if (dispatch?.status !== 'dispatched' || !dispatch.lastHeartbeatAt) return null;
+function LastSeen({ health }: { health: WorkerHealth }) {
+  if (health.state === 'inactive' || health.state === 'unknown') return null;
 
-  const silentFor = now - Date.parse(dispatch.lastHeartbeatAt);
-  if (Number.isNaN(silentFor)) return null;
-
-  const stale = silentFor > STALE_HEARTBEAT_MS;
+  const stale = health.state === 'stale';
+  const label =
+    health.heartbeat === 'received'
+      ? `last seen ${relativeTime(health.elapsedMs)} ago`
+      : `dispatched ${relativeTime(health.elapsedMs)} ago — no heartbeat yet`;
 
   return (
     <span
@@ -348,7 +349,7 @@ function LastSeen({ task, now }: { task: Task; now: number }) {
         stale && 'font-bold text-amber-700 opacity-100 dark:text-amber-400'
       )}
     >
-      last seen {relativeTime(silentFor)} ago
+      {label}
     </span>
   );
 }

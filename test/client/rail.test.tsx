@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import type { CastMember, CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { CastMember, CoordinatorRun, Dispatch, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input.
@@ -70,6 +70,20 @@ function task(over: Partial<Task> = {}): Task {
     dispatch: null,
     attemptCount: 0,
     gate: null,
+    ...over,
+  };
+}
+
+function dispatch(assigneeHandle: string, over: Partial<Dispatch> = {}): Dispatch {
+  return {
+    id: `ctx_${assigneeHandle}`,
+    assigneeHandle,
+    status: 'dispatched',
+    failureCount: 0,
+    lastFailure: null,
+    dispatchedAt: new Date(Date.now() - 60_000).toISOString(),
+    completedAt: null,
+    lastHeartbeatAt: null,
     ...over,
   };
 }
@@ -456,20 +470,71 @@ describe('the cast', () => {
     expect(screen.getByTestId('cast-empty')).toHaveTextContent(/no terminal handle/i);
   });
 
-  it('badges an agent that is still beating, and counts its tasks when it is not', () => {
-    // "seen 12s ago" is liveness, and it replaces the task count only while the agent is *recently*
-    // alive (SPEC §4.6). A heartbeat from three hours ago is history, and a badge over a finished
-    // run would cry wolf about work that went perfectly well.
-    const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(Date.now() - 12_000).toISOString() };
-    const quiet: CastMember = { ...A2, lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() };
+  it('badges an agent with current task evidence, and counts settled work instead of crying wolf', () => {
+    const now = Date.now();
+    const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(now - 12_000).toISOString() };
+    const historical: CastMember = { ...A2, lastHeartbeatAt: new Date(now - 3 * 60 * 60 * 1000).toISOString() };
+    const tasks = [
+      task({
+        id: 'task_1',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(ALICE, { lastHeartbeatAt: beating.lastHeartbeatAt }),
+      }),
+      task({
+        id: 'task_2',
+        runId: 'run_crew',
+        status: 'completed',
+        dispatch: dispatch(BOB, { status: 'completed', lastHeartbeatAt: historical.lastHeartbeatAt }),
+      }),
+    ];
 
-    render(<App event={event([run({ id: 'run_crew', cast: [beating, quiet] })], CREW_TASKS)} />);
+    render(<App event={event([run({ id: 'run_crew', cast: [beating, historical] })], tasks)} />);
 
     const [alice, bob] = screen.getAllByTestId('agent-row');
 
     expect(within(alice!).getByTestId('agent-last-seen')).toHaveTextContent(/seen 12s ago/);
     expect(within(bob!).queryByTestId('agent-last-seen')).toBeNull();
     expect(bob!).toHaveTextContent('2 tasks');
+  });
+
+  it('shows never-heartbeating health consistently in the cast and run summary', () => {
+    const now = Date.now();
+    const tasks = [
+      task({
+        id: 'task_1',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(ALICE, { dispatchedAt: new Date(now - 2 * 60_000).toISOString() }),
+      }),
+      task({
+        id: 'task_2',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(BOB, { dispatchedAt: new Date(now - 11 * 60_000).toISOString() }),
+      }),
+    ];
+
+    const crew = run({
+      id: 'run_crew',
+      cast: [A1, A2],
+      converged: false,
+      lastActivityAt: new Date(now - 2 * 60_000).toISOString(),
+    });
+    render(<App event={event([crew], tasks)} />);
+
+    const [alice, bob] = screen.getAllByTestId('agent-row');
+    expect(alice).toHaveAttribute('data-health', 'quiet');
+    expect(alice).toHaveTextContent(/dispatched 2m ago · no heartbeat/);
+    expect(bob).toHaveAttribute('data-health', 'stale');
+    expect(bob).toHaveTextContent(/dispatched 11m ago · no heartbeat/);
+
+    const summary = within(row('run_crew')).getByTestId('run-worker-health');
+    expect(summary).toHaveAttribute('data-health', 'stale');
+    expect(summary).toHaveTextContent('1 stale without heartbeat · 1 awaiting heartbeat');
+    // #48 owns run health (`converged` + `lastActivityAt`); worker health is additive and does
+    // not rewrite that semantic — a stale worker leaves a recently active run `active`.
+    expect(within(row('run_crew')).getByTestId('health-dot')).toHaveAttribute('data-health', 'active');
   });
 
   it('drops the agent when the rail moves to another orchestrator', async () => {
