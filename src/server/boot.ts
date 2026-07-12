@@ -65,7 +65,7 @@ export async function boot(options: BootOptions): Promise<Booted> {
   const database = new OrcaDatabase(dbPath, { probe });
 
   try {
-    const server = createServer({ database });
+    const { server, close: stopServing } = createServer({ database, pollIntervalMs: cli.pollIntervalMs });
     await listen(server, cli);
 
     const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
@@ -83,7 +83,9 @@ export async function boot(options: BootOptions): Promise<Booted> {
     return {
       url,
       close: async () => {
-        await new Promise((resolve) => server.close(resolve));
+        // Streams down, then the port, then the file — a browser holding an SSE response open
+        // would otherwise keep `server.close()` waiting for as long as the tab is on screen.
+        await stopServing();
         database.close();
       },
     };
