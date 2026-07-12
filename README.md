@@ -191,6 +191,7 @@ orca-viz is on its own semver and tracks no Orca version number.
 
 | orca-viz | Orca `SCHEMA_VERSION` verified against | Orca app version |
 |---|---|---|
+| 0.4.x | 5 | 1.4.128 |
 | 0.3.x | 5 | 1.4.128 |
 | 0.2.x | 5 | 1.4.128 |
 | 0.1.x | 5 | 1.4.128 |
