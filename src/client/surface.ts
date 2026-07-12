@@ -9,6 +9,13 @@
  *
  * One string, in one place, for the same reason `dock.ts` was one string: three panels that are
  * the same *kind* of object must not be able to disagree about what that object looks like.
+ *
+ * A doctrine held in reserve, for any *future* surface that fully covers the canvas (none exists
+ * in this design — SPEC §7.1 folds the dock into a band, it never floats one panel over another):
+ * such a surface should be `bg-panel-solid` + `shadow-lift-3`, not `bg-panel` + backdrop blur.
+ * Translucency is a claim — "the thing behind me still matters" — and a full-coverage overlay is
+ * the one place that claim is false; blur is GPU spent flattering pixels nothing meaningful shows
+ * through.
  */
 
 /** A floating panel: translucent over the field, hairline border, lifted. */
@@ -43,8 +50,13 @@ export const FIELD_BACKDROP_STYLE = {
  * So there is one shell, in one place. Two panels that are the same panel at different moments
  * must not be able to disagree about how wide they are or which edge they draw — a dock that
  * changed width on selection would jolt the canvas it is beside every time you clicked a node.
+ *
+ * Below `lg` the dock is a *band* across the bottom of the folded shell (SPEC §7.1): the same
+ * one string now says "the band's full width, the band's remaining height", and the invariant
+ * survives the fold — Conversation and Inspector still cannot disagree about their dimensions,
+ * because the wrapper in App owns the band's height and neither panel measures anything itself.
  */
-export const DOCK_CLASS = `${PANEL_CLASS} flex w-[22rem] min-h-0 shrink-0 flex-col overflow-hidden`;
+export const DOCK_CLASS = `${PANEL_CLASS} flex w-[22rem] min-h-0 shrink-0 flex-col overflow-hidden max-lg:min-h-0 max-lg:w-full max-lg:flex-1 max-lg:shrink`;
 
 /** A panel's header: the strip that names it, held to the panel's own translucency. */
 export const PANEL_HEADER_CLASS = 'flex shrink-0 flex-col gap-2.5 border-b border-panel-border/70 px-4 py-3';

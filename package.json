@@ -1,6 +1,6 @@
 {
   "name": "orca-viz",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Unofficial, third-party, read-only web visualizer for Orca's orchestration database",
   "license": "MIT",
   "author": "Nicolas Vergez",

@@ -13,9 +13,10 @@ import { CHIP_CLASS } from '../chip.ts';
 import { selectTurns } from '../conversation/select.ts';
 import { TurnRow } from '../conversation/TurnRow.tsx';
 import { COPY_ON_HOVER, CopyButton, CopyId } from '../copy.tsx';
-import { DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
+import { BAND_IN, DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
 import { ageOf, useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
+import { useIsMobile } from '../viewport.tsx';
 
 /**
  * The whole story of one task (SPEC §7.8) — the panel that swaps in over the conversation when a
@@ -92,9 +93,29 @@ export type InspectorProps = {
   onClose: () => void;
   /** Walk to a neighbour — it *selects*, it does not toggle. */
   onSelectTask: (taskId: string) => void;
+  /**
+   * The run the reader was standing in when a gate, dep chip or turn followed a task across
+   * into this one (`App.showTask`) — mobile-only narration, because on the folded shell the
+   * rail's moving `aria-current` is behind a collapsed band and a silent run-hop reads as the
+   * canvas replacing itself for no reason. Null (the default, and always on desktop) renders
+   * nothing.
+   */
+  hoppedFrom?: string | null;
 };
 
-export function Inspector({ task, gates, tasks, detail, error, turns, cast, onClose, onSelectTask }: InspectorProps) {
+export function Inspector({
+  task,
+  gates,
+  tasks,
+  detail,
+  error,
+  turns,
+  cast,
+  onClose,
+  onSelectTask,
+  hoppedFrom = null,
+}: InspectorProps) {
+  const isMobile = useIsMobile();
 
   // What this task waited for, and what waited on it. The forward edges are the task's own
   // `deps`; the back edges are every task in the *database* that names it — a dependent in
@@ -121,13 +142,13 @@ export function Inspector({ task, gates, tasks, detail, error, turns, cast, onCl
     <motion.aside
       data-testid="inspector"
       aria-label={`Task ${task.title}`}
-      variants={DOCK_IN}
+      variants={isMobile ? BAND_IN : DOCK_IN}
       initial={enter('hidden')}
       animate="shown"
       transition={SPRING}
       className={DOCK_CLASS}
     >
-      <Header task={task} onClose={onClose} />
+      <Header task={task} hoppedFrom={hoppedFrom} onClose={onClose} />
 
       {/* The same dock the conversation wears (`surface.ts`) — it *is* the same dock — and the one
           thing that is this panel's own: it scrolls as a whole, because a spec, an attempt history
@@ -235,7 +256,7 @@ export function Inspector({ task, gates, tasks, detail, error, turns, cast, onCl
  * copied on a click — and it is still selectable text when the clipboard API is not there at all
  * (an `http://` origin that is not localhost has none).
  */
-function Header({ task, onClose }: { task: Task; onClose: () => void }) {
+function Header({ task, hoppedFrom, onClose }: { task: Task; hoppedFrom: string | null; onClose: () => void }) {
   const theme = themeOf(task.status);
 
   return (
@@ -258,11 +279,17 @@ function Header({ task, onClose }: { task: Task; onClose: () => void }) {
           onClick={onClose}
           title="Close the inspector and go back to the conversation"
           aria-label="Close the inspector"
-          className="text-muted-foreground hover:text-foreground -mt-1 -mr-1 size-7 shrink-0 cursor-pointer"
+          className="text-muted-foreground hover:text-foreground -mt-1 -mr-1 size-7 shrink-0 cursor-pointer max-lg:size-10"
         >
           <X className="size-4" />
         </Button>
       </div>
+
+      {hoppedFrom && (
+        <p data-testid="cross-run-note" className="text-muted-foreground relative truncate font-mono text-[10px]">
+          followed here from {hoppedFrom}
+        </p>
+      )}
 
       <div className="relative flex flex-wrap items-center gap-1.5">
         <StatusChip status={task.status} theme={theme} />
@@ -303,8 +330,10 @@ function Body({ text, loading, empty }: { text: string | null; loading: boolean;
       className={cn(
         'bg-muted/60 text-foreground/90 border-panel-border/60 mt-2 rounded-lg border p-2.5 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap',
         // The agent wrote prose and it is read as prose — but a spec that is 4 KB of it must not
-        // push the sections below it off the panel.
-        'max-h-56 overflow-y-auto'
+        // push the sections below it off the panel. Below `lg` the clamp comes off: a scroller
+        // inside the panel's one outer ScrollArea is a touch-scroll trap, and on the folded shell
+        // that outer scroll is the only honest way through a long body.
+        'max-h-56 overflow-y-auto max-lg:max-h-none'
       )}
     >
       {text}
@@ -409,7 +438,7 @@ function Attempt({
               <CopyButton
                 value={dispatch.assigneeHandle}
                 label="agent handle"
-                className={cn('size-5', COPY_ON_HOVER)}
+                className={cn('size-5 pointer-coarse:size-8', COPY_ON_HOVER)}
               />
             </span>
           )}
@@ -492,7 +521,7 @@ function GateQA({ gate }: { gate: Gate }) {
         {/* The id of the message — or, for a table-only gate, the row — this question came from
             (SPEC §4.5). It is never printed anywhere in the tool, and it is what a person answering
             the gate somewhere else has to name. */}
-        <CopyButton value={gate.id} label="gate id" className={cn('-mt-0.5 -mr-0.5 size-5', COPY_ON_HOVER)} />
+        <CopyButton value={gate.id} label="gate id" className={cn('-mt-0.5 -mr-0.5 size-5 pointer-coarse:size-8', COPY_ON_HOVER)} />
       </div>
 
       {gate.options.length > 0 && (
@@ -501,7 +530,7 @@ function GateQA({ gate }: { gate: Gate }) {
             <span
               key={option}
               className={cn(
-                'rounded-full border px-2 py-px text-[11px] font-medium',
+                'rounded-full border px-2 py-px text-[11px] font-medium max-lg:py-1',
                 open ? 'border-gate/60 bg-background/70' : 'bg-background'
               )}
             >
@@ -570,7 +599,7 @@ function Deps({
             type="button"
             onClick={() => onSelectTask(id)}
             title={`${neighbour.status} — show this task`}
-            className={cn(CHIP_CLASS, 'max-w-full cursor-pointer')}
+            className={cn(CHIP_CLASS, 'max-w-full cursor-pointer max-lg:py-1.5')}
           >
             <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', themeOf(neighbour.status).dot)} />
             <span className="truncate">{neighbour.title}</span>

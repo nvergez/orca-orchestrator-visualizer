@@ -516,6 +516,14 @@
   border-color: var(--panel-border);
 }
 
+/* A thumb needs ~36px where a pointer needed 26. Same block that skins these buttons. */
+@media (pointer: coarse) {
+  .react-flow__controls-button {
+    min-height: 2.25rem;
+    min-width: 2.25rem;
+  }
+}
+
 .react-flow__minimap {
   @apply rounded-xl border;
   border-color: var(--panel-border);

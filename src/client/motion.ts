@@ -86,6 +86,17 @@ export const DOCK_IN: Variants = {
   gone: { opacity: 0, x: 18 },
 };
 
+/**
+ * A dock panel arriving on the folded shell (below `lg`) — it rises from the bottom edge it
+ * lives on, exactly as DOCK_IN comes from the right edge it lives on. Collapse is instant, for
+ * the same reason dock exits are instant (`App.tsx`): animating a fold is animating the user's
+ * own tap back at them.
+ */
+export const BAND_IN: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  shown: { opacity: 1, y: 0 },
+};
+
 /** A row that arrives in a list, pushing the rest along (the `layout` prop does the push). */
 export const ROW_IN: Variants = {
   hidden: { opacity: 0, y: -12 },
