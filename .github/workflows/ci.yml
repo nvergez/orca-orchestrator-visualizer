@@ -3,7 +3,14 @@ name: CI
 on:
   push:
     branches: ['**']
+  # `labeled` is not in the default set (opened/synchronize/reopened), and without it the
+  # `release-preflight` job below never runs for a PR that is labelled *after* its last push —
+  # which is the ordinary way to label one. It does not fail: it **skips**, green, silently, and
+  # the one guard standing between a taken version number and a merge is not there. `unlabeled`
+  # is here for the same reason from the other side: dropping the label should stop claiming the
+  # check passed.
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
   build:
