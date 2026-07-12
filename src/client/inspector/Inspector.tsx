@@ -7,19 +7,18 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { Dispatch, Gate, Task, TaskDetail } from '../../shared/types.ts';
+import type { CastMember, Dispatch, Gate, Task, TaskDetail, Turn } from '../../shared/types.ts';
 import { GATE_THEME, type StatusTheme, themeOf } from '../canvas/theme.ts';
 import { CHIP_CLASS } from '../chip.ts';
-import { HeartbeatToggle } from '../feed/HeartbeatToggle.tsx';
-import { MessageRow } from '../feed/MessageRow.tsx';
-import { viewOf } from '../feed/select.ts';
+import { selectTurns } from '../conversation/select.ts';
+import { TurnRow } from '../conversation/TurnRow.tsx';
 import { DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
-import { ageOf } from '../relative-time.ts';
+import { ageOf, useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 
 /**
- * The whole story of one task (SPEC §7.8) — the panel that swaps in over the feed when a node is
- * selected, and swaps back out when it is let go.
+ * The whole story of one task (SPEC §7.8) — the panel that swaps in over the conversation when a
+ * node is selected, and swaps back out when it is let go.
  *
  * It is the answer to the question a graph cannot answer: *what actually happened here.* Top to
  * bottom, and each piece is there because a post-mortem goes looking for it:
@@ -27,29 +26,33 @@ import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts
  * 1. **The header** — the title, the status, and the **task id in full**, copyable, because the
  *    next thing you do with a task you are looking at is paste it into an `orca orchestration`
  *    command. The node shows a short id; a command line needs the whole one.
- * 2. **The spec** the agent was dispatched with, and **the result** that came back. Fetched on
- *    the click and never carried in a snapshot — 172 KB of prompt text on a live database (SPEC
- *    §6.3).
+ * 2. **The spec** the agent was dispatched with, and **the result** that came back — in **full**.
+ *    Fetched on the click and never carried in a snapshot: 172 KB of prompt text on a live database
+ *    (SPEC §6.3). The conversation below shows the first 240 characters of each; this is where the
+ *    rest of them are.
  * 3. **Every dispatch attempt**, in `rowid` order, **as a timeline** (SPEC §7.9).
  *    `dispatch_contexts` is the only genuinely append-only per-task history in this schema, and a
  *    retry is a *sequence* — so it is drawn as one, down a rail, rather than as three cards that
- *    happen to be stacked. The node has room for the latest attempt and a count; *this* is where
- *    the retry and circuit-breaker story is actually legible.
- * 4. **The messages that named this task**, oldest first — a story, unlike the feed, which
- *    answers "what just happened" and so reads backwards.
- * 5. **The gate Q&A, answered ones included.** The node's ⛔ marker only ever shows an *open*
- *    gate; an answered question is how you reconstruct the decision that sent the run the way it
- *    went, and it lives nowhere else on screen.
- * 6. **Dependencies, in and out**, as chips that select the neighbour — the DAG, walked one hop
- *    at a time, without hunting for the node on the canvas.
+ *    happen to be stacked. The node has room for the latest attempt and a count; *this* is where the
+ *    retry and circuit-breaker story is actually legible.
+ * 4. **The exchange** — this task's slice of the conversation, oldest first (SPEC §4.7). It replaces
+ *    the flat list of messages that used to sit here, and the upgrade is the whole feature: a list of
+ *    messages is *the half of the exchange that got written down*. The prompt the agent was
+ *    dispatched with, the orchestrator's answer to a gate, and the final receipt are not messages at
+ *    all — Orca injects a dispatch straight into the worker's PTY (SPEC §4.2, trap 2) — so they could
+ *    never have appeared in it. Now both sides do.
+ * 5. **The gate Q&A, answered ones included.** The node's ⛔ marker only ever shows an *open* gate;
+ *    an answered question is how you reconstruct the decision that sent the run the way it went.
+ * 6. **Dependencies, in and out**, as chips that select the neighbour — the DAG, walked one hop at a
+ *    time, without hunting for the node on the canvas.
  *
- * Everything above the bodies comes from the **snapshot** and renders immediately: the header,
- * the gates and the chips are on the wire already (#15, #19), so the panel is useful before the
- * fetch lands and stays useful if the fetch fails.
+ * Everything except the two bodies and the attempts comes from the **snapshot** and renders
+ * immediately — the header, the exchange, the gates and the chips are on the wire already — so the
+ * panel is useful before the fetch lands and stays useful if the fetch fails.
  *
- * The sections **stagger in, top to bottom** — the order a post-mortem reads them, at 40 ms a
- * step and capped at a quarter of a second. It is not decoration: it is the panel telling you
- * where its top is, on a dock that has just replaced something else.
+ * The sections **stagger in, top to bottom** — the order a post-mortem reads them, at 40 ms a step
+ * and capped at a quarter of a second. It is not decoration: it is the panel telling you where its
+ * top is, on a dock that has just replaced something else.
  */
 
 export type InspectorProps = {
@@ -66,18 +69,31 @@ export type InspectorProps = {
    * sit — is still perfectly present in the file, and calling it deleted would be a lie.
    */
   tasks: Task[];
-  /** The bodies, the attempts and the messages. Null until the fetch lands (`detail.ts`). */
+  /** The bodies and the attempts. Null until the fetch lands (`detail.ts`). */
   detail: TaskDetail | null;
   /** Why it did not land. The rest of the panel renders anyway. */
   error: string | null;
-  /** Let the task go: the dock returns to the feed. */
+  /**
+   * **This task's whole exchange, both sides of it** — the task-scoped slice of `snapshot.turns`
+   * (SPEC §4.7).
+   *
+   * It replaces the flat list of messages this panel used to fetch, and the difference is the whole
+   * point of the feature: the messages whose `payload.taskId` was this task are only *the half of
+   * the exchange that got written down*. The prompt the agent was dispatched with, the
+   * orchestrator's answer to a gate and the final receipt are not messages at all — Orca injects a
+   * dispatch straight into the worker's PTY (SPEC §4.2, trap 2) — so they could never have appeared
+   * in it. Here, they do.
+   */
+  turns: Turn[];
+  /** The orchestrator's agents — what turns a handle into an `A2` and a colour. */
+  cast: CastMember[];
+  /** Let the task go: the dock returns to the conversation. */
   onClose: () => void;
   /** Walk to a neighbour — it *selects*, it does not toggle. */
   onSelectTask: (taskId: string) => void;
 };
 
-export function Inspector({ task, gates, tasks, detail, error, onClose, onSelectTask }: InspectorProps) {
-  const [showHeartbeats, setShowHeartbeats] = useState(false);
+export function Inspector({ task, gates, tasks, detail, error, turns, cast, onClose, onSelectTask }: InspectorProps) {
 
   // What this task waited for, and what waited on it. The forward edges are the task's own
   // `deps`; the back edges are every task in the *database* that names it — a dependent in
@@ -87,16 +103,13 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
     [tasks, task.id]
   );
 
-  // The heartbeat rule is the feed's, and it is applied by the feed's own selector rather than
-  // re-implemented: 65% of the traffic carries a `taskId`, so a task's story unfiltered is a
-  // heartbeat ticker with the story lost inside it (SPEC §7.7). Their value is *liveness*, and
-  // that is already the "last seen" line on the attempts below. The clock comes with it, so every
-  // age in this panel is measured from one instant — re-read whenever the detail is, which is
-  // whenever the database moved (`detail.ts`).
-  const { shown, hidden, now } = useMemo(
-    () => viewOf(detail?.messages ?? [], { runId: null, showHeartbeats }),
-    [detail, showHeartbeats]
-  );
+  // This task's exchange, end to end. The scoping is a filter over turns the server already merged
+  // (`conversation/select.ts`) — no second derivation, and the heartbeats are already collapsed to
+  // one line, which is what the "show heartbeats" toggle used to have to do here by hand.
+  const exchange = useMemo(() => selectTurns(turns, { runId: null, taskId: task.id }), [turns, task.id]);
+
+  // One clock, so every age in this panel is measured from the same instant (`relative-time.ts`).
+  const now = useNow(detail);
 
   // The stagger counts sections as they are *rendered*, not as they are declared: the error branch
   // replaces four of them with one, and a hard-coded index would leave a hole in the sequence.
@@ -115,9 +128,9 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
     >
       <Header task={task} onClose={onClose} />
 
-      {/* The same dock the feed wears (`surface.ts`) — it *is* the same dock — and the one thing
-          that is this panel's own: it scrolls as a whole, because a spec, an attempt history and
-          a message list do not divide a fixed height between them in any honest way. */}
+      {/* The same dock the conversation wears (`surface.ts`) — it *is* the same dock — and the one
+          thing that is this panel's own: it scrolls as a whole, because a spec, an attempt history
+          and an exchange do not divide a fixed height between them in any honest way. */}
       <ScrollArea className="min-h-0 flex-1">
         {/*
           Everything the *route* was going to say, and one honest line instead when it could not
@@ -146,28 +159,36 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
               <Attempts attempts={detail?.attempts ?? null} loading={detail === null} now={now} />
             </Section>
 
-            <Section title="Messages" index={next()}>
-              <div className="mt-2">
-                <HeartbeatToggle showHeartbeats={showHeartbeats} onChange={setShowHeartbeats} hidden={hidden} />
-              </div>
-
-              {shown.length === 0 ? (
-                <p className="text-muted-foreground mt-2 text-[11px]">
-                  {detail === null ? 'Reading…' : 'No message ever mentioned this task.'}
-                </p>
-              ) : (
-                <ol className="border-panel-border/60 mt-2 -mx-4 border-t">
-                  {/* Oldest first: a task's messages are a story, and a story starts at the beginning. */}
-                  {shown.map((message) => (
-                    <li key={message.sequence}>
-                      <MessageRow message={message} now={now} />
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </Section>
           </>
         )}
+
+        {/*
+          **The exchange** — and it is a section of the inspector rather than a panel of its own,
+          because a node click has always opened *this task's story* and the exchange is the half of
+          that story the tool could not previously tell. Oldest first: it is a story, and a story
+          starts at the beginning.
+
+          It renders outside the `error` branch above, and deliberately: the turns are the
+          *snapshot's* (SPEC §4.7), not the fetch's, so a `GET /api/task/:id` that failed costs the
+          two bodies and the attempt history — and the conversation goes on being readable.
+        */}
+        <Section title="Exchange" index={next()}>
+          {exchange.length === 0 ? (
+            <p data-testid="exchange-empty" className="text-muted-foreground mt-2 text-[11px] text-balance">
+              Nothing was ever said about this task — no agent was ever given it, and none reported
+              back.
+            </p>
+          ) : (
+            <ol data-testid="exchange" className="mt-2.5 flex flex-col gap-3">
+              {exchange.map((turn) => (
+                <li key={turn.id} className="flex flex-col">
+                  {/* No `onSelectTask`: every turn here already names the task you are standing on. */}
+                  <TurnRow turn={turn} cast={cast} now={now} />
+                </li>
+              ))}
+            </ol>
+          )}
+        </Section>
 
         {gates.length > 0 && (
           <Section title={gates.length === 1 ? 'Decision gate' : `Decision gates (${gates.length})`} index={next()}>
@@ -234,7 +255,7 @@ function Header({ task, onClose }: { task: Task; onClose: () => void }) {
           variant="ghost"
           size="icon"
           onClick={onClose}
-          title="Close the inspector and go back to the feed"
+          title="Close the inspector and go back to the conversation"
           aria-label="Close the inspector"
           className="text-muted-foreground hover:text-foreground -mt-1 -mr-1 size-7 shrink-0 cursor-pointer"
         >
@@ -437,7 +458,7 @@ function Attempt({
 function Fact({ label, at, now }: { label: string; at: string | null; now: number }) {
   if (at === null || at === '') return null;
 
-  // The same reader the feed's row ages by (`relative-time.ts`) — including what it does with a
+  // The same reader a turn's age goes through (`relative-time.ts`) — including what it does with a
   // string that is not a timestamp at all, which is show it as it was written.
   const age = ageOf(at, now);
 

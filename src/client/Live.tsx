@@ -21,9 +21,9 @@ import { App } from './App.tsx';
  *
  * Every push is a whole `StreamEvent`, so the state is a replacement and never a merge: the
  * graph is re-sent whole because it is overwritten in place (SPEC §6.3). `event.messages` is
- * the delta after the client's cursor, and **it is not accumulated here** — the feed's memory
- * lives with the feed (`feed/feed.ts`, #18), so this file stays the one that knows a network
- * exists and nothing more.
+ * the delta after the client's cursor, and **it is not accumulated here** — what little the page
+ * still remembers of it lives with the thing that uses it (`conversation/pulses.ts`), so this file
+ * stays the one that knows a network exists and nothing more.
  */
 
 export function Live() {

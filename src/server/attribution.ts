@@ -6,7 +6,7 @@ import { instantOf } from './time.ts';
  * Which run a message belongs to (SPEC §4.4) — and, just as importantly, when to admit that
  * nothing in the schema says.
  *
- * The feed is scoped to one run. So every message needs a run, and the schema records none:
+ * The conversation is scoped to one orchestrator. So every message needs a run, and the schema records none:
  * `messages` has no `task_id` column, no run id, and **no foreign keys at all**. What it has
  * is two signals of unequal strength, and this module is the order they are trusted in.
  *
@@ -27,17 +27,19 @@ import { instantOf } from './time.ts';
  * `startedAt → endedAt`, where `endedAt` is the last completion *or creation*. For a **live**
  * run there are no completions — so `endedAt` is its last task's *creation*, and every message
  * a running orchestration then sends arrives after it. Clamped hard, the window would
- * unattribute the live case, which is the case the feed exists to serve.
+ * unattribute the live case, which is the case the conversation exists to serve.
  *
- * The grace is the same six hours that segment runs in the first place (`runs.ts`): already
- * this tool's answer to "how long can one terminal go quiet and still be the same run", and a
- * second constant for the same question would be a second answer to it.
+ * The grace is the same six hours that cut an orchestrator's work into waves (`runs.ts`): already
+ * this tool's answer to "how long can one terminal go quiet and still be doing the same thing",
+ * and a second constant for the same question would be a second answer to it.
  *
- * It has a cost, and it is paid in the right currency. Runs are *split* on `created_at` while
- * `endedAt` can be a later `completed_at`, so two consecutive runs of one handle can now have
- * overlapping windows — and a handle-attributed message inside the overlap matches both, and
- * so goes to null. It **loses** attribution there; it never invents one. Rule 3 is what makes
- * that safe, and it is why the grace is on the window and not on the tie-break.
+ * **Which handle the window is really protecting has changed, and the rule has not.** One terminal
+ * is now one orchestrator (SPEC §4.3), so a *coordinator* has exactly one window and rule 2 places
+ * its messages outright. The handle that can still belong to two runs at once is a **worker** —
+ * the same agent, hired by two coordinators. Non-overlapping engagements are settled by the
+ * window; genuinely overlapping ones match both and go to null. It **loses** attribution there; it
+ * never invents one. Rule 3 is what makes that safe, and it is why the grace is on the window and
+ * not on the tie-break.
  */
 
 /** What a message row can offer about where it belongs. Everything else about it is text. */
@@ -75,7 +77,7 @@ export class Attribution {
 
   attribute(message: MessageOrigin): Attributed {
     // A `taskId` naming a task that is gone is a broken link, not a broken row (SPEC §4.2,
-    // trap 8): the message keeps its place in the feed and loses its link to a node. What it
+    // trap 8): the message keeps its place in the conversation and loses its link to a node. What it
     // does *not* do is lose its run — the handles still know which orchestration was talking,
     // and the window still knows when. So it falls through to rule 2 exactly like a message
     // that never named a task at all.

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { selectFeed } from '../../src/client/feed/select.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { liveShapeCorpus } from '../fixtures/corpus.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
@@ -174,25 +173,32 @@ describe('message → run attribution', () => {
     expect(message!.runId).toBe(snapshot.snapshot.runs[0]!.id);
   });
 
-  it('uses the time window to tell two runs of the same terminal apart', async () => {
-    // One handle, two runs — split by the six-hour idle gap (SPEC §4.3). Handle membership
-    // alone matches both; the window is what decides which.
-    const coordinator = handleFor('coordinator');
-    const builder = new FixtureBuilder()
-      .task({ id: 'task_first', handle: coordinator, createdAt: AT, completedAt: at(10) })
-      .task({ id: 'task_second', handle: coordinator, createdAt: new Date(AT.getTime() + 9 * HOUR) });
+  it('uses the time window to tell two orchestrators that shared a worker apart', async () => {
+    // Rule 2's whole reason for having a *window* on it, and it survives the change to run identity
+    // — it just changed which handle it protects. A handle used to belong to several runs because
+    // the six-hour gap split its own tasks in two; now one terminal is one orchestrator, and the
+    // shared handle is a **worker**: the same agent, hired by two different coordinators on two
+    // different days. Handle membership alone matches both. The window is what decides which.
+    const monday = handleFor('coordinator-monday');
+    const thursday = handleFor('coordinator-thursday');
+    const worker = handleFor('a-worker-they-both-hired');
 
+    const LATER = new Date(AT.getTime() + 72 * HOUR);
+
+    const builder = new FixtureBuilder()
+      .task({ id: 'task_monday', handle: monday, createdAt: AT, completedAt: at(10) })
+      .task({ id: 'task_thursday', handle: thursday, createdAt: LATER })
+      .dispatch({ taskId: 'task_monday', assigneeHandle: worker, dispatchedAt: at(1) })
+      .dispatch({ taskId: 'task_thursday', assigneeHandle: worker, dispatchedAt: new Date(LATER.getTime() + MINUTE) });
+
+    // Neither message names a task, so `payload.taskId` — rule 1, which carries 83% of the traffic —
+    // has nothing to say. Only the handles and the clock are left.
+    builder.message({ fromHandle: worker, toHandle: monday, subject: 'working for monday', createdAt: at(5) });
     builder.message({
-      fromHandle: coordinator,
-      toHandle: handleFor('worker'),
-      subject: 'during the first run',
-      createdAt: at(5),
-    });
-    builder.message({
-      fromHandle: coordinator,
-      toHandle: handleFor('worker'),
-      subject: 'during the second run',
-      createdAt: new Date(AT.getTime() + 9 * HOUR + 5 * MINUTE),
+      fromHandle: worker,
+      toHandle: thursday,
+      subject: 'working for thursday',
+      createdAt: new Date(LATER.getTime() + 5 * MINUTE),
     });
 
     harness = await serve(builder.write(tempDbPath()));
@@ -202,8 +208,8 @@ describe('message → run attribution', () => {
     const runIdBySubject = new Map(snapshot.messages.map((message) => [message.subject, message.runId]));
 
     expect(snapshot.snapshot.runs).toHaveLength(2);
-    expect(runIdBySubject.get('during the first run')).toBe(runOf('task_first'));
-    expect(runIdBySubject.get('during the second run')).toBe(runOf('task_second'));
+    expect(runIdBySubject.get('working for monday')).toBe(runOf('task_monday'));
+    expect(runIdBySubject.get('working for thursday')).toBe(runOf('task_thursday'));
   });
 
   it('leaves the run null when a handle shared by two live runs cannot be pinned to one', async () => {
@@ -303,36 +309,50 @@ describe('heartbeats', () => {
     expect((await harness.snapshot()).messages.map((message) => message.type)).toEqual(['heartbeat']);
   });
 
-  it('is what the default feed hides — on a corpus that is 65% heartbeats, like the real one', async () => {
-    // The whole ruling, asserted against the live shape rather than a toy: 466 messages, 302
-    // of them heartbeats. Rendered straight, this feed is a heartbeat ticker. The default
-    // content is the four types that are actually events — 164 rows over four days.
+  it('collapses out of the conversation — on a corpus that is 65% heartbeats, like the real one', async () => {
+    // The whole ruling, asserted against the live shape rather than a toy: 466 messages, 302 of
+    // them heartbeats. Rendered straight, the conversation is a heartbeat ticker with the real
+    // exchange lost inside it. Collapsed by task, they keep the fact and lose the repetition.
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
-    const { messages } = await harness.snapshot();
-    const heartbeats = messages.filter((message) => message.type === 'heartbeat');
+    const { messages, snapshot } = await harness.snapshot();
 
     expect(messages).toHaveLength(466);
-    expect(heartbeats).toHaveLength(302);
+    expect(messages.filter((message) => message.type === 'heartbeat')).toHaveLength(302);
 
-    const { shown, hidden } = selectFeed(messages, { runId: null, showHeartbeats: false });
+    // Not one of the 302 appears on its own…
+    expect(snapshot.turns.some((turn) => turn.kind === 'heartbeat')).toBe(false);
 
-    expect(shown).toHaveLength(164);
-    expect(hidden).toBe(302);
-    // The default content, named: the four types that are actually events (SPEC §7.7).
-    expect(new Set(shown.map((message) => message.type))).toEqual(
-      new Set(['worker_done', 'decision_gate', 'escalation', 'status'])
+    // …and every one of them is accounted for by a summary row that says how many it stood in for.
+    const beats = snapshot.turns.filter((turn) => turn.kind === 'heartbeats');
+    expect(beats.reduce((total, turn) => total + (turn.beatCount ?? 0), 0)).toBe(302);
+    expect(beats.length).toBeLessThan(80); // …one per task, not one per beat.
+  });
+
+  it('leaves the conversation readable — the events, and nothing that merely says "alive"', async () => {
+    harness = await serve(liveShapeCorpus().write(tempDbPath()));
+
+    const { snapshot } = await harness.snapshot();
+    const kinds = new Set(snapshot.turns.map((turn) => turn.kind));
+
+    // The four the events actually are, plus the three this tool reconstructs (SPEC §4.7), plus the
+    // one row that stands in for all 302 beats.
+    expect(kinds).toEqual(
+      new Set(['dispatch', 'status', 'worker_done', 'escalation', 'decision_gate', 'answer', 'result', 'heartbeats'])
     );
   });
 
-  it('comes back when the toggle asks for it', async () => {
+  it('still travels the wire whole, because a snapshot cannot say what just *arrived*', async () => {
+    // The conversation is re-derived on every push, so nothing on the page has to remember a
+    // message any more — except the one thing a photograph cannot tell you: which of these rows
+    // landed a second ago. That is what flashes a node (SPEC §7.6), and it is what the delta is for.
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const { messages } = await harness.snapshot();
-    const { shown, hidden } = selectFeed(messages, { runId: null, showHeartbeats: true });
+    const beats = messages.filter((message) => message.type === 'heartbeat');
 
-    expect(shown).toHaveLength(466);
-    expect(hidden).toBe(0);
+    expect(beats).toHaveLength(302);
+    // …and a heartbeat never pulses a node, which is the client's rule (`conversation/theme.ts`).
   });
 });
 

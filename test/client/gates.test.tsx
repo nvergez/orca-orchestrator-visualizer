@@ -10,7 +10,7 @@ import type { Gate, Meta, Run, StreamEvent, Task } from '../../src/shared/types.
  * the inspector fetches. These tests are about the *strip*, so it is handed a detail rather than
  * being allowed to reach for a network.
  */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], messages: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input, and the same
@@ -81,6 +81,8 @@ function run(over: Partial<Run> = {}): Run {
     startedAt: '2026-07-08T12:00:00.000Z',
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: 1,
+    cast: [],
+    waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 0, failed: 0, blocked: 0 },
     live: true,
     hasOpenGates: false,
@@ -107,6 +109,7 @@ function event(gates: Gate[], tasks: Task[] = [task()], runs: Run[] = [run()]): 
         gate: each.gate ?? gates.find((candidate) => candidate.taskId === each.id) ?? null,
       })),
       gates,
+      turns: [],
       coordinatorRuns: [],
     },
     messages: [],

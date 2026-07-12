@@ -2,17 +2,23 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import type { CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { CastMember, CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input.
  *
- * The rail is where the soup resolves. 76 tasks in one graph is unreadable; the rail is what
- * makes the canvas mean something, and it carries the tool's one uncomfortable admission:
- * **the schema has no run id**, so the grouping is inferred, and the header says so.
+ * **The rail lists orchestrators, and the cast is the pivot.** 76 tasks in one graph is unreadable;
+ * the rail is what makes the canvas mean something. It used to be headed "Runs (inferred)" and it
+ * had to be — a row *was* a guess, because the six-hour idle gap cut one terminal's tasks into
+ * several unrelated rows for no reason the screen ever gave. A row is now one
+ * `created_by_terminal_handle`, which is a column and not a guess, and the gap is a **wave** on the
+ * canvas (SPEC §4.3).
  *
- * What is asserted here is the DOM a user reads — the header, the row, the green dot, and
- * above all *which tasks reach the canvas*. That last one is the whole ticket.
+ * What that leaves the rail free to do is the thing this whole feature is for: **name the cast.**
+ * The orchestrator and its agents nest under the open row, and selecting an agent dims the canvas to
+ * their tasks and fills the conversation with their half of the dialogue. That single click is the
+ * tool's central gesture, and it is asserted here and in `canvas.test.tsx` and `conversation.test.tsx`
+ * — once from each of the three panels it moves.
  */
 
 const META: Meta = {
@@ -37,6 +43,8 @@ function run(over: Partial<Run> = {}): Run {
     startedAt: '2026-07-11T20:54:00.000Z',
     endedAt: '2026-07-11T21:30:00.000Z',
     taskCount: 1,
+    cast: [],
+    waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 1, failed: 0, blocked: 0 },
     live: false,
     hasOpenGates: false,
@@ -65,7 +73,7 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): StreamEvent {
-  return { seq: 0, meta: META, snapshot: { runs, tasks, gates: [], coordinatorRuns }, messages: [] };
+  return { seq: 0, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
 }
 
 /** The rail row for a run — a button, because picking a run is the rail's whole job. */
@@ -89,6 +97,8 @@ const OLDER = run({
   startedAt: '2026-07-10T09:00:00.000Z',
   endedAt: '2026-07-10T11:00:00.000Z',
   taskCount: 1,
+  cast: [],
+  waves: [],
   statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 1, failed: 0, blocked: 0 },
 });
 
@@ -99,6 +109,8 @@ const NEWER = run({
   startedAt: '2026-07-11T20:54:00.000Z',
   endedAt: '2026-07-11T21:30:00.000Z',
   taskCount: 2,
+  cast: [],
+  waves: [],
   statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 1, failed: 0, blocked: 0 },
   live: true,
 });
@@ -113,10 +125,20 @@ const BOTH_RUNS_TASKS = [
 ];
 
 describe('the run rail', () => {
-  it('is headed "Runs (inferred)" — the schema has no run id and the UI will not pretend it does', () => {
+  it('is headed "Orchestrators" — because a row is a column, and no longer a guess', () => {
     render(<App event={event([NEWER], [])} />);
 
-    expect(screen.getByRole('heading', { name: 'Runs (inferred)' })).toBeVisible();
+    // It used to read "Runs (inferred)", and it had to: a row *was* a guess, because the six-hour
+    // idle gap cut one terminal's tasks into several unrelated rows. The gap is now a **wave** drawn
+    // on the canvas (SPEC §4.3), one terminal is one orchestrator, and there is nothing inferred
+    // about `tasks.created_by_terminal_handle`.
+    expect(screen.getByRole('heading', { name: 'Orchestrators' })).toBeVisible();
+  });
+
+  it('shows the terminal that ran it — the orchestrator’s only name in the schema', () => {
+    render(<App event={event([NEWER], [])} />);
+
+    expect(row('run_newer')).toHaveTextContent(HANDLE);
   });
 
   it('shows what each run was trying to do, when, how big it was and how it went', () => {
@@ -157,7 +179,7 @@ describe('the run rail', () => {
   it('says so plainly when there is nothing to list', () => {
     render(<App event={event([], [])} />);
 
-    expect(screen.getByText(/No runs yet/i)).toBeVisible();
+    expect(screen.getByText(/No orchestrators yet/i)).toBeVisible();
   });
 });
 
@@ -211,7 +233,7 @@ describe('a new run arriving while you read an old one', () => {
     // Still reading yesterday. The new run announces itself; it does not interrupt.
     expect(row('run_older')).toHaveAttribute('aria-current', 'true');
     expect(await nodeTitles(1)).toEqual([expect.stringContaining('Yesterday’s only task')]);
-    expect(screen.getByRole('button', { name: /new run started/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /new orchestration started/i })).toBeVisible();
   });
 
   it('takes you there when you ask, and stops nagging once you have arrived', async () => {
@@ -219,11 +241,11 @@ describe('a new run arriving while you read an old one', () => {
     await nodeTitles(1);
     rerender(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
-    await userEvent.click(screen.getByRole('button', { name: /new run started/i }));
+    await userEvent.click(screen.getByRole('button', { name: /new orchestration started/i }));
 
     expect(row('run_newer')).toHaveAttribute('aria-current', 'true');
     await nodeTitles(2);
-    expect(screen.queryByRole('button', { name: /new run started/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /new orchestration started/i })).toBeNull();
   });
 
   it('says nothing when the runs are the ones you already knew about', async () => {
@@ -237,7 +259,7 @@ describe('a new run arriving while you read an old one', () => {
     // a test that quietly gave it the same array object twice.
     rerender(<App event={event([...BOTH_RUNS], [...BOTH_RUNS_TASKS])} />);
 
-    expect(screen.queryByRole('button', { name: /new run started/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /new orchestration started/i })).toBeNull();
   });
 });
 
@@ -269,5 +291,108 @@ describe('coordinator runs', () => {
     expect(screen.queryByTestId('coordinator-runs')).toBeNull();
     // …and the runs are still there, because nothing about them depended on that table.
     expect(screen.getAllByTestId('run-row')).toHaveLength(1);
+  });
+});
+
+/**
+ * **The cast** — the orchestrator, and the agents it spawned (SPEC §4.3a, §7.2).
+ *
+ * The database has always known exactly who coordinated and who did the work, and neither has ever
+ * appeared on screen. Both are columns: `tasks.created_by_terminal_handle` is the orchestrator, and
+ * the `assignee_handle`s of its dispatch contexts are its agents.
+ *
+ * They nest under the open row, and not in a fourth column, because the hierarchy is *real*: an
+ * orchestrator **contains** its agents.
+ */
+describe('the cast', () => {
+  const ALICE = 'term_a11ce000-1234-4321-8888-aabbccddeeff';
+  const BOB = 'term_b0b00000-1234-4321-8888-aabbccddeeff';
+
+  const A1: CastMember = { handle: ALICE, monogram: 'A1', taskIds: ['task_1'], taskCount: 1, lastHeartbeatAt: null };
+  const A2: CastMember = { handle: BOB, monogram: 'A2', taskIds: ['task_2'], taskCount: 2, lastHeartbeatAt: null };
+
+  const CREW = run({ id: 'run_crew', cast: [A1, A2], taskCount: 3 });
+  const CREW_TASKS = [
+    task({ id: 'task_1', runId: 'run_crew' }),
+    task({ id: 'task_2', runId: 'run_crew' }),
+    task({ id: 'task_3', runId: 'run_crew' }),
+  ];
+
+  it('lists the orchestrator and its agents under the open row', () => {
+    render(<App event={event([CREW], CREW_TASKS)} />);
+
+    const cast = screen.getByTestId('cast');
+
+    expect(within(cast).getByText('The orchestrator')).toBeVisible();
+    expect(within(cast).getByText(HANDLE)).toBeVisible();
+
+    expect(screen.getAllByTestId('agent-row').map((agent) => agent.dataset.agent)).toEqual(['A1', 'A2']);
+  });
+
+  it('counts the agents on the row, so you can pick an orchestration without opening it', () => {
+    render(<App event={event([CREW], CREW_TASKS)} />);
+
+    expect(within(row('run_crew')).getByTestId('agent-count')).toHaveTextContent('2 agents');
+  });
+
+  it('shows only the open orchestrator’s cast — an A1 in one is a different terminal from the next', () => {
+    const other = run({ id: 'run_other', handle: OTHER_HANDLE, cast: [], label: 'Another orchestration' });
+
+    render(<App event={event([CREW, other], CREW_TASKS)} />);
+
+    // Exactly one cast is on screen, and it belongs to the row the rail has open.
+    expect(screen.getAllByTestId('cast')).toHaveLength(1);
+    expect(screen.getAllByTestId('agent-row')).toHaveLength(2);
+  });
+
+  it('says so when the orchestrator has no agents, rather than showing an empty list', () => {
+    render(<App event={event([run({ id: 'run_quiet', cast: [] })], [task({ runId: 'run_quiet' })])} />);
+
+    expect(screen.getByTestId('cast-empty')).toHaveTextContent(/has not dispatched/i);
+  });
+
+  it('says what an Unattributed row really is — no orchestrator on record, so nobody was dispatched', () => {
+    render(
+      <App
+        event={event(
+          [run({ id: 'run_unattributed', handle: null, label: 'Unattributed', cast: [] })],
+          [task({ runId: 'run_unattributed' })]
+        )}
+      />
+    );
+
+    expect(screen.getByTestId('cast-empty')).toHaveTextContent(/no terminal handle/i);
+  });
+
+  it('badges an agent that is still beating, and counts its tasks when it is not', () => {
+    // "seen 12s ago" is liveness, and it replaces the task count only while the agent is *recently*
+    // alive (SPEC §4.6). A heartbeat from three hours ago is history, and a badge over a finished
+    // run would cry wolf about work that went perfectly well.
+    const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(Date.now() - 12_000).toISOString() };
+    const quiet: CastMember = { ...A2, lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() };
+
+    render(<App event={event([run({ id: 'run_crew', cast: [beating, quiet] })], CREW_TASKS)} />);
+
+    const [alice, bob] = screen.getAllByTestId('agent-row');
+
+    expect(within(alice!).getByTestId('agent-last-seen')).toHaveTextContent(/seen 12s ago/);
+    expect(within(bob!).queryByTestId('agent-last-seen')).toBeNull();
+    expect(bob!).toHaveTextContent('2 tasks');
+  });
+
+  it('drops the agent when the rail moves to another orchestrator', async () => {
+    // An `A1` in one orchestration is a different terminal from the `A1` in the next. Carrying the
+    // selection across would silently dim the new canvas to a stranger.
+    const user = userEvent.setup();
+    const other = run({ id: 'run_other', handle: OTHER_HANDLE, cast: [A1], label: 'Another orchestration' });
+
+    render(<App event={event([CREW, other], [...CREW_TASKS, task({ id: 'task_x', runId: 'run_other' })])} />);
+
+    await user.click(screen.getAllByTestId('agent-row')[0]!);
+    expect(screen.getAllByTestId('agent-row')[0]!.getAttribute('aria-pressed')).toBe('true');
+
+    await user.click(row('run_other'));
+
+    await waitFor(() => expect(screen.getAllByTestId('agent-row')[0]!.getAttribute('aria-pressed')).toBe('false'));
   });
 });

@@ -55,7 +55,53 @@ describe('the live-shape corpus', () => {
     const depended = new Set(all.flatMap((task) => JSON.parse(task.deps) as string[]));
     const isolated = all.filter((task) => task.deps === '[]' && !depended.has(task.id));
 
-    expect(isolated).toHaveLength(49);
+    // ~50 of 76, which is why the canvas pulls them out of the layered layout and grid-packs them:
+    // left in, they flatten the graph into a ~50-node-wide ribbon that `fitView` zooms out until
+    // nothing is legible (SPEC §7.5).
+    expect(isolated).toHaveLength(47);
+  });
+
+  it('has one terminal that was picked up again after more than six idle hours', () => {
+    // **The shape the waves exist for** (SPEC §4.3). This gap used to cut the terminal's tasks into
+    // two unrelated rows in the rail, silently. It is now one orchestrator, and the gap is drawn on
+    // the canvas with its own length written on it — so a corpus with no such gap in it would let a
+    // build that never drew a wave pass every test it has.
+    const spans = rows<{ handle: string; created_at: string }>(
+      `SELECT created_by_terminal_handle AS handle, created_at FROM tasks
+       WHERE created_by_terminal_handle IS NOT NULL
+       ORDER BY created_by_terminal_handle, created_at`
+    );
+
+    const gapsOf = (handle: string): number[] => {
+      const times = spans
+        .filter((row) => row.handle === handle)
+        .map((row) => Date.parse(`${row.created_at.replace(' ', 'T')}Z`));
+      return times.slice(1).map((time, i) => time - times[i]!);
+    };
+
+    const handles = [...new Set(spans.map((row) => row.handle))];
+    const waved = handles.filter((handle) => gapsOf(handle).some((gap) => gap > 6 * 60 * 60 * 1000));
+
+    expect(waved).toHaveLength(1);
+    expect(Math.max(...gapsOf(waved[0]!))).toBeGreaterThan(13 * 60 * 60 * 1000);
+  });
+
+  it('has a dependency that crosses that gap — the work was picked up where it stopped', () => {
+    // The canvas lays each wave out on its own and joins them with a long line. A build that dropped
+    // the edge instead would call a real dependency a dead end.
+    const tasks = rows<{ id: string; handle: string | null; deps: string; created_at: string }>(
+      'SELECT id, created_by_terminal_handle AS handle, deps, created_at FROM tasks'
+    );
+    const at = (id: string): number => {
+      const row = tasks.find((task) => task.id === id)!;
+      return Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
+    };
+
+    const crossing = tasks.filter((task) =>
+      (JSON.parse(task.deps) as string[]).some((dep) => at(task.id) - at(dep) > 6 * 60 * 60 * 1000)
+    );
+
+    expect(crossing).toHaveLength(1);
   });
 
   it('spans 4 days, and holds one run overnight without a >6h gap between its tasks', () => {

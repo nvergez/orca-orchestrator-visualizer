@@ -86,7 +86,7 @@ function byId(tasks: Task[], id: string): Task {
 
 /** The three features a missing column can take away, as the user is told about them. */
 const TITLES = /task titles/i;
-const RUNS = /^runs\b/i;
+const RUNS = /^orchestrators\b/i;
 const LAST_SEEN = /last seen/i;
 
 const matching = (degraded: string[], feature: RegExp): string[] =>

@@ -1,7 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Dispatch, TaskDetail } from '../shared/types.ts';
-import type { Attribution } from './attribution.ts';
-import { readMessages } from './messages.ts';
 import { type Columns, selectWhere, text } from './rows.ts';
 import { DISPATCH_TASK_ID, hasColumn } from './schema.ts';
 import { DISPATCH_COLUMNS, toDispatch } from './tasks.ts';
@@ -22,9 +20,16 @@ import { DISPATCH_COLUMNS, toDispatch } from './tasks.ts';
  *    genuinely append-only per-task history in this schema, and a silent re-dispatch must not
  *    read as a first attempt.
  *
- * What it does **not** carry, it does not carry on purpose: the gate Q&A and the dependency
- * chips are on the wire already (`snapshot.gates` from #19, `Task.deps` from #15). A second copy
- * of either, fetched down a different route, is a second copy that can disagree with the first.
+ * What it does **not** carry, it does not carry on purpose: the gate Q&A, the dependency chips
+ * **and the messages** are on the wire already (`snapshot.gates`, `Task.deps`, and — new — the
+ * task-scoped slice of `snapshot.turns`). A second copy of any of them, fetched down a different
+ * route, is a second copy that can disagree with the first.
+ *
+ * The messages are the one that recently changed hands, and it was a straight upgrade: this route
+ * used to return the messages whose `payload.taskId` was this task, which is *the half of the
+ * exchange that got written down*. The orchestrator's prompt, its answer to a gate and the final
+ * receipt are not messages at all (SPEC §4.2, trap 2) and could never appear in it. The
+ * conversation carries all four (SPEC §4.7), so the weaker list is gone rather than kept beside it.
  */
 
 /** The two bodies, and the id that proves the task is really there. */
@@ -38,12 +43,7 @@ const TASK_BODY_COLUMNS = ['id', 'spec', 'result'] as const;
  * trap 8). Answering with an empty body would dress an id that means nothing up as a task with
  * nothing to say.
  */
-export function readTaskDetail(
-  db: DatabaseSync,
-  columns: Columns,
-  id: string,
-  attribution: Attribution
-): TaskDetail | null {
+export function readTaskDetail(db: DatabaseSync, columns: Columns, id: string): TaskDetail | null {
   // `tasks.id` is DAG core, so it is always there to be asked. The bodies may not be — an Orca
   // without them costs exactly the panel that shows them (`schema.ts`), never the query.
   const [row] = selectWhere(db, 'tasks', columns.tasks, TASK_BODY_COLUMNS, 'WHERE id = ? LIMIT 1', [id]);
@@ -54,7 +54,6 @@ export function readTaskDetail(
     spec: text(row.spec),
     result: text(row.result),
     attempts: readAttempts(db, columns, id),
-    messages: readTaskMessages(db, columns, id, attribution),
   };
 }
 
@@ -81,24 +80,4 @@ function readAttempts(db: DatabaseSync, columns: Columns, id: string): Dispatch[
   );
 
   return rows.map(toDispatch);
-}
-
-/**
- * The messages that referenced this task, in `sequence` order.
- *
- * Filtered in JS rather than in SQL, and that is the careful choice: the link is `payload.taskId`
- * inside a TEXT column with nothing enforcing that it holds JSON at all, and SQLite's
- * `json_extract` *errors* on a payload that does not parse. One malformed row would take the
- * whole route down with it. `parsePayload` already answers "no" to a blob it cannot read (SPEC
- * §5), so the same reader the feed uses does the filtering here — over 466 rows on a live
- * database, which is nothing.
- *
- * It goes through `readMessages` rather than around it so an inspector row and a feed row are
- * the same `FeedMessage`, attributed by the same rules (`attribution.ts`) and rendered by the
- * same component. Heartbeats come with them: they are 65% of the traffic and the panel hides
- * them by default, but the hiding is the *client's* (SPEC §7.7) — a wire that dropped them would
- * put rows behind a toggle the user can turn back on.
- */
-function readTaskMessages(db: DatabaseSync, columns: Columns, id: string, attribution: Attribution) {
-  return readMessages(db, columns, { since: 0, attribution }).filter((message) => message.taskId === id);
 }

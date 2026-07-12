@@ -5,10 +5,11 @@ import type { SchemaOptions } from './schema.ts';
  * A synthetic corpus with the *shape* of the live database — so that "it works on the
  * real thing" is something the suite checks rather than hopes (#13).
  *
- * The numbers below are the live database's, from #12 and #13: ~76 tasks in 13 inferred
- * runs, 4 of them edgeless, ~50 isolated singletons, 53 gate messages against 0
- * `decision_gates` rows, 302 of 466 messages heartbeats, 4 null-handle tasks. The
- * content is invented; only the shape is real.
+ * The numbers below are the live database's, from #12 and #13: ~76 tasks under 13 orchestrators, 4
+ * of them edgeless, ~50 isolated singletons, 53 gate messages against 0 `decision_gates` rows, 302
+ * of 466 messages heartbeats, 4 null-handle tasks — and **one terminal that was picked up again 14
+ * hours later**, which is the shape the waves exist for. The content is invented; only the shape is
+ * real.
  *
  * Everything here is deterministic — ids are hashes of their seed and every timestamp is
  * derived from one anchor — so the same corpus comes out of every build and out of every
@@ -30,20 +31,47 @@ type RunPlan = {
   chainLength: number;
   /** Minutes after the anchor that the run's first task was created. */
   startsAt: number;
-  /** Minutes between consecutive task creations. Never > 6h, or the run would split. */
+  /** Minutes between consecutive task creations. */
   spacing: number;
   /** Statuses of the run's *last* tasks — the work still in flight. The rest completed. */
   inFlight: string[];
+  /**
+   * **The second wave**: the task index at which this terminal picked its work up again after a
+   * long break (SPEC §4.3). Absent ⇒ the orchestrator worked in one continuous burst.
+   *
+   * This is the shape the whole wave feature exists for, and it is the live database's: a terminal
+   * is a Claude Code session a person comes back to, and the six-hour idle gap used to cut it into
+   * several unrelated rows in the rail with nothing on screen ever saying why. A corpus with no
+   * such gap in it would let a build that never drew a wave pass its tests.
+   */
+  secondWaveAt?: number;
+  /** How long the terminal was quiet before that second wave. */
+  idleHours?: number;
 };
 
 /**
- * Twelve handles, one run each. Two of them overlap in time on purpose (runs 0 and 2):
- * handle is the run key and time is only the tiebreaker, so a time-first clustering that
- * merged them would be caught here. Run 1 is the overnight one — 13 tasks from 20:10 to
- * 06:58 the next morning, with every consecutive gap under the 6h split threshold.
+ * Twelve handles, one orchestrator each. Three shapes are load-bearing and all three are here:
+ *
+ * - **Two of them overlap in time** (runs 0 and 2). The handle is the key and time is only the
+ *   tiebreaker, so a time-first clustering that merged them would be caught here.
+ * - **Run 1 is the overnight one** — 13 tasks from 20:10 to 06:58 the next morning, with every
+ *   consecutive gap *under* the six-hour threshold. A shorter threshold would shred it.
+ * - **Run 0 has two waves** — the same terminal, picked up again after 14 hours of silence. That
+ *   used to be two unrelated rows in the rail; it is now one orchestrator with a captioned gap
+ *   drawn across its canvas (SPEC §4.3).
  */
 const RUN_PLANS: RunPlan[] = [
-  { taskCount: 14, chainLength: 5, startsAt: 0, spacing: 20, inFlight: ['failed', 'dispatched', 'dispatched'] },
+  // The terminal that was picked up again the next morning, 14 hours later — and went on to depend
+  // on the work it had stopped in the middle of. One orchestrator, two waves, one cross-wave edge.
+  {
+    taskCount: 14,
+    chainLength: 5,
+    startsAt: 0,
+    spacing: 20,
+    inFlight: ['failed', 'dispatched', 'dispatched'],
+    secondWaveAt: 8,
+    idleHours: 14,
+  },
   { taskCount: 13, chainLength: 4, startsAt: 490, spacing: 54, inFlight: ['ready', 'ready', 'dispatched', 'dispatched'] },
   { taskCount: 12, chainLength: 4, startsAt: 60, spacing: 25, inFlight: ['pending', 'pending', 'pending', 'ready', 'ready'] },
   { taskCount: 10, chainLength: 3, startsAt: 1260, spacing: 30, inFlight: ['pending', 'pending', 'pending', 'dispatched', 'dispatched', 'dispatched'] },
@@ -117,10 +145,22 @@ function planTasks(): PlannedTask[] {
     for (let i = 0; i < plan.taskCount; i++) {
       const fromTheEnd = plan.taskCount - i;
       const status = plan.inFlight[plan.inFlight.length - fromTheEnd] ?? 'completed';
-      const createdAt = at(plan.startsAt + i * plan.spacing);
-      // A chain: task i depends on task i-1. Everything past the chain is an isolated
-      // singleton — 49 of the 76, which is why the canvas has to own the edgeless case.
-      const deps = i > 0 && i < plan.chainLength ? [ids[i - 1]!] : [];
+
+      // The silence in front of a second wave. Everything from `secondWaveAt` on is pushed back by
+      // it, so the gap between two *consecutive* tasks of one terminal really is > 6h — which is
+      // the only thing that opens a wave (`server/runs.ts`).
+      const idle = plan.secondWaveAt !== undefined && i >= plan.secondWaveAt ? (plan.idleHours ?? 0) * 60 : 0;
+      const createdAt = at(plan.startsAt + i * plan.spacing + idle);
+
+      // A chain: task i depends on task i-1. Everything past the chain is an isolated singleton —
+      // most of the 76, which is why the canvas has to own the edgeless case.
+      //
+      // …except the first task of a second wave, which depends on the last of the first. That is a
+      // dependency edge *crossing a wave border*, and it is what a terminal picking its work back up
+      // actually looks like: the canvas lays each wave out on its own and joins them with a long
+      // line, and a build that dropped the edge instead would call a real dependency a dead end.
+      const bridges = plan.secondWaveAt !== undefined && i === plan.secondWaveAt;
+      const deps = (i > 0 && i < plan.chainLength) || bridges ? [ids[i - 1]!] : [];
 
       tasks.push({
         id: ids[i]!,

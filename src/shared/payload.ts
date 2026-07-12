@@ -2,13 +2,13 @@
  * The `payload` column: TEXT holding JSON, with nothing anywhere enforcing that it is either.
  *
  * **Whatever does not parse is passed through as it was written.** A payload we cannot read is
- * still something a person can read, and the feed shows it (SPEC §5, render what parses). Every
+ * still something a person can read, and the tool shows it (SPEC §5, render what parses). Every
  * reader below is a *shape check* rather than a cast, so a payload that came back as a raw
  * string simply answers "no" to each of them instead of throwing.
  *
  * One implementation, because two would drift — and the row that fell between them would be
- * exactly the malformed one this is careful about. Both server readers go through it: the feed
- * (`messages.ts`) and the gates (`gates.ts`), which reads the same column for the question.
+ * exactly the malformed one this is careful about. Both server readers go through it: the message
+ * log (`messages.ts`) and the gates (`gates.ts`), which reads the same column for the question.
  */
 export function parsePayload(value: unknown): unknown {
   if (typeof value !== 'string' || value === '') return null;
@@ -31,7 +31,7 @@ export function parsePayload(value: unknown): unknown {
  * answer it differently if they each wrote it out: the **server** asks it to decide which task
  * a message belongs to (`messages.ts`), and the **client** asks it to tell a message that never
  * named a task apart from one whose task an `orchestration reset` deleted — which is the
- * difference between an ordinary row and one the feed has to mark "unlinked" (SPEC §4.2,
+ * difference between an ordinary row and one the conversation has to mark "unlinked" (SPEC §4.2,
  * trap 8). Two implementations of that check would drift, and the row that fell between them
  * would be exactly the orphan the trap is about.
  */

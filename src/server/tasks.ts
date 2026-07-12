@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Dispatch } from '../shared/types.ts';
-import { type Columns, isTrue, type Row, selectPresent, text } from './rows.ts';
+import { type Columns, type Row, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
 import { byInstant, isoInstant } from './time.ts';
 
@@ -42,16 +42,31 @@ const TASK_COLUMNS = [
 ] as const;
 
 /**
+ * How much of a body the conversation gets. The rest of it stays in the file.
+ *
+ * The conversation needs `tasks.spec` — it is the *only* record of what the orchestrator told an
+ * agent to do, because no `dispatch` message is ever written (SPEC §4.2, trap 2). But a live
+ * 71-task dump was 172 KB, almost entirely spec text, and the snapshot is re-sent whole on every
+ * push (SPEC §6.3). Both of those are true at once, and a preview is what they add up to: a
+ * bubble in a 400px dock was never going to show 3 KB of agent prompt, and the node inspector is
+ * one click away with the whole of it.
+ */
+export const BODY_PREVIEW_CHARS = 240;
+
+/**
  * The bodies never cross the SQLite boundary in the first place.
  *
- * `spec` and `result` are only ever asked "are you there?" — so SQLite is asked that, and
- * the 172 KB of agent prompt text a live database holds stays in the file. Reading it into
- * the process to derive two booleans would be the same waste the snapshot exists to avoid
- * (SPEC §6.3).
+ * `substr` is what keeps that true now that the conversation wants the beginning of a spec:
+ * SQLite slices the column and hands over 240 characters, and the other 3 KB of agent prompt
+ * stays in the file. Reading the whole thing into the process to slice it here would be the
+ * same waste the snapshot exists to avoid (SPEC §6.3).
+ *
+ * One character *past* the cap, so that "was there more?" is a fact about the string we hold
+ * rather than a guess: a preview longer than the cap is a body that was cut.
  */
-const BODY_PRESENCE: Record<string, string> = {
-  spec: "(spec IS NOT NULL AND spec <> '') AS spec",
-  result: "(result IS NOT NULL AND result <> '') AS result",
+const BODY_PREVIEW: Record<string, string> = {
+  spec: `substr(spec, 1, ${BODY_PREVIEW_CHARS + 1}) AS spec`,
+  result: `substr(result, 1, ${BODY_PREVIEW_CHARS + 1}) AS result`,
 };
 
 /**
@@ -82,20 +97,28 @@ export const DISPATCH_COLUMNS = [
 export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] {
   const attempts = readAttempts(db, columns);
 
-  return selectPresent(db, 'tasks', columns.tasks, TASK_COLUMNS, BODY_PRESENCE)
+  return selectPresent(db, 'tasks', columns.tasks, TASK_COLUMNS, BODY_PREVIEW)
     .map((row): TaskWithHandle => {
       const id = text(row.id) ?? '';
-      const attempt = attempts.get(id);
+      const held = attempts.get(id) ?? [];
+      const latest = held[held.length - 1] ?? null;
       // Pre-v5 Orca named neither. A *task* then falls back to its short id; a *run* falls
       // back to its handle — so the name is passed on unresolved, and each falls back its own way.
       const name = text(row.task_title) ?? text(row.display_name);
+
+      // `hasSpec` used to be a SQL predicate and is now the same question asked of the preview:
+      // a non-empty slice of a column is a non-empty column, and an absent one slices to null.
+      const spec = text(row.spec);
+      const result = text(row.result);
 
       return {
         // Absent before schema v4, and null on 4 of 76 live tasks even now: both land the
         // task in the one synthetic `run_unattributed` rather than losing it (SPEC §4.3).
         handle: text(row.created_by_terminal_handle),
         name,
-        assignees: attempt?.assignees ?? [],
+        attempts: held,
+        spec: preview(spec),
+        result: preview(result),
         task: {
           id,
           // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
@@ -112,49 +135,54 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
           deps: parseDeps(row.deps),
           createdAt: isoInstant(row.created_at) ?? '',
           completedAt: isoInstant(row.completed_at),
-          hasSpec: isTrue(row.spec),
-          hasResult: isTrue(row.result),
-          dispatch: attempt ? toDispatch(attempt.latest) : null,
-          attemptCount: attempt?.count ?? 0,
+          hasSpec: spec !== null,
+          hasResult: result !== null,
+          dispatch: latest,
+          attemptCount: held.length,
         },
       };
     })
     .sort(byCreation);
 }
 
-type Attempts = {
-  latest: Row;
-  count: number;
-  /** Every terminal that has held this task, oldest attempt first, deduplicated. */
-  assignees: string[];
-};
+/** A body as the conversation gets it: capped, and honest about having been capped. */
+export type Preview = { text: string; truncated: boolean };
+
+function preview(body: string | null): Preview | null {
+  if (body === null) return null;
+
+  // SQLite was asked for one character past the cap (`BODY_PREVIEW`), so a preview that is
+  // *longer* than the cap is the proof that the column held more — no second read, no guess.
+  return body.length > BODY_PREVIEW_CHARS
+    ? { text: body.slice(0, BODY_PREVIEW_CHARS), truncated: true }
+    : { text: body, truncated: false };
+}
 
 /**
- * The dispatch attempts, folded per task.
+ * The dispatch attempts, per task, in `rowid` order — insertion order, which is the order they
+ * were made in.
  *
- * `ORDER BY rowid` and last-one-wins *is* `MAX(rowid)` — spelled as a fold because the
- * attempt count falls out of the same pass. Ordering by `dispatched_at` instead would be
- * the bug: a re-dispatch can carry an earlier timestamp than the attempt it follows, and
- * the node would then report a circuit-broken task as freshly dispatched.
+ * The **last** one is `MAX(rowid)`: the latest attempt, which is what the node badge shows.
+ * Ordering by `dispatched_at` instead would be the bug — a re-dispatch can carry an earlier
+ * timestamp than the attempt it follows, and the node would then report a circuit-broken task as
+ * freshly dispatched.
  *
- * The same pass collects **every** attempt's assignee, not just the surviving one. The node
- * badge only ever shows the latest, but a run's handle set is built of all of them
- * (`attribution.ts`), and a retry is dispatched to a *new* terminal — so dropping the earlier
- * attempts here would silently unattribute every message the first worker ever sent.
+ * **All** of them are kept, not just the surviving one, because three separate things are built
+ * out of the ones it would otherwise fold away: a run's handle set (`attribution.ts`), the cast
+ * (`cast.ts`), and one `dispatch` turn per attempt (`conversation.ts`). A retry is dispatched to
+ * a *new* terminal in a *new* worktree — so the first worker's handle exists nowhere else, and
+ * dropping it here would silently unattribute every message it ever sent.
  */
-function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Attempts> {
-  const attempts = new Map<string, Attempts>();
+function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Dispatch[]> {
+  const attempts = new Map<string, Dispatch[]>();
 
   for (const row of selectPresent(db, 'dispatch_contexts', columns.dispatch_contexts, DISPATCH_COLUMNS)) {
     const taskId = text(row.task_id);
     if (!taskId) continue; // A dispatch context belonging to no task belongs to no node.
 
-    const previous = attempts.get(taskId);
-    const assignees = previous?.assignees ?? [];
-    const assignee = text(row.assignee_handle);
-    if (assignee !== null && !assignees.includes(assignee)) assignees.push(assignee);
-
-    attempts.set(taskId, { latest: row, count: (previous?.count ?? 0) + 1, assignees });
+    const held = attempts.get(taskId);
+    if (held) held.push(toDispatch(row));
+    else attempts.set(taskId, [toDispatch(row)]);
   }
 
   return attempts;

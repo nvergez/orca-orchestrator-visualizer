@@ -86,6 +86,28 @@
   --gate-ink: #9a3412;
 
   /**
+   * **Agent identity — and it is never a fill.**
+   *
+   * A node has one background and two things want to colour it: its *status*, and the *agent* that
+   * worked it. Two colour systems cannot both win the same pixel, so the fight is settled rather
+   * than split: the status keeps the fill (those six hexes were signed off on screen, and retuning
+   * them is re-approval, not refactoring — SPEC §7.5), and the agent takes the **left stripe and
+   * the monogram badge**, which is a channel nothing else was using.
+   *
+   * Four, cycled. A fifth agent wears A1's teal again — and is still unmistakably *A5*, because
+   * identity here is carried by the monogram and the colour is only what makes it findable at a
+   * glance. Four distinguishable hues that never fight the six statuses is worth more than eight
+   * that do.
+   */
+  --agent-1: #0d9488;
+  --agent-2: #db2777;
+  --agent-3: #4f46e5;
+  --agent-4: #57534e;
+  /* The ink on a monogram badge: the badge is a solid slab of the agent's colour, so its text is
+     whatever that colour is not. */
+  --agent-ink: #ffffff;
+
+  /**
    * The field, and the panels that stand on it (SPEC §7.9).
    *
    * `--field` is the page *behind* everything — never the colour of a panel. In light it is a
@@ -166,6 +188,14 @@
   --gate-soft: #431407;
   --gate-ink: #fed7aa;
 
+  /* Lifted, so a 3px stripe still reads against a dark fill — and the badge's ink goes dark, for
+     the same reason it went white in the light theme: it sits on a slab of the agent's colour. */
+  --agent-1: #2dd4bf;
+  --agent-2: #f472b6;
+  --agent-3: #a5b4fc;
+  --agent-4: #a8a29e;
+  --agent-ink: #09090b;
+
   /* The field goes *darker* than any panel on it — the panels are what the light is on. */
   --field: oklch(0.115 0.008 274);
   --field-glow: oklch(0.62 0.19 259.8 / 0.1);
@@ -234,6 +264,8 @@
   --color-gate: var(--gate);
   --color-gate-soft: var(--gate-soft);
   --color-gate-ink: var(--gate-ink);
+
+  --color-agent-ink: var(--agent-ink);
 
   --color-field: var(--field);
   --color-panel: var(--panel);
