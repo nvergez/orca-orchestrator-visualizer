@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
@@ -158,6 +158,19 @@ function node(id: string): HTMLElement {
   const element = screen.getByTestId('canvas').querySelector(`[data-task="${id}"]`);
   if (!element) throw new Error(`no node for ${id} on the canvas`);
   return element as HTMLElement;
+}
+
+/**
+ * A node is clicked with `fireEvent`, and never with `user-event`, **because jsdom is not a
+ * browser.** `user.click` dispatches a real `mousedown`, which bubbles into React Flow's d3-zoom
+ * pane — and d3-drag reaches for `ownerDocument.defaultView.document` on a view jsdom does not
+ * have. The exception is thrown inside an event listener, so it does not fail the assertion; it
+ * fails the *run*, as an unhandled error, which is a far worse thing to leave lying around.
+ *
+ * The click is all the component needs: `onNodeClick` is a click handler.
+ */
+function clickNode(id: string): void {
+  fireEvent.click(node(id));
 }
 
 /** The canvas lays out through elkjs, which is async — nothing is on it until that lands. */
@@ -446,16 +459,15 @@ describe('a turn and its node', () => {
   });
 
   it('gives the dock up to the inspector when a node is selected, and takes it back when it is let go', async () => {
-    const user = userEvent.setup();
-
     render(<App event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
-    await user.click(node(TASK_A));
+    clickNode(TASK_A);
     expect(await screen.findByTestId('inspector')).toBeVisible();
     expect(screen.queryByTestId('conversation')).not.toBeInTheDocument();
 
-    await user.click(node(TASK_A));
+    // The way out is the way in: clicking the same node again.
+    clickNode(TASK_A);
     expect(await screen.findByTestId('conversation')).toBeVisible();
     expect(screen.queryByTestId('inspector')).not.toBeInTheDocument();
   });
