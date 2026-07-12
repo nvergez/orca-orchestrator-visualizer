@@ -197,6 +197,19 @@ const FEATURES: Feature[] = [
     degraded:
       'Waves — this Orca has no tasks.created_at column, so the idle gaps that separate one burst of an orchestrator’s work from the next cannot be measured, and every task is drawn in a single wave.',
   },
+  {
+    // The hints are best-effort by design — a missing hint is their ordinary answer — so losing
+    // one evidence source is just fewer hints, and only losing every source is a degraded
+    // feature: there is then nothing left for the readers to read (SPEC §12.4, `hints.ts`).
+    anyOf: ['tasks.spec', 'tasks.result', MESSAGE_PAYLOAD],
+    degraded:
+      'Agent-kind hints — this Orca has none of tasks.spec, tasks.result or messages.payload, so no retained evidence can suggest what kind of agent a cast member was.',
+  },
+  {
+    anyOf: ['tasks.spec', 'tasks.result'],
+    degraded:
+      'Repository hints — this Orca has neither tasks.spec nor tasks.result, so no retained path evidence can suggest which project an orchestrator was working in.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */

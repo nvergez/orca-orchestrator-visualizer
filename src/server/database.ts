@@ -6,6 +6,7 @@ import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
+import { attachHints, readHintEvidence } from './hints.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
@@ -88,6 +89,12 @@ export class OrcaDatabase {
     // and disagree with itself the moment Orca wrote a row between the two reads.
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
 
+    // The evidence hints (SPEC §12.4), last, because they consume what everything above decided
+    // and decide nothing back: an uncertain `claude?` on a cast member, an uncertain project on
+    // a run — read from retained spec/result/branch evidence, refused on any ambiguity, and
+    // never touching the identities (run ids, monograms, attribution) already settled.
+    const hinted = attachHints(gated.runs, readHintEvidence(this.db, this.schema.columns, entries), messages);
+
     return {
       seq: this.highWaterMark(),
       meta: {
@@ -102,14 +109,14 @@ export class OrcaDatabase {
         resetDetected: detectReset(this.db, this.schema.columns),
       },
       snapshot: {
-        runs: gated.runs,
+        runs: hinted,
         tasks: gated.tasks,
         gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
         // report out of `tasks.result`. It is the whole of what this screen is for, and the client
         // does nothing to it but choose a scope.
-        turns: conversationOf({ entries, runs: gated.runs, gates, messages }),
+        turns: conversationOf({ entries, runs: hinted, gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },
