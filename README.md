@@ -170,6 +170,7 @@ orca-viz is on its own semver and tracks no Orca version number.
 
 | orca-viz | Orca `SCHEMA_VERSION` verified against | Orca app version |
 |---|---|---|
+| 0.2.x | 5 | 1.4.128 |
 | 0.1.x | 5 | 1.4.128 |
 
 If your Orca is newer than the last row, orca-viz will most likely still work — the schema's
