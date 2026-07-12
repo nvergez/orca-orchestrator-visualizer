@@ -1,7 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OrcaDatabase } from '../../src/server/database.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
@@ -72,59 +71,10 @@ describe('GET /api/snapshot', () => {
 });
 
 /**
- * Render what parses (SPEC §5). An Orca update must degrade this tool, never end it — the
- * one exception being a database with no task DAG in it, which there is no honest way to
- * draw.
+ * Render what parses (SPEC §5) — a database from an Orca this tool has never seen — lives in
+ * `degradation.test.ts` (#21), where the same orchestration is written at every schema version
+ * and each missing column is shown to cost exactly one feature.
  */
-describe('a database from a different Orca', () => {
-  it('renders a newer schema under the "newer" banner rather than refusing it', async () => {
-    const dbPath = new FixtureBuilder({ userVersion: 6 }).task({ createdAt: AT }).write(tempDbPath());
-    harness = await serve(dbPath);
-
-    const { meta } = await harness.snapshot();
-
-    expect(meta.schemaVersion).toBe(6);
-    expect(meta.schemaSupport).toBe('newer');
-  });
-
-  it('degrades task labels — and only task labels — when pre-v5 Orca has no title columns', async () => {
-    const dbPath = new FixtureBuilder({ userVersion: 4 }).task({ createdAt: AT }).write(tempDbPath());
-    harness = await serve(dbPath);
-
-    const { meta } = await harness.snapshot();
-
-    expect(meta.schemaSupport).toBe('older');
-    expect(meta.degraded).toHaveLength(1);
-    expect(meta.degraded[0]).toContain('Task titles');
-  });
-
-  it('degrades run inference when pre-v4 Orca has no terminal handle on a task', async () => {
-    const dbPath = new FixtureBuilder({ userVersion: 3 }).task({ createdAt: AT }).write(tempDbPath());
-    harness = await serve(dbPath);
-
-    const { degraded } = (await harness.snapshot()).meta;
-
-    expect(degraded.join('\n')).toContain('Runs');
-    expect(degraded.join('\n')).toContain('Unattributed');
-  });
-
-  it('degrades the last-seen badge when pre-v2 Orca has no heartbeat column', async () => {
-    const dbPath = new FixtureBuilder({ userVersion: 1 }).task({ createdAt: AT }).write(tempDbPath());
-    harness = await serve(dbPath);
-
-    const { degraded } = (await harness.snapshot()).meta;
-
-    expect(degraded.join('\n')).toContain('last seen');
-  });
-
-  it('refuses a database with no task DAG — the one legal hard-fail — and says why', () => {
-    const dbPath = new FixtureBuilder({ omitColumns: { tasks: ['deps'] } })
-      .task({ createdAt: AT })
-      .write(tempDbPath());
-
-    expect(() => new OrcaDatabase(dbPath)).toThrow(/no readable task DAG.*tasks\.deps/s);
-  });
-});
 
 /**
  * A suddenly-empty history has to be explained rather than mysterious (#14). `sequence` is

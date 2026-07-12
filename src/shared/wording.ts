@@ -24,3 +24,27 @@ export function livenessSentence(
   }
   return `connected to a running Orca${orcaPid === null ? '' : ` (pid ${orcaPid})`}`;
 }
+
+/**
+ * What this Orca's schema costs you — the banner (#21), and the same sentence in the terminal.
+ *
+ * Two sentences, and the difference between them is the whole of the degradation strategy.
+ * A **newer** Orca is a *warning*: every column we know is still there, so everything renders,
+ * and the only honest caveat is that a field it added — or renamed under us — may be showing up
+ * missing or mislabeled. An **older** Orca is a *list*: it is missing columns we know by name,
+ * so each one costs exactly the feature that needed it, and `meta.degraded` says which.
+ *
+ * Null when the schema is the one this build was written for, because a banner that is always
+ * on screen is furniture, and furniture stops being read.
+ */
+export function schemaSentence({ schemaSupport, degraded }: Pick<Meta, 'schemaSupport' | 'degraded'>): string | null {
+  if (schemaSupport === 'newer') {
+    return 'This database is from a newer Orca schema — some data may be missing or mislabeled.';
+  }
+  // An older Orca that happens to be missing nothing we read is not a degraded one: there is
+  // no feature to name, so there is nothing worth interrupting the user about.
+  if (schemaSupport === 'older' && degraded.length > 0) {
+    return 'This database is from an older Orca schema — these features are reduced:';
+  }
+  return null;
+}

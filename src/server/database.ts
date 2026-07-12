@@ -5,7 +5,7 @@ import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { inferRuns } from './runs.ts';
-import { detectReset, inspectSchema, type SchemaReport } from './schema.ts';
+import { detectReset, hasColumn, inspectSchema, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTasks } from './tasks.ts';
 
@@ -74,7 +74,7 @@ export class OrcaDatabase {
         // under us when the user quits Orca (SPEC §6.1).
         ...liveness,
         dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
-        resetDetected: detectReset(this.db),
+        resetDetected: detectReset(this.db, this.schema.columns),
       },
       snapshot: {
         runs,
@@ -89,8 +89,16 @@ export class OrcaDatabase {
   /**
    * `MAX(messages.sequence)` — AUTOINCREMENT, gap-free, append-only: the one cursor in
    * this schema that can be trusted (SPEC §6.1). It becomes the SSE event id in #17.
+   *
+   * Guarded on the column really being there, like every other read in this server (#21).
+   * An Orca that renamed `sequence` — or dropped `messages`, which introspects to the same
+   * empty column set — costs the feed and the reset detector, and it must not cost the DAG:
+   * asking SQLite for a column it does not have throws, and that would be a hard-fail this
+   * tool has no right to (SPEC §5 — the DAG core is the only one).
    */
   private highWaterMark(): number {
+    if (!hasColumn(this.schema.columns, 'messages.sequence')) return 0;
+
     const row = this.db.prepare('SELECT MAX(sequence) AS seq FROM messages').get() as { seq: number | null };
     return row.seq ?? 0;
   }

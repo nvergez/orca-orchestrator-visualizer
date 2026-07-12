@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { livenessSentence } from '../shared/wording.ts';
+import type { Meta } from '../shared/types.ts';
+import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { openBrowser as launchBrowser, shouldOpenBrowser } from './browser.ts';
 import { HELP, type Options, parseOptions } from './cli.ts';
 import { OrcaDatabase } from './database.ts';
@@ -69,10 +70,12 @@ export async function boot(options: BootOptions): Promise<Booted> {
 
     const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
 
-    // Always say what you are reading (SPEC §3). It is one line, and it is the difference
+    // Always say what you are reading (SPEC §3). It is a few lines, and it is the difference
     // between trusting this tool and wondering about it.
+    const meta = database.snapshot().meta;
     print(`orca-viz  reading ${dbPath}`);
-    print(`          ${describeState(database)}`);
+    print(`          ${describeState(meta)}`);
+    for (const line of describeSchema(meta)) print(`          ${line}`);
     print(`          listening on ${url}`);
 
     if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
@@ -118,24 +121,30 @@ function listen(server: Server, { port, host }: Options): Promise<void> {
 }
 
 /** A summary of what the user is about to look at: live, or the last-known state. */
-function describeState(database: OrcaDatabase): string {
-  const meta = database.snapshot().meta;
-  const { schemaVersion, schemaSupport, degraded, resetDetected } = meta;
-
-  const schema =
-    schemaSupport === 'supported'
-      ? `schema v${schemaVersion}`
-      : `schema v${schemaVersion} (${schemaSupport} than this build — ${degraded.length} feature(s) degraded)`;
-
+function describeState(meta: Meta): string {
   return [
     // The same sentence the page shows — written once, in src/shared/wording.ts, so the
     // terminal and the browser cannot drift into telling the user different things.
     livenessSentence(meta),
-    schema,
-    resetDetected ? 'a reset has wiped part of the history' : null,
+    `schema v${meta.schemaVersion} (${meta.schemaSupport === 'supported' ? 'the one this build reads' : `${meta.schemaSupport} than this build`})`,
+    meta.resetDetected ? 'a reset has wiped part of the history' : null,
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/**
+ * What this Orca's schema costs you, **by name** (#21).
+ *
+ * A count would be worse than silence: "1 feature(s) degraded" tells a user that something is
+ * missing and leaves them to hunt the screen for what. So the terminal prints exactly what the
+ * page prints — the sentence, and then the feature, and what they get instead of it.
+ */
+function describeSchema(meta: Meta): string[] {
+  const sentence = schemaSentence(meta);
+  if (sentence === null) return [];
+
+  return [sentence, ...meta.degraded.map((feature) => `  • ${feature}`)];
 }
 
 /** `0.0.0.0` is not somewhere a browser can go; `localhost` is. */

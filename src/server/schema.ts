@@ -26,6 +26,14 @@ export type TableName = (typeof TABLES)[number];
  * A feature the visualizer offers, the column it cannot live without, and what the user is
  * told when that column is not there. These strings go straight to the screen — the user
  * is owed an explanation of *why* a badge vanished, not a silent absence.
+ *
+ * **This list is the whole degradation contract, and it is meant to be added to.** A feature
+ * that reads a column outside the DAG core belongs here, worded for a human: name the feature
+ * first, then the column, then what the user gets instead. A feature with no entry degrades
+ * silently, which is the failure this ticket exists to prevent.
+ *
+ * `columns` is satisfied when *any* of them is present — one column is the ordinary case, and
+ * a pair is how two interchangeable columns (the two title columns) are spelled.
  */
 const FEATURES: { columns: string[]; degraded: string }[] = [
   {
@@ -42,6 +50,13 @@ const FEATURES: { columns: string[]; degraded: string }[] = [
     columns: ['dispatch_contexts.last_heartbeat_at'],
     degraded: 'The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.',
   },
+  {
+    // The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
+    // It is what spots an `orchestration reset`, and what the message feed resumes from.
+    columns: ['messages.sequence'],
+    degraded:
+      'Reset detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */
@@ -54,6 +69,21 @@ export type SchemaReport = {
   /** The columns each table really has. Never SELECT one that is not in here. */
   columns: Record<TableName, ReadonlySet<string>>;
 };
+
+/**
+ * Is this column really there? — the question every query in this server has to ask first.
+ *
+ * `selectPresent` (`rows.ts`) asks it for whole row reads. This is for the handful of queries
+ * that are not row reads: an aggregate, a `MAX()`, anything that names a column in SQL text
+ * of its own. Asking SQLite for a column that is not there is not a degraded feature, it is a
+ * thrown error — and outside the DAG core, throwing is never this tool's right to take.
+ *
+ * `table.column`, so a call site reads as the thing it is guarding.
+ */
+export function hasColumn(columns: SchemaReport['columns'], qualified: string): boolean {
+  const [table, column] = qualified.split('.') as [TableName, string];
+  return columns[table]?.has(column) ?? false;
+}
 
 function columnsOf(db: DatabaseSync, table: TableName): ReadonlySet<string> {
   try {
@@ -80,10 +110,7 @@ function supportFor(version: number): SchemaSupport {
 export function inspectSchema(db: DatabaseSync): SchemaReport {
   const columns = Object.fromEntries(TABLES.map((table) => [table, columnsOf(db, table)])) as SchemaReport['columns'];
 
-  const has = (qualified: string): boolean => {
-    const [table, column] = qualified.split('.') as [TableName, string];
-    return columns[table].has(column);
-  };
+  const has = (qualified: string): boolean => hasColumn(columns, qualified);
 
   const missingCore = DAG_CORE.filter((column) => !has(column));
   if (missingCore.length > 0) {
@@ -112,8 +139,14 @@ export function inspectSchema(db: DatabaseSync): SchemaReport {
  * handed out even after the rows are deleted. A counter that has run ahead of the rows
  * that survive is the fingerprint of a reset — and it is the difference between a
  * mysteriously empty history and an explained one (SPEC §5).
+ *
+ * The detector is itself a *feature*, and so it degrades like one: an Orca with no
+ * `messages.sequence` gets no reset detection and is told so (`FEATURES`), rather than being
+ * asked a question SQLite would answer by throwing.
  */
-export function detectReset(db: DatabaseSync): boolean {
+export function detectReset(db: DatabaseSync, columns: SchemaReport['columns']): boolean {
+  if (!hasColumn(columns, 'messages.sequence')) return false;
+
   let counter: number;
   try {
     const row = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'messages'").get() as
