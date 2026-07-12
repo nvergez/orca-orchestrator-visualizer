@@ -12,7 +12,7 @@ export type Options = {
   listDbs: boolean;
   port: number;
   host: string;
-  /** Handed to the poll loop in #17; accepted here so the flag surface is complete. */
+  /** The poll loop's cadence (SPEC §6.1) — how often the SSE stream looks for a change. */
   pollIntervalMs: number;
   /** Auto-open the browser. `--no-open` turns it off; so do a pipe, CI and SSH. */
   open: boolean;

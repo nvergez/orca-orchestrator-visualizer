@@ -21,7 +21,7 @@ writeFileSync(join(clientDir, 'assets', 'index.js'), 'console.log("orca-viz")');
 const database = new OrcaDatabase(
   new FixtureBuilder().task({ createdAt: new Date('2026-07-08T12:00:00Z') }).write(tempDbPath())
 );
-const server = createServer({ database, clientDir });
+const { server, close } = createServer({ database, clientDir });
 let origin: string;
 
 beforeAll(async () => {
@@ -30,7 +30,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await close();
   database.close();
 });
 

@@ -28,7 +28,7 @@ type SqlValue = string | number | null;
 type Row = Record<string, SqlValue>;
 
 /** `'2026-07-08 12:32:13'` — every column Orca writes with `datetime('now')`. */
-function sqlTime(at: Date): string {
+export function sqlTime(at: Date): string {
   return at.toISOString().slice(0, 19).replace('T', ' ');
 }
 

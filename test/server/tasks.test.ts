@@ -92,10 +92,14 @@ describe('the tasks in a snapshot', () => {
   it('keeps the whole live-shape corpus down to a few KB by omitting the bodies', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
-    const wire = await (await fetch(`${harness.origin}/api/snapshot`)).text();
+    const event = await harness.snapshot();
 
-    expect(JSON.parse(wire).snapshot.tasks).toHaveLength(76);
-    expect(wire.length).toBeLessThan(50_000);
+    // The graph half of the event, which is the half the omitted bodies were 172 KB of. The
+    // *whole* event is bigger, because from #17 it also carries the message feed — and that
+    // is the deal the payload was designed around (SPEC §6.3): the graph is re-sent whole on
+    // every push, so it has to stay small, while the feed is sent once and then incrementally.
+    expect(event.snapshot.tasks).toHaveLength(76);
+    expect(JSON.stringify(event.snapshot).length).toBeLessThan(50_000);
   });
 });
 
