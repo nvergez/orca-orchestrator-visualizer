@@ -199,6 +199,41 @@ describe('GET /api/stream', () => {
     expect(push.event.seq).toBe(2);
   });
 
+  it('keeps streaming the DAG on an Orca whose message cursor this build cannot read (#21)', async () => {
+    // `messages.sequence` renamed or gone. `highWaterMark()` degrades to 0 rather than throwing
+    // (#21) — so `seq`, the value this whole resume story hangs on, is 0 on every event. The two
+    // halves have to degrade *together*: an event id of 0 against a feed that still believed in
+    // its cursor would replay the entire table on every push.
+    const dbPath = new FixtureBuilder({ omitColumns: { messages: ['sequence'] } })
+      .task({ id: 'task_build', handle: CODER, title: 'Build it', status: 'dispatched', createdAt: AT })
+      .task({ id: 'task_ship', handle: CODER, title: 'Ship it', status: 'ready', deps: ['task_build'], createdAt: AT })
+      .message({ fromHandle: COORDINATOR, toHandle: CODER, subject: 'Build it', createdAt: AT })
+      .write(tempDbPath());
+
+    harness = await serve(dbPath);
+    writer = new FixtureWriter(dbPath);
+
+    const stream = await harness.stream();
+    const first = await stream.next();
+
+    // No cursor, so no feed — and the banner says which feature that cost, rather than the row
+    // simply never appearing.
+    expect(first.event.seq).toBe(0);
+    expect(first.id).toBe('0');
+    expect(first.event.messages).toEqual([]);
+    expect(first.event.meta.degraded.length).toBeGreaterThan(0);
+
+    // …and the graph goes on updating live regardless, which is the whole point of degrading
+    // rather than dying: `data_version` is a pragma, not a column, so the change detector
+    // survives drift that the cursor does not. You lose the feed. You do not lose the DAG.
+    writer.setTaskStatus('task_ship', 'dispatched');
+    const push = await stream.next();
+
+    expect(push.event.snapshot.tasks.find((task) => task.id === 'task_ship')?.status).toBe('dispatched');
+    expect(push.event.seq).toBe(0);
+    expect(push.event.messages).toEqual([]);
+  });
+
   it('flips the badge to stale when Orca is closed, though the database never changes again', async () => {
     const dbPath = fixture();
     writeFileSync(join(dirname(dbPath), 'orca-runtime.json'), JSON.stringify({ pid: 4242 }));
