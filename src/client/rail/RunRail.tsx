@@ -1,6 +1,6 @@
-import { ArrowUp, OctagonAlert } from 'lucide-react';
+import { ArrowUp, ChevronDown, OctagonAlert, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -42,6 +42,26 @@ import { formatRunDate, statusBreakdown } from './summary.ts';
  * that responds to you and a list that merely reacts.
  */
 
+/**
+ * Some mobile browsers fire mouseenter on tap, which would strand the sliding `rail-hover`
+ * highlight (one layoutId, below) on the last row a thumb touched. Hover is a pointer fact, not a
+ * width fact, so it is checked once: no hover hardware, no hover state. `matchMedia` is missing in
+ * jsdom, and the fallback is `true` — desktop and every existing test see the rail unchanged.
+ */
+const CAN_HOVER = globalThis.matchMedia?.('(hover: hover)').matches ?? true;
+
+/**
+ * On a phone the rail is a stacked band that folds to a summary row instead of a fixed-width
+ * column. The shell owns *whether* it is folded; the rail owns *what folding means* — a pure
+ * height clamp, so the list stays mounted, scroll position survives, and the `layoutId`
+ * highlights never replay.
+ */
+export type RailFold = {
+  /** True while the band is collapsed to its summary row. */
+  folded: boolean;
+  onToggle: () => void;
+};
+
 export type RunRailProps = {
   runs: Run[];
   coordinatorRuns: CoordinatorRun[];
@@ -52,6 +72,8 @@ export type RunRailProps = {
   onSelectAgent: (handle: string | null) => void;
   /** An orchestration that started while the user was reading an older one — announced, never jumped to. */
   newRunId: string | null;
+  /** Present only on mobile, where the rail is a foldable band. Desktop passes nothing. */
+  fold?: RailFold;
 };
 
 export function RunRail({
@@ -62,6 +84,7 @@ export function RunRail({
   selectedAgent,
   onSelectAgent,
   newRunId,
+  fold,
 }: RunRailProps) {
   // Which row the pointer is on. The *only* reason this is state: the sliding highlight is one
   // element that has to know which row to be on top of, and that is a question no row can answer
@@ -71,66 +94,177 @@ export function RunRail({
   // One clock for every "last seen" badge in the cast, so the list ages in step.
   const now = useNow(runs);
 
+  // What the summary row has to say while the list is clipped: which run, and — if the canvas is
+  // dimmed to one agent — which agent, so the filter stays escapable without unfolding.
+  const selectedRun = runs.find((run) => run.id === selectedId) ?? null;
+  const selectedAgentMember = selectedRun?.cast.find((member) => member.handle === selectedAgent) ?? null;
+
+  // Where focus goes when the band folds under it. Folding makes `rail-body` inert in the same
+  // commit, and a browser blurs any focus inside a subtree that goes inert (the focus-fixup
+  // rule) — so a keyboard pivot, the tool's central gesture, would silently drop its focus to
+  // <body> and the next Tab would restart from the top of the page. The fold hands focus to the
+  // toggle instead: the chrome that undoes it. Only on the expanded→folded flip, never on
+  // mount or on a viewport crossing — a page must not open by grabbing focus.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const folded = fold?.folded ?? null;
+  const wasFolded = useRef(folded);
+
+  useEffect(() => {
+    const was = wasFolded.current;
+    wasFolded.current = folded;
+    if (folded !== true || was !== false) return;
+
+    const active = document.activeElement;
+    if (active === document.body || (active !== null && bodyRef.current?.contains(active))) {
+      toggleRef.current?.focus();
+    }
+  }, [folded]);
+
   return (
     <motion.nav
       aria-label="Orchestrators"
       initial={enter({ opacity: 0, x: -12 })}
       animate={{ opacity: 1, x: 0 }}
       transition={SPRING}
-      className={cn(PANEL_CLASS, 'flex min-h-0 w-[18rem] shrink-0 flex-col overflow-hidden')}
+      className={cn(
+        PANEL_CLASS,
+        'flex min-h-0 w-[18rem] shrink-0 flex-col overflow-hidden',
+        'max-lg:w-full max-lg:shrink',
+        // Folding is pure clamping under the root's own `overflow-hidden`: the list stays mounted,
+        // scroll position and selection refs survive, and the layoutId highlights never replay.
+        // The `min-h-12` is the floor under the clamp: the band is also a flex child of an
+        // over-askable column — an open dock band wants 60dvh of it — and a shrinkable panel with
+        // no floor is a panel the column can take to zero. One summary row is the band's whole
+        // point while folded, so one summary row is what nothing may take.
+        fold && 'max-lg:min-h-12',
+        fold && (fold.folded ? 'max-lg:max-h-12' : 'max-lg:max-h-[45dvh]')
+      )}
     >
-      <div className={cn(PANEL_HEADER_CLASS, 'flex-row items-center gap-2')}>
-        <h2 className={PANEL_TITLE_CLASS}>Orchestrators</h2>
-        <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">{runs.length}</span>
-      </div>
-
       {/*
-        No auto-jump (SPEC §7.3). An orchestration appearing while you read an old one is *news*,
-        not an instruction: the canvas is never yanked out from under you.
+        The band's summary row — everything the fold owes you while the list is clipped: which run,
+        is it alive, is it blocked, am I filtered. Two *sibling* buttons, because a button inside a
+        button is not a thing HTML has (the Cast.tsx rule): the toggle owns the row, the `[A2 ✕]`
+        chip stands beside it so agent-dimming stays escapable while the canvas is showing (CANVAS
+        report §2). Desktop never passes `fold`, so desktop never renders this.
       */}
-      {newRunId && (
-        <motion.button
-          type="button"
-          initial={enter({ opacity: 0, y: -6 })}
-          animate={{ opacity: 1, y: 0 }}
-          transition={SPRING}
-          onClick={() => onSelect(newRunId)}
-          className={cn(CHIP_CLASS, 'mx-3 mt-2 cursor-pointer')}
-        >
-          <ArrowUp className="size-3" />
-          new orchestration started
-        </motion.button>
+      {fold && (
+        <div className="flex h-12 shrink-0 items-center gap-2 pr-3">
+          <button
+            ref={toggleRef}
+            type="button"
+            data-testid="rail-band-toggle"
+            aria-expanded={!fold.folded}
+            onClick={fold.onToggle}
+            className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-4 text-left"
+          >
+            <RadarDot live={selectedRun?.live ?? false} />
+            <b className="truncate text-[13px] font-semibold">{selectedRun?.label ?? 'Orchestrators'}</b>
+            {selectedRun?.hasOpenGates && (
+              <OctagonAlert
+                role="img"
+                aria-label="blocked on an open decision gate"
+                className="text-gate size-4 shrink-0"
+              />
+            )}
+            {/* The new-run chip's news, re-surfaced as the page's one blue while the chip itself is
+                clipped below the fold — per SPEC §7.3 it stays a dot, never a navigation. The dot
+                says it in colour; the sr-only twin says it in words (the `live-dot` pattern,
+                RunRow below), because while the band is folded the chip that would say it out
+                loud is inert behind the clamp, and a fact a screen reader cannot reach was
+                never surfaced at all. */}
+            {newRunId !== null && (
+              <>
+                <span aria-hidden className="bg-selection size-1.5 shrink-0 rounded-full" />
+                <span className="sr-only">new orchestration started</span>
+              </>
+            )}
+            <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">{runs.length}</span>
+            <ChevronDown
+              className={cn('text-muted-foreground size-4 shrink-0 transition-transform', !fold.folded && 'rotate-180')}
+            />
+          </button>
+
+          {selectedAgentMember && (
+            <button
+              type="button"
+              data-testid="rail-agent-chip"
+              aria-label={`clear the agent filter ${selectedAgentMember.monogram}`}
+              onClick={() => onSelectAgent(null)}
+              className={cn(CHIP_CLASS, 'shrink-0 cursor-pointer py-1.5')}
+            >
+              {selectedAgentMember.monogram} <X className="size-3" />
+            </button>
+          )}
+        </div>
       )}
 
-      <ScrollArea className="min-h-0 flex-1">
-        {runs.length === 0 ? (
-          // The canvas beside it already says what an empty database means; the rail only has to say
-          // that it has nothing to list.
-          <p className="text-muted-foreground px-4 py-3 text-xs">No orchestrators yet.</p>
-        ) : (
-          <ul className="space-y-0.5 p-2" onMouseLeave={() => setHovered(null)}>
-            {runs.map((run) => (
-              <li key={run.id}>
-                <RunRow
-                  run={run}
-                  selected={run.id === selectedId}
-                  hovered={hovered === run.id}
-                  onHover={() => setHovered(run.id)}
-                  onSelect={() => onSelect(run.id)}
-                />
+      {/*
+        One wrapper around everything the fold clips, so a collapsed band's rows leave the tab
+        order (`inert`) and the accessibility tree (`aria-hidden`) instead of lingering as
+        focusable ghosts under the clamp. On desktop `fold` is undefined, neither attribute ever
+        applies, and the wrapper reproduces the root's flex geometry exactly.
+      */}
+      <div
+        ref={bodyRef}
+        data-testid="rail-body"
+        inert={fold?.folded ? true : undefined}
+        aria-hidden={fold?.folded ? true : undefined}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className={cn(PANEL_HEADER_CLASS, 'flex-row items-center gap-2')}>
+          <h2 className={PANEL_TITLE_CLASS}>Orchestrators</h2>
+          <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">{runs.length}</span>
+        </div>
 
-                {/* The cast, under the one that is open — the hierarchy the database has always had,
-                    drawn as a hierarchy for the first time. */}
-                {run.id === selectedId && (
-                  <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
-                )}
-              </li>
-            ))}
-          </ul>
+        {/*
+          No auto-jump (SPEC §7.3). An orchestration appearing while you read an old one is *news*,
+          not an instruction: the canvas is never yanked out from under you.
+        */}
+        {newRunId && (
+          <motion.button
+            type="button"
+            initial={enter({ opacity: 0, y: -6 })}
+            animate={{ opacity: 1, y: 0 }}
+            transition={SPRING}
+            onClick={() => onSelect(newRunId)}
+            className={cn(CHIP_CLASS, 'mx-3 mt-2 cursor-pointer max-lg:py-1.5')}
+          >
+            <ArrowUp className="size-3" />
+            new orchestration started
+          </motion.button>
         )}
 
-        <CoordinatorRuns runs={coordinatorRuns} />
-      </ScrollArea>
+        <ScrollArea className="min-h-0 flex-1">
+          {runs.length === 0 ? (
+            // The canvas beside it already says what an empty database means; the rail only has to say
+            // that it has nothing to list.
+            <p className="text-muted-foreground px-4 py-3 text-xs">No orchestrators yet.</p>
+          ) : (
+            <ul className="space-y-0.5 p-2" onMouseLeave={() => setHovered(null)}>
+              {runs.map((run) => (
+                <li key={run.id}>
+                  <RunRow
+                    run={run}
+                    selected={run.id === selectedId}
+                    hovered={hovered === run.id}
+                    onHover={() => setHovered(run.id)}
+                    onSelect={() => onSelect(run.id)}
+                  />
+
+                  {/* The cast, under the one that is open — the hierarchy the database has always had,
+                      drawn as a hierarchy for the first time. */}
+                  {run.id === selectedId && (
+                    <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <CoordinatorRuns runs={coordinatorRuns} />
+        </ScrollArea>
+      </div>
     </motion.nav>
   );
 }
@@ -168,7 +302,9 @@ function RunRow({
       aria-current={selected}
       aria-expanded={selected}
       onClick={onSelect}
-      onMouseEnter={onHover}
+      onMouseEnter={() => {
+        if (CAN_HOVER) onHover();
+      }}
       title={run.handle ?? 'No terminal handle — Orca never attributed these tasks to one.'}
       className={cn(
         'group relative w-full cursor-pointer rounded-lg py-2 pr-2.5 pl-3 text-left',
@@ -297,7 +433,7 @@ function CoordinatorRuns({ runs }: { runs: CoordinatorRun[] }) {
             <CopyButton
               value={run.coordinatorHandle}
               label="coordinator handle"
-              className={cn('ml-auto size-5', COPY_ON_HOVER)}
+              className={cn('ml-auto size-5 pointer-coarse:size-8', COPY_ON_HOVER)}
             />
           </li>
         ))}

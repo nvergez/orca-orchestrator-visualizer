@@ -1,5 +1,6 @@
 import { OctagonAlert } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useState } from 'react';
 import { Aurora } from '@/components/fx/aurora';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { cn } from '@/lib/utils';
@@ -7,6 +8,7 @@ import type { Gate, Task } from '../../shared/types.ts';
 import { GATE_THEME } from '../canvas/theme.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SPRING } from '../motion.ts';
+import { useIsMobile } from '../viewport.tsx';
 
 /**
  * The decision blocking your orchestration, above the canvas, in your way.
@@ -48,6 +50,13 @@ export type GateStripProps = {
 };
 
 export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
+  const isMobile = useIsMobile();
+  // The one task-less gate whose question is currently unclamped. On desktop the full text is a
+  // hover away (the `title` tooltip); on touch there is no hover, so a tap holds it open instead.
+  // One at a time, because the strip's whole budget is a few lines above the canvas — two
+  // multi-paragraph questions open at once would be the unbounded strip all over again.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   if (gates.length === 0) return null;
 
   const titleOf = (taskId: string): string => tasks.find((task) => task.id === taskId)?.title ?? taskId;
@@ -67,6 +76,9 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
         // Several open gates in one run is a real shape (13 open across the live database), and
         // an unbounded strip would eat the canvas it is supposed to be pointing at.
         'max-h-40 overflow-y-auto',
+        // A phone's canvas is the scarcer one, so the budget tightens with it — and tightens
+        // again in landscape, where vertical room is the whole fight.
+        'max-lg:max-h-28 max-lg:px-3 max-lg:py-2 max-lg:landscape:max-h-20',
         GATE_THEME.surface
       )}
       // A rim of its own orange, and no more. The strip is already the brightest surface on the
@@ -88,9 +100,24 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
             // and a button inside a button is not a thing HTML has.
             <li key={gate.id} data-testid="gate" className="group/copy flex items-start gap-1">
               {taskId === null ? (
-                <div className="min-w-0 flex-1 px-1.5 py-1">
-                  <GateEntry gate={gate} blocks={null} />
-                </div>
+                isMobile ? (
+                  // On touch the `title` tooltip inside GateEntry is dead, and a task-less gate
+                  // has no inspector to click through to — so the row itself becomes the way to
+                  // the full question: tap to unclamp, tap to fold it back. This is *reading*,
+                  // not resolving — the strip still offers to answer nothing (SPEC §1.2).
+                  <button
+                    type="button"
+                    aria-expanded={expandedId === gate.id}
+                    onClick={() => setExpandedId((current) => (current === gate.id ? null : gate.id))}
+                    className="min-w-0 flex-1 cursor-pointer rounded-lg px-1.5 py-1 text-left"
+                  >
+                    <GateEntry gate={gate} blocks={null} clamp={expandedId !== gate.id} />
+                  </button>
+                ) : (
+                  <div className="min-w-0 flex-1 px-1.5 py-1">
+                    <GateEntry gate={gate} blocks={null} />
+                  </div>
+                )
               ) : (
                 <GateButton
                   gate={gate}
@@ -150,8 +177,10 @@ function GateButton({
 /**
  * One question. `blocks` is the *title* of the task it is holding up — or null, which is a fact
  * about the gate and not a gap in the data, and is said out loud rather than left blank.
+ * `clamp` is true everywhere except a tapped-open task-less row on mobile, where the tooltip
+ * that normally carries the full text does not exist.
  */
-function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
+function GateEntry({ gate, blocks, clamp = true }: { gate: Gate; blocks: string | null; clamp?: boolean }) {
   return (
     <span className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[13px]">
       <OctagonAlert aria-hidden className="size-4 shrink-0 translate-y-0.5" />
@@ -162,7 +191,10 @@ function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
         strip would swallow the canvas it exists to point at. The whole of it is one hover away,
         and the message that raised it is in the conversation, in full, where a body belongs.
       */}
-      <b title={gate.question} className="line-clamp-3 min-w-0 flex-[1_1_240px] leading-snug font-semibold whitespace-pre-line">
+      <b
+        title={gate.question}
+        className={cn('min-w-0 flex-[1_1_240px] leading-snug font-semibold whitespace-pre-line', clamp && 'line-clamp-3')}
+      >
         {gate.question}
       </b>
 

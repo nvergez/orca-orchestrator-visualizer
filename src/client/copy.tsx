@@ -130,7 +130,7 @@ export function CopyButton({ value, label, className }: CopyButtonProps) {
       aria-label={`Copy the ${label} ${value}`}
       onClick={copy}
       className={cn(
-        'text-muted-foreground hover:text-foreground hover:bg-accent inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors',
+        'text-muted-foreground hover:text-foreground hover:bg-accent inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors pointer-coarse:size-9',
         'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
         className
       )}
@@ -155,7 +155,14 @@ export function CopyButton({ value, label, className }: CopyButtonProps) {
  * the instant the pointer leaves — but **always focusable**, so the keyboard reaches it in tab order
  * and it shows itself when it gets there. (`opacity-0` hides; it does not remove.)
  *
+ * On a coarse pointer it is simply visible. SPEC §7.9's "always reachable by keyboard" clause is
+ * the intent here, and a thumb is a keyboard with no focus ring: there is no hover to summon the
+ * button with and no tab order to stumble onto it by, so hiding it would not be quiet, it would
+ * be gone. Every hover-revealed copy button in the rail, cast, gate strip and inspector becomes
+ * persistently (and quietly) visible on touch.
+ *
  * One string, so the rail, the inspector and the gate strip cannot each pick a different idea of
  * *quiet* — the same reason `CHIP_CLASS` is one string (`chip.ts`).
  */
-export const COPY_ON_HOVER = 'opacity-0 group-hover/copy:opacity-100 focus-visible:opacity-100';
+export const COPY_ON_HOVER =
+  'opacity-0 group-hover/copy:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100';

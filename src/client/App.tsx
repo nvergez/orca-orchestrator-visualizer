@@ -1,6 +1,6 @@
-import { Database, Moon, Sun, Waypoints } from 'lucide-react';
+import { ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Beams } from '@/components/fx/beams';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Badge } from '@/components/ui/badge';
@@ -10,17 +10,19 @@ import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
-import { GATE_THEME } from './canvas/theme.ts';
+import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
 import { useArrivals, usePulses } from './conversation/pulses.ts';
+import { exchangeCount, selectTurns } from './conversation/select.ts';
 import { GateStrip } from './gates/GateStrip.tsx';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
-import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS } from './surface.ts';
+import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
+import { useIsMobile } from './viewport.tsx';
 
 /**
  * The shell — **an orchestrator, the agents it spawned, and what they said to each other.**
@@ -55,6 +57,13 @@ import { useThemeMode } from './theme-mode.ts';
  *
  * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
  * rail beside today's and renders through the exact same code path; live-ness is a green dot.
+ *
+ * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
+ * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a
+ * collapsible band at the bottom. Nothing is a new screen and no panel is mounted differently;
+ * the page still never scrolls, bands push the canvas rather than cover it, and the shell owns
+ * the two folds the way it owns the two selections, for the same reason — a node tap has to open
+ * the dock band and an agent tap has to fold the rail, and no panel can see that far.
  *
  * **And it is a field with panels on it, not a page with rules drawn across it** (SPEC §7.9). The
  * panels float, the field shows through the gaps, and `reducedMotion="user"` is set once, here, so
@@ -107,6 +116,34 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
+  // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
+  // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
+  // the rail, and no panel can see that far. All of it exists on desktop, where nothing reads it —
+  // every write below is `isMobile`-guarded, so the signed-off layout never churns.
+  const isMobile = useIsMobile();
+  const [railOpen, setRailOpen] = useState(false);
+  const [dockOpen, setDockOpen] = useState(false);
+  // The run label the reader was standing in when `showTask` last hopped orchestrations. The
+  // inspector narrates it, because on the folded shell the rail's moving `aria-current` is behind
+  // a collapsed band, and a silent hop reads as the canvas replacing itself for no reason.
+  const [crossRunFrom, setCrossRunFrom] = useState<string | null>(null);
+  // Bumped when the dock band collapses after the run changed while it was open — the one
+  // re-frame the canvas cannot detect for itself (`Refit`, `canvas/Canvas.tsx`).
+  const [refitSignal, setRefitSignal] = useState(0);
+  // Which run the dock band was opened on, so `toggleDock` can tell a plain collapse from one
+  // that is about to reveal a canvas whose fit ran behind 60dvh of band.
+  const dockRun = useRef<string | null>(null);
+
+  // What the collapsed dock handle says while the conversation is docked: the same run-scoped
+  // count the panel's own header shows — heartbeats excluded (`exchangeCount`) — computed only on
+  // mobile so desktop does no extra work per push. It mirrors Conversation's default `'run'`
+  // scope; the panel's internal "All" toggle is a view choice the handle deliberately does not track.
+  const dockCount = useMemo(
+    () =>
+      isMobile ? exchangeCount(selectTurns(turns, { runId: selected?.id ?? null, agentHandle: selectedAgent })) : 0,
+    [isMobile, turns, selected, selectedAgent]
+  );
+
   // The scoping, in one line. Every task carries the run the server put it in, so the client never
   // re-derives the grouping — it only picks which one to draw.
   const tasks = useMemo(
@@ -145,20 +182,65 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const { detail, error: detailError } = useTaskDetail(selectedTask?.id ?? null, event, loadTask);
 
   /**
+   * The dock band's verbs, carrying the re-fit bookkeeping (`Refit`, `canvas/Canvas.tsx`):
+   * `dockRun` remembers which run the band opened on, and a collapse after the run changed
+   * underneath it — the cross-run `showTask` case, where the new run's initial fit ran against
+   * the strip the band had left — bumps `refitSignal` so dismissal lands on a freshly framed
+   * graph. Every other collapse re-frames nothing: the viewport the reader panned is theirs.
+   */
+  function openDock(): void {
+    if (!isMobile) return;
+    if (!dockOpen) dockRun.current = selected?.id ?? null;
+    setDockOpen(true);
+  }
+
+  function toggleDock(): void {
+    if (!isMobile) return;
+    if (dockOpen && selected?.id !== dockRun.current) setRefitSignal((count) => count + 1);
+    if (!dockOpen) dockRun.current = selected?.id ?? null;
+    setDockOpen((open) => !open);
+  }
+
+  /**
    * The rail. A different orchestrator is a different canvas, a different cast and a different
    * conversation — so neither the task nor the **agent** selection survives it. An `A2` in one
    * orchestration is a different terminal from the `A2` in the next, and carrying the selection
    * across would silently dim the new canvas to a stranger.
+   *
+   * On the fold the rail band stays open: the cast just unfolded under the tapped row, and the
+   * cast is where the central gesture lives. Only the hop narration is stale now.
    */
   function selectRun(runId: string): void {
     select(runId);
     setSelectedAgent(null);
     setSelectedTaskId(null);
+    if (isMobile) setCrossRunFrom(null);
   }
 
-  /** A node. Clicking it again is how you let go of it. */
+  /**
+   * The pivot, wrapped: `setSelectedAgent` is still the whole of it, plus one folded-shell
+   * reflex — the tap's meaning is "show me the dimmed canvas and the dialogue", both of which
+   * are behind the expanded rail, so the rail folds. Instantly, because exits are instant
+   * (SPEC §7.9); the way back in is the band header the fold leaves standing.
+   */
+  function selectAgent(handle: string | null): void {
+    setSelectedAgent(handle);
+    if (isMobile) setRailOpen(false);
+  }
+
+  /**
+   * A node. Clicking it again is how you let go of it.
+   *
+   * Selecting — never letting go — is what opens the dock band: the inspector is what a
+   * selection *is* on screen (SPEC §7.1), and on the fold it would otherwise arrive behind a
+   * collapsed handle. A same-run selection was never a hop, so the narration clears.
+   */
   function selectTask(taskId: string): void {
+    const selecting = selectedTaskId !== taskId;
     setSelectedTaskId((current) => (current === taskId ? null : taskId));
+    if (!isMobile) return;
+    if (selecting) openDock();
+    setCrossRunFrom(null);
   }
 
   /**
@@ -176,9 +258,15 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   function showTask(taskId: string): void {
     const target = allTasks.find((task) => task.id === taskId);
     if (target && target.runId !== selected?.id) {
+      // Recorded *before* `select` replaces it: the label the collapsed rail was naming is where
+      // the reader gets to have come from (`Inspector`'s `hoppedFrom` — mobile-only narration).
+      if (isMobile) setCrossRunFrom(selected?.label ?? null);
       select(target.runId);
       setSelectedAgent(null); // A different orchestrator's cast — see `selectRun`.
+    } else if (isMobile) {
+      setCrossRunFrom(null);
     }
+    openDock();
     setSelectedTaskId(taskId);
   }
 
@@ -195,15 +283,18 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
 
         <Notices meta={event.meta} />
 
-        <div className="flex min-h-0 flex-1 gap-2">
+        {/* `max-lg:flex-col` is the fold itself: DOM order rail → centre → dock becomes
+            top → middle → bottom, and nothing else about the row changes. */}
+        <div className="flex min-h-0 flex-1 gap-2 max-lg:flex-col">
           <RunRail
             runs={runs}
             coordinatorRuns={event.snapshot.coordinatorRuns}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
             selectedAgent={selectedAgent}
-            onSelectAgent={setSelectedAgent}
+            onSelectAgent={selectAgent}
             newRunId={newRunId}
+            fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
           <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -215,7 +306,9 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             */}
             <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
 
-            <div className="min-h-0 flex-1">
+            {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
+                crush React Flow to 0×0, so the fit math never sees a zero container. */}
+            <div className="min-h-0 flex-1 max-lg:min-h-24">
               <Canvas
                 tasks={tasks}
                 cast={selected?.cast}
@@ -224,6 +317,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
                 selectedTaskId={selectedTask?.id ?? null}
                 onSelectTask={selectTask}
                 pulses={pulses}
+                refitSignal={refitSignal}
               />
             </div>
           </div>
@@ -236,33 +330,130 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             Deliberately **no exit animation**: the panel that is leaving has nothing left to say,
             and a dock that stayed empty for 200 ms on every click would put a stutter between a
             node and its own story. The one that arrives animates; the one that goes, goes.
+
+            The wrapper is the dock *band* of the folded shell, and on desktop it is not there at
+            all: `lg:contents` erases both wrappers from layout, so the flex row sees the same dock
+            child it sees today. Below `lg` the band owns its own height — a handle's worth when
+            collapsed, `min(60dvh, 32rem)` of the column when open — so the two dock panels still
+            cannot disagree about their dimensions (`surface.ts`).
           */}
-          {selectedTask ? (
-            <Inspector
-              task={selectedTask}
-              gates={taskGates}
-              // Every task, not the canvas's: a dep chip that could not see across into another
-              // orchestration would call a task sitting right there in the database deleted.
-              tasks={allTasks}
-              detail={detail}
-              error={detailError}
-              turns={turns}
-              cast={selected?.cast ?? NO_CAST}
-              onClose={() => setSelectedTaskId(null)}
-              onSelectTask={showTask}
-            />
-          ) : (
-            <Conversation
-              turns={turns}
-              run={selected}
-              selectedAgent={selectedAgent}
-              onClearAgent={() => setSelectedAgent(null)}
-              onSelectTask={showTask}
-            />
-          )}
+          <div
+            className={cn(
+              'lg:contents',
+              'max-lg:flex max-lg:min-h-0 max-lg:flex-col max-lg:gap-2',
+              // Collapsed, the band *is* its handle and nothing may compress it. Open, its
+              // 60dvh is an ask, not a demand (`shrink`, floored at two handles' worth): the
+              // column also owes the rail its summary row, the gate strip its question and the
+              // canvas its 96px, and a band that would not shrink was taking those out of the
+              // rail — the one sibling with no floor of its own to stand on.
+              dockOpen
+                ? 'max-lg:h-[min(60dvh,32rem)] max-lg:min-h-24 max-lg:shrink'
+                : 'max-lg:h-12 max-lg:shrink-0'
+            )}
+          >
+            {isMobile && <DockHandle task={selectedTask} count={dockCount} open={dockOpen} onToggle={toggleDock} />}
+
+            <div
+              data-testid="dock-band-body"
+              // A collapsed band's clipped panel leaves the tab order (`inert`) and the
+              // accessibility tree (`aria-hidden`) instead of lingering as focusable ghosts
+              // under the clamp. React 19 takes the boolean directly.
+              inert={isMobile && !dockOpen ? true : undefined}
+              aria-hidden={isMobile && !dockOpen ? true : undefined}
+              className="lg:contents max-lg:flex max-lg:min-h-0 max-lg:flex-1 max-lg:flex-col"
+            >
+              {selectedTask ? (
+                <Inspector
+                  task={selectedTask}
+                  gates={taskGates}
+                  // Every task, not the canvas's: a dep chip that could not see across into another
+                  // orchestration would call a task sitting right there in the database deleted.
+                  tasks={allTasks}
+                  detail={detail}
+                  error={detailError}
+                  turns={turns}
+                  cast={selected?.cast ?? NO_CAST}
+                  onClose={() => {
+                    setSelectedTaskId(null);
+                    // The dock band stays open — the conversation returns in the same band at the
+                    // same height. Only the hop narration has nothing left to narrate.
+                    if (isMobile) setCrossRunFrom(null);
+                  }}
+                  onSelectTask={showTask}
+                  // The read wears the same guard as every write: the narration belongs to the
+                  // folded shell, and a hop made on a phone must not still be narrating after
+                  // the window widens into the desktop dock (mobile.md §4.11, §8 rule 3).
+                  hoppedFrom={isMobile ? crossRunFrom : null}
+                />
+              ) : (
+                <Conversation
+                  turns={turns}
+                  run={selected}
+                  selectedAgent={selectedAgent}
+                  onClearAgent={() => setSelectedAgent(null)}
+                  onSelectTask={showTask}
+                />
+              )}
+            </div>
+          </div>
         </div>
       </main>
     </MotionConfig>
+  );
+}
+
+/**
+ * The collapsed dock band's whole voice — and a small floating panel of its own, because the
+ * collapsed band *is* a panel standing on the field (SPEC §7.9). It names what expanding would
+ * show: the selected task's title behind its status dot, or the conversation and how much of it
+ * there is. The ticking exchange count is the unread signal, for free — heartbeats are already
+ * excluded (`exchangeCount`, `conversation/select.ts`) — and it ticks whether the band is open
+ * or not, which is the point of a handle that keeps talking while the panel is folded away.
+ *
+ * "Conversation" is a `<span>`, not an `<h2>`: the panel behind the fold already carries that
+ * heading, and a second one with the same name would collide with it in role queries.
+ *
+ * Rendered only on `useIsMobile()` — never merely class-hidden — so the 119 desktop tests never
+ * see it and the desktop-guard test means something (`docs/design/mobile.md` §1).
+ */
+function DockHandle({
+  task,
+  count,
+  open,
+  onToggle,
+}: {
+  /** The selected task, or null while the dock holds the conversation. */
+  task: Task | null;
+  /** Run-scoped exchange count (heartbeats excluded). */
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="dock-band-toggle"
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cn(PANEL_CLASS, 'flex h-12 w-full shrink-0 cursor-pointer items-center gap-2 px-4 text-left')}
+    >
+      {task ? (
+        <>
+          <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', themeOf(task.status).dot)} />
+          <b className="min-w-0 truncate text-[13px] font-semibold">{task.title}</b>
+        </>
+      ) : (
+        <>
+          <span className={PANEL_TITLE_CLASS}>Conversation</span>
+          <span className="text-muted-foreground/70 text-[11px] tabular-nums">
+            {count} {count === 1 ? 'exchange' : 'exchanges'}
+          </span>
+        </>
+      )}
+      <ChevronUp
+        className={cn('text-muted-foreground ml-auto size-4 shrink-0 transition-transform', open && 'rotate-180')}
+      />
+    </button>
   );
 }
 
@@ -290,7 +481,13 @@ function TopBar({ meta }: { meta: Meta }) {
       initial={enter({ opacity: 0, y: -8 })}
       animate={{ opacity: 1, y: 0 }}
       transition={SPRING}
-      className={cn(PANEL_CLASS, 'flex h-13 shrink-0 items-center gap-3 px-4')}
+      className={cn(
+        PANEL_CLASS,
+        'flex h-13 shrink-0 items-center gap-3 px-4',
+        // Below `lg` the bar may grow a line: the liveness sentence is spec-pinned content
+        // (SPEC §6.1) and wraps rather than being cut, so the bar pays the height.
+        'max-lg:h-auto max-lg:min-h-13 max-lg:py-2 max-lg:landscape:min-h-11 max-lg:landscape:py-1'
+      )}
     >
       <span className="flex shrink-0 items-center gap-2">
         <span
@@ -301,10 +498,12 @@ function TopBar({ meta }: { meta: Meta }) {
         >
           <Waypoints className="size-3.5" />
         </span>
-        <b className="text-sm font-semibold tracking-tight whitespace-nowrap">orca-viz</b>
+        {/* On the fold the mark alone identifies: the wordmark and the ornament beside it are
+            the first things a 390px bar cannot afford. */}
+        <b className="text-sm font-semibold tracking-tight whitespace-nowrap max-lg:hidden">orca-viz</b>
       </span>
 
-      <Separator orientation="vertical" className="!h-5" />
+      <Separator orientation="vertical" className="!h-5 max-lg:hidden" />
 
       <Status meta={meta} />
 
@@ -332,7 +531,9 @@ function Status({ meta }: { meta: Meta }) {
       role="status"
       data-state={meta.liveness}
       className={cn(
-        'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+        // `max-lg:shrink` lets the pill compress and the sentence *wrap* — never truncate: the
+        // wording is the spec's, and the words are content, not decoration.
+        'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium max-lg:min-w-0 max-lg:shrink',
         live
           ? 'bg-status-completed-soft text-status-completed-ink border-status-completed/50'
           : 'text-muted-foreground bg-muted border-transparent'
@@ -360,7 +561,7 @@ function Source({ meta }: { meta: Meta }) {
       <div className="flex min-w-0 items-center gap-1.5" title={meta.dbPath}>
         <dt className="sr-only">Database</dt>
         <Database aria-hidden className="size-3.5 shrink-0 opacity-70" />
-        <dd className="m-0 max-w-[26rem] min-w-0">
+        <dd className="m-0 max-w-[26rem] min-w-0 max-lg:max-w-[30vw]">
           <code className="block truncate font-mono">{meta.dbPath}</code>
         </dd>
       </div>
@@ -391,7 +592,7 @@ function ThemeToggle() {
       variant="ghost"
       size="icon"
       onClick={toggle}
-      className="text-muted-foreground hover:text-foreground size-7 shrink-0 cursor-pointer"
+      className="text-muted-foreground hover:text-foreground size-7 shrink-0 cursor-pointer pointer-coarse:size-10"
       aria-label={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
       title={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
     >
@@ -424,6 +625,9 @@ function Notices({ meta }: { meta: Meta }) {
       transition={SPRING}
       className={cn(
         'flex shrink-0 flex-col gap-px overflow-hidden rounded-xl border text-xs shadow-lift-1',
+        // A long degraded list scrolls internally on the fold instead of eating the canvas —
+        // capped, never truncated: the notices are content (canon trap 8).
+        'max-lg:max-h-24 max-lg:overflow-y-auto max-lg:landscape:max-h-16',
         GATE_THEME.surface
       )}
     >

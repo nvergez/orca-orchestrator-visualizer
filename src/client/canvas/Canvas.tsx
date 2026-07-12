@@ -8,6 +8,7 @@ import {
   Panel,
   ReactFlow,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { ChevronDown, ChevronRight, Waypoints } from 'lucide-react';
@@ -16,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { CastMember, Task, Wave } from '../../shared/types.ts';
 import type { Pulse } from '../conversation/theme.ts';
+import { useIsMobile } from '../viewport.tsx';
 import { PANEL_CLASS } from '../surface.ts';
 import { buildGraph, type Edge, type Graph } from './graph.ts';
 import { layoutGraph, type Layout, type WaveBox } from './layout.ts';
@@ -68,6 +70,13 @@ export type CanvasProps = {
   onSelectTask: (taskId: string) => void;
   /** Nodes a message has just landed on, in that message type's colour (SPEC §7.6). */
   pulses: ReadonlyMap<string, Pulse>;
+  /**
+   * Incremented by the folded shell when the dock band collapses after a cross-run hop — the
+   * one moment a fresh fit ran against a canvas the band was still holding most of, and the
+   * only re-frame the canvas cannot detect for itself (`Refit`, below). Desktop never
+   * increments it, so the default keeps the signed-off layout inert.
+   */
+  refitSignal?: number;
 };
 
 export function Canvas({
@@ -78,6 +87,7 @@ export function Canvas({
   selectedTaskId,
   onSelectTask,
   pulses,
+  refitSignal = 0,
 }: CanvasProps) {
   const graph = useMemo(() => buildGraph(tasks), [tasks]);
   const [laidOut, setLaidOut] = useState<{ graph: Graph; waves: Wave[]; layout: Layout } | null>(null);
@@ -160,6 +170,9 @@ export function Canvas({
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
         <Controls showInteractive={false} />
         <MiniMap<TaskFlowNode | WaveFlowNode>
+          // The most expendable chrome at phone size: a second rendering of a graph the thumb
+          // can already pan. Hidden by class rather than unmounted, so jsdom keeps seeing it.
+          className="max-lg:hidden"
           pannable
           zoomable
           // A wave is a region of the field, not a node — painting it on the minimap would put a
@@ -170,10 +183,12 @@ export function Canvas({
 
         {/* Inside `<ReactFlow>`, because that is where its viewport context lives. */}
         <CentreOnSelection selectedTaskId={selectedTaskId} nodes={nodes} />
+        <Refit signal={refitSignal} selectedTaskId={selectedTaskId} />
 
         {graph.edges.length === 0 && (
           <Panel position="top-center">
-            <p data-testid="edgeless-note" className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs')}>
+            {/* `max-lg:mt-11` drops it below the isolated toggle — at 360px the two chips share a row's worth of width and would collide. */}
+            <p data-testid="edgeless-note" className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs max-lg:mt-11')}>
               No dependencies in this run — {tasks.length} tasks dispatched independently.
             </p>
           </Panel>
@@ -187,7 +202,7 @@ export function Canvas({
               size="sm"
               onClick={() => setShowIsolated((shown) => !shown)}
               aria-expanded={showIsolated}
-              className={cn(CANVAS_CHIP_CLASS, 'hover:bg-accent h-7 gap-1 px-3 text-xs')}
+              className={cn(CANVAS_CHIP_CLASS, 'hover:bg-accent h-7 gap-1 px-3 text-xs max-lg:h-10')}
             >
               {showIsolated ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
               Isolated tasks ({graph.isolated.length})
@@ -200,7 +215,13 @@ export function Canvas({
           colour systems are running at once, and which is which. It costs a line, and without it
           the stripe is decoration.
         */}
-        <Panel position="bottom-center">
+        {/*
+          And it is the one chip the fold takes back (`max-lg:hidden`): with a band open, the
+          canvas can stand at its 96px floor, where a bottom-centre legend sits *on* the isolated
+          toggle and the zoom controls rather than under them. A legend worn as a collision
+          explains nothing — the colours still explain themselves on the nodes.
+        */}
+        <Panel position="bottom-center" className="max-lg:hidden">
           <p className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1 text-[11px]')}>
             fill = status · stripe = agent
           </p>
@@ -268,7 +289,12 @@ function CentreOnSelection({
   nodes: (TaskFlowNode | WaveFlowNode)[];
 }) {
   const flow = useReactFlow();
+  const isMobile = useIsMobile();
   const centred = useRef<string | null>(null);
+  // Whether the canvas has any pixels to centre within. The folded shell can select a task
+  // while a band holds the whole column and the canvas measures 0 — desktop never does, and
+  // jsdom's shimmed geometry reports a real size, so this is inert everywhere but the fold.
+  const sized = useStore((state) => state.width > 0 && state.height > 0);
 
   useEffect(() => {
     if (selectedTaskId === null) {
@@ -280,14 +306,93 @@ function CentreOnSelection({
     const node = nodes.find((candidate) => candidate.id === selectedTaskId);
     if (!node) return; // Not laid out yet, or not in this run. Try again when the nodes change.
 
-    centred.current = selectedTaskId;
-    flow.setCenter(node.position.x + NODE_WIDTH / 2, node.position.y + NODE_HEIGHT / 2, {
-      // The zoom the user chose is theirs. Centring moves the canvas *to* the node; it does not
-      // decide how close they wanted to be standing.
-      zoom: flow.getZoom(),
-      duration: 300,
+    // A centre computed against a 0×0 viewport lands nowhere. Leaving `centred` unclaimed keeps
+    // the selection live, so it centres the moment the canvas regains height.
+    if (!sized) return;
+
+    const centre = (): void => {
+      centred.current = selectedTaskId;
+      flow.setCenter(node.position.x + NODE_WIDTH / 2, node.position.y + NODE_HEIGHT / 2, {
+        // The zoom the user chose is theirs. Centring moves the canvas *to* the node; it does
+        // not decide how close they wanted to be standing.
+        zoom: flow.getZoom(),
+        duration: 300,
+      });
+    };
+
+    // Desktop centres now, exactly as it always has: selecting a task moves nothing around the
+    // canvas, so the dimensions `setCenter` reads are the dimensions on screen.
+    if (!isMobile) {
+      centre();
+      return;
+    }
+
+    // On the fold, the tap that selected this node usually opened the dock band in the same
+    // commit — and React Flow learns the shrunken height only when its ResizeObserver reports,
+    // during the next frame's rendering steps, *after* this effect. A centre computed now would
+    // aim for the middle of a canvas that is no longer there and park the node under the band.
+    // Two frames put the arithmetic on the far side of that delivery; the claim rides along, so
+    // the selection is still centred exactly once — a re-render in the gap (a push tick
+    // rebuilding the nodes) cancels and reschedules rather than centring twice or never.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(centre);
     });
-  }, [selectedTaskId, nodes, flow]);
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [selectedTaskId, nodes, flow, sized, isMobile]);
+
+  return null;
+}
+
+/**
+ * The two moments the folded shell is allowed to re-frame the graph — and only these two,
+ * because "the viewport the user framed is theirs" (CentreOnSelection, above) is doctrine:
+ *
+ * - **Rotation.** Turning the phone is the reader's own gesture; re-fitting on it is not a
+ *   yank (SPEC §7.3), it is answering the question the gesture asked.
+ * - **The dock band collapsing after a cross-run hop** (`refitSignal`). The new run's fit
+ *   ran while the band held 60dvh of the column; collapsing it should land on a freshly
+ *   framed graph, not a mid-layout one.
+ *
+ * Band expand/collapse otherwise never re-fits: the bands push the canvas rather than cover
+ * it, so a shrunken canvas is still the frame the reader chose to stand in, and re-fitting on
+ * every fold would make the graph twitch under each tap. Both re-frames defer one frame so
+ * React Flow's own ResizeObserver has measured the resized container first, and both stand
+ * down while a task is selected — a selection is centred, and a fit that zoomed away from it
+ * would trade the reader's place for a tidier frame.
+ */
+function Refit({ signal, selectedTaskId }: { signal: number; selectedTaskId: string | null }) {
+  const flow = useReactFlow();
+  const isMobile = useIsMobile();
+  // The last signal value already answered — a dropped one (arriving mid-selection) stays
+  // answered, so deselecting the task later does not replay a stale re-fit.
+  const seen = useRef(signal);
+
+  useEffect(() => {
+    if (!isMobile) {
+      seen.current = signal;
+      return;
+    }
+
+    // The exact options of the initial `fitView` (the ReactFlow element, above): an overview,
+    // never a magnification.
+    const fit = () => requestAnimationFrame(() => flow.fitView({ padding: 0.2, maxZoom: 1 }));
+
+    if (signal !== seen.current) {
+      seen.current = signal;
+      if (selectedTaskId === null) fit();
+    }
+
+    const orientation = globalThis.matchMedia?.('(orientation: portrait)');
+    const onFlip = () => {
+      if (selectedTaskId === null) fit();
+    };
+    orientation?.addEventListener('change', onFlip);
+    return () => orientation?.removeEventListener('change', onFlip);
+  }, [isMobile, signal, selectedTaskId, flow]);
 
   return null;
 }

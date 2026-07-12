@@ -8,8 +8,19 @@ import { cn } from "@/lib/utils"
 function ScrollArea({
   className,
   children,
+  viewportRef,
+  onViewportScroll,
   ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
+  // Radix hides the element that actually scrolls inside this component, and most callers are
+  // happy never to know. The conversation panel is not: "did new turns land while the reader was
+  // scrolled up?" is a question about the *viewport's* position, so it gets a handle on the real
+  // scroller and hears its scroll events — and every caller that asks for neither renders
+  // byte-identically to before.
+  /** The scrolling element itself, for callers that need to read or set its position. */
+  viewportRef?: React.Ref<HTMLDivElement>
+  onViewportScroll?: React.UIEventHandler<HTMLDivElement>
+}) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -17,6 +28,8 @@ function ScrollArea({
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
+        ref={viewportRef}
+        onScroll={onViewportScroll}
         data-slot="scroll-area-viewport"
         className={cn(
           "size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1",
