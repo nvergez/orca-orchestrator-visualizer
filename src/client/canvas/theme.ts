@@ -44,8 +44,3 @@ export function isKnownStatus(status: string): status is TaskStatus {
 export function colorOf(status: string): StatusColor {
   return isKnownStatus(status) ? STATUS_COLORS[status] : UNKNOWN_STATUS_COLOR;
 }
-
-/** `term_9f8e7d6c-…` → `9f8e7d6c`: the first 8 hex of the handle (SPEC §7.5). */
-export function shortHandle(handle: string): string {
-  return handle.replace(/^term_/, '').slice(0, 8);
-}

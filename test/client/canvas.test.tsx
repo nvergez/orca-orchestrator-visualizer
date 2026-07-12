@@ -7,7 +7,7 @@ import {
   STATUS_COLORS,
   UNKNOWN_STATUS_COLOR,
 } from '../../src/client/canvas/theme.ts';
-import type { Dispatch, Meta, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { Dispatch, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input, and therefore
@@ -47,10 +47,13 @@ function dispatch(over: Partial<Dispatch> = {}): Dispatch {
   };
 }
 
+/** The canvas draws exactly one run (#16), so every fixture task here belongs to this one. */
+const RUN_ID = 'run_9f8e7d6c_1000';
+
 function task(over: Partial<Task> = {}): Task {
   return {
     id: 'task_aaaaaaaa',
-    runId: '',
+    runId: RUN_ID,
     parentId: null,
     title: 'A task',
     status: 'pending',
@@ -66,8 +69,34 @@ function task(over: Partial<Task> = {}): Task {
   };
 }
 
+/**
+ * The run these tasks were inferred into. The server never emits a task without one, and the
+ * canvas renders exactly the selected run's tasks — so a fixture that omitted the run would
+ * be testing an event the server cannot send.
+ */
+function runOf(tasks: Task[]): Run {
+  return {
+    id: RUN_ID,
+    handle: HANDLE,
+    label: 'A run',
+    startedAt: '2026-07-08T12:00:00.000Z',
+    endedAt: '2026-07-08T13:00:00.000Z',
+    taskCount: tasks.length,
+    statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 0, failed: 0, blocked: 0 },
+    live: false,
+    hasOpenGates: false,
+    edgeCount: tasks.reduce((total, task) => total + task.deps.length, 0),
+  };
+}
+
 function event(tasks: Task[]): StreamEvent {
-  return { seq: 0, meta: META, snapshot: { runs: [], tasks, coordinatorRuns: [] }, messages: [] };
+  return {
+    seq: 0,
+    meta: META,
+    // No tasks means no runs to have inferred them into — the empty database, honestly.
+    snapshot: { runs: tasks.length === 0 ? [] : [runOf(tasks)], tasks, coordinatorRuns: [] },
+    messages: [],
+  };
 }
 
 /** The canvas lays out asynchronously (elkjs), so the nodes arrive on a later tick. */
