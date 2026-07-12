@@ -1,0 +1,39 @@
+{
+  // Node side: the server, the fixture builder, the node-environment tests and the
+  // build/test config files. No DOM lib, so server code cannot reach for `document`.
+  // The browser side is typechecked separately by tsconfig.client.json.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    // Source imports carry the real `.ts` extension so Node can run them directly under
+    // native type stripping; tsc rewrites them to `.js` on emit. `erasableSyntaxOnly`
+    // keeps that true — it bans the TypeScript syntax (enums, parameter properties,
+    // namespaces) that stripping cannot erase.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+
+    "noEmit": true
+  },
+  "include": [
+    "src/server",
+    "test/fixtures",
+    "test/server",
+    "test/package",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ]
+}

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is Node 22.5 — the release that ships `node:sqlite` — and 24 is the
+        # current LTS. Both are checked, because the whole `npx` story rests on them.
+        node-version: [22.x, 24.x]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      # `npx orca-viz` is the headline claim, and the manifest test can only assert that the
+      # package *declares* nothing to compile. This runs it: pack the tarball, install it into
+      # an empty directory, and serve a database out of it over HTTP. A dependency that ships a
+      # native binding, a `dist/client` that never made it into `files`, or a server that cannot
+      # boot from the packed layout now fails here rather than on a stranger's machine.
+      - name: The npx story — install the packed tarball on a clean machine and run it
+        run: |
+          set -euo pipefail
+          npm pack
+          mkdir -p "$RUNNER_TEMP/clean-machine"
+          cd "$RUNNER_TEMP/clean-machine"
+          npm init -y > /dev/null
+          npm install "$GITHUB_WORKSPACE"/orca-viz-*.tgz --no-audit --no-fund
+
+          # Nothing to compile: no native addon, no gyp, anywhere in the installed tree. Named
+          # rather than asserted empty, so a failure says *what* it found.
+          native=$(find node_modules \( -name '*.node' -o -name 'binding.gyp' \) -print -quit)
+          if [ -n "$native" ]; then echo "a native artifact is in the package: $native"; exit 1; fi
+
+          # The package carries the built frontend, not just the server.
+          test -f node_modules/orca-viz/dist/client/index.html
+
+          ./node_modules/.bin/orca-viz --version
+
+          # And it *starts*: a database it has never seen, served over HTTP. One table is
+          # enough — everything else degrades by name, which is the point of render-what-parses.
+          node -e "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('smoke.db');db.exec('CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT, deps TEXT, created_at TEXT)');db.close()"
+          ./node_modules/.bin/orca-viz --db smoke.db --port 4269 --no-open &
+          for _ in $(seq 20); do curl -fsS -o /dev/null http://127.0.0.1:4269/api/snapshot && break; sleep 0.5; done
+          curl -fsS -o /dev/null http://127.0.0.1:4269/api/snapshot   # the API
+          curl -fsS -o /dev/null http://127.0.0.1:4269/               # the frontend it packed
+          kill %1
