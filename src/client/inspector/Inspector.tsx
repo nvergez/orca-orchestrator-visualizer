@@ -1,6 +1,6 @@
-import { Check, Copy, OctagonAlert, X } from 'lucide-react';
+import { OctagonAlert, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { GATE_THEME, type StatusTheme, themeOf } from '../canvas/theme.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { selectTurns } from '../conversation/select.ts';
 import { TurnRow } from '../conversation/TurnRow.tsx';
+import { COPY_ON_HOVER, CopyButton, CopyId } from '../copy.tsx';
 import { DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
 import { ageOf, useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -270,7 +271,7 @@ function Header({ task, onClose }: { task: Task; onClose: () => void }) {
             ↻{task.attemptCount} attempts
           </span>
         )}
-        <CopyableId id={task.id} />
+        <CopyId id={task.id} label="task id" />
       </div>
     </header>
   );
@@ -286,48 +287,6 @@ function StatusChip({ status, theme }: { status: string; theme: StatusTheme }) {
     >
       {status}
     </Badge>
-  );
-}
-
-/** ~1.5 s of "Copied" — long enough to be read, short enough not to become the label. */
-const COPIED_MS = 1500;
-
-function CopyableId({ id }: { id: string }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <button
-      type="button"
-      title="Copy the task id"
-      // The visible label is the id — which is what a person needs to *see*. What the button
-      // does with it has to be said too, and the id stays inside the name so the two agree.
-      aria-label={`Copy the task id ${id}`}
-      onClick={() => {
-        // Absent outside a secure context, which is not this tool's to fix — and the id is
-        // right there, selectable, either way.
-        void navigator.clipboard?.writeText(id).then(() => setCopied(true));
-      }}
-      className={cn(CHIP_CLASS, 'max-w-full cursor-pointer text-[10px]')}
-    >
-      {/* The id in an element of its own: it is a *value* — the thing you paste into a command —
-          and not a label with an icon stuck to the end of it. */}
-      <code className="truncate font-mono">{id}</code>
-
-      {copied ? (
-        // Said out loud, not only shown: the confirmation is the whole feedback of the click.
-        <span role="status" className="flex shrink-0 items-center gap-0.5">
-          <Check className="size-3" /> copied
-        </span>
-      ) : (
-        <Copy aria-hidden className="size-3 shrink-0" />
-      )}
-    </button>
   );
 }
 
@@ -414,7 +373,10 @@ function Attempt({
       {!last && <span aria-hidden className="bg-border absolute top-4 bottom-[-0.5rem] left-[6px] w-px" />}
 
       <div
-        className={cn('group bg-muted/40 border-panel-border/60 relative rounded-lg border p-2.5', 'overflow-hidden')}
+        className={cn(
+          'group group/copy bg-muted/40 border-panel-border/60 relative rounded-lg border p-2.5',
+          'overflow-hidden'
+        )}
         {...spotlight}
       >
         <Spotlight colour={theme.accent} />
@@ -432,13 +394,23 @@ function Attempt({
             </span>
           )}
 
+          {/* Who held this attempt — and, on hover, the whole of their handle rather than the eight
+              hex the badge has room for. It is the identity you would `orchestration send` to, and
+              a retry is exactly the moment you want to go and ask them what happened. */}
           {dispatch.assigneeHandle !== '' && (
-            <span
-              data-testid="assignee"
-              title={dispatch.assigneeHandle}
-              className="bg-foreground/85 text-background ml-auto rounded px-1.5 py-px font-mono text-[10px]"
-            >
-              {shortHandle(dispatch.assigneeHandle)}
+            <span className="ml-auto flex items-center gap-0.5">
+              <span
+                data-testid="assignee"
+                title={dispatch.assigneeHandle}
+                className="bg-foreground/85 text-background rounded px-1.5 py-px font-mono text-[10px]"
+              >
+                {shortHandle(dispatch.assigneeHandle)}
+              </span>
+              <CopyButton
+                value={dispatch.assigneeHandle}
+                label="agent handle"
+                className={cn('size-5', COPY_ON_HOVER)}
+              />
             </span>
           )}
         </div>
@@ -500,7 +472,7 @@ function GateQA({ gate }: { gate: Gate }) {
     <section
       data-testid="gate-qa"
       className={cn(
-        'relative overflow-hidden rounded-lg border p-2.5 text-xs',
+        'group/copy relative overflow-hidden rounded-lg border p-2.5 text-xs',
         // An open question is the colour of a blocker; an answered one is history, and history
         // is quiet.
         open ? GATE_THEME.surface : 'bg-muted/40 text-foreground/80 border-panel-border/60'
@@ -511,10 +483,17 @@ function GateQA({ gate }: { gate: Gate }) {
           : undefined
       }
     >
-      <p className="relative flex gap-1.5 font-semibold whitespace-pre-line">
-        {open && <OctagonAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
-        <span>{gate.question}</span>
-      </p>
+      <div className="relative flex items-start gap-1.5">
+        <p className="flex min-w-0 flex-1 gap-1.5 font-semibold whitespace-pre-line">
+          {open && <OctagonAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
+          <span>{gate.question}</span>
+        </p>
+
+        {/* The id of the message — or, for a table-only gate, the row — this question came from
+            (SPEC §4.5). It is never printed anywhere in the tool, and it is what a person answering
+            the gate somewhere else has to name. */}
+        <CopyButton value={gate.id} label="gate id" className={cn('-mt-0.5 -mr-0.5 size-5', COPY_ON_HOVER)} />
+      </div>
 
       {gate.options.length > 0 && (
         <div className="relative mt-1.5 flex flex-wrap gap-1">

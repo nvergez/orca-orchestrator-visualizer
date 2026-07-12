@@ -114,7 +114,10 @@ function Bubble({
 
   const body = (
     <>
-      <p className="whitespace-pre-wrap">
+      {/* `wrap-anywhere`, because a body is as often a JSON receipt as it is prose — one long
+          token with no spaces in it, which plain wrapping can never break and which would
+          otherwise run straight through the bubble's rim. */}
+      <p className="wrap-anywhere whitespace-pre-wrap">
         {turn.body}
         {/* The bodies stay in the file (SPEC §6.3) and a 400px bubble was never going to hold 3 KB
             of agent prompt. The ellipsis is the whole of the promise: there is more, and the node

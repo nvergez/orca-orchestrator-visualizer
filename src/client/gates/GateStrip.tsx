@@ -5,6 +5,7 @@ import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { cn } from '@/lib/utils';
 import type { Gate, Task } from '../../shared/types.ts';
 import { GATE_THEME } from '../canvas/theme.ts';
+import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SPRING } from '../motion.ts';
 
 /**
@@ -83,14 +84,30 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
           const taskId = gate.taskId;
 
           return (
-            <li key={gate.id} data-testid="gate">
+            // The copy button sits **beside** the row rather than inside it: the row is a button,
+            // and a button inside a button is not a thing HTML has.
+            <li key={gate.id} data-testid="gate" className="group/copy flex items-start gap-1">
               {taskId === null ? (
-                <div className="px-1.5 py-1">
+                <div className="min-w-0 flex-1 px-1.5 py-1">
                   <GateEntry gate={gate} blocks={null} />
                 </div>
               ) : (
-                <GateButton gate={gate} blocks={titleOf(taskId)} onSelect={() => onSelectTask(taskId)} />
+                <GateButton
+                  gate={gate}
+                  blocks={titleOf(taskId)}
+                  onSelect={() => onSelectTask(taskId)}
+                  className="min-w-0 flex-1"
+                />
               )}
+
+              {/*
+                The id of the question — which is what you need to go and *answer* it, and the strip
+                is where a person is standing when they decide to. **A gate that names no task is the
+                only place this is reachable at all**: 32 of the 53 gate messages on the live database
+                carry no `payload.taskId`, they open no inspector, and until now their id appeared
+                nowhere in the tool.
+              */}
+              <CopyButton value={gate.id} label="gate id" className={cn('mt-1', COPY_ON_HOVER, 'hover:bg-gate/15')} />
             </li>
           );
         })}
@@ -100,7 +117,17 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
 }
 
 /** A gate with a node at the other end of it: the whole row is the way there. */
-function GateButton({ gate, blocks, onSelect }: { gate: Gate; blocks: string; onSelect: () => void }) {
+function GateButton({
+  gate,
+  blocks,
+  onSelect,
+  className,
+}: {
+  gate: Gate;
+  blocks: string;
+  onSelect: () => void;
+  className?: string;
+}) {
   const spotlight = useSpotlight();
 
   return (
@@ -109,7 +136,8 @@ function GateButton({ gate, blocks, onSelect }: { gate: Gate; blocks: string; on
       onClick={onSelect}
       className={cn(
         'group relative block w-full cursor-pointer rounded-lg px-1.5 py-1 text-left',
-        'hover:bg-gate/10 focus-visible:ring-gate/50 transition-colors focus-visible:ring-2 focus-visible:outline-none'
+        'hover:bg-gate/10 focus-visible:ring-gate/50 transition-colors focus-visible:ring-2 focus-visible:outline-none',
+        className
       )}
       {...spotlight}
     >

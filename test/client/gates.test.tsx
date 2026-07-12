@@ -177,6 +177,29 @@ describe('the gate strip', () => {
     expect(within(shown!).getByText(/no task/i)).toBeVisible();
   });
 
+  it('copies the id of a gate that names no task — the one place it is reachable at all', async () => {
+    // The strip is where a person is standing when they decide to go and answer the question, and
+    // this tool will never answer it for them (SPEC §1.2). A run-level gate opens no inspector, so
+    // without this its id — the thing every `orca orchestration` command needs — appears nowhere.
+    const user = userEvent.setup();
+    render(<App loadTask={NO_DETAIL} event={event([gate({ id: 'msg_run_gate', taskId: null })])} />);
+
+    await user.click(within(strip()!).getByRole('button', { name: 'Copy the gate id msg_run_gate' }));
+
+    expect(await navigator.clipboard.readText()).toBe('msg_run_gate');
+  });
+
+  it('copies a gate’s id without selecting the task it blocks — two clicks, two intentions', async () => {
+    const user = userEvent.setup();
+    render(<App loadTask={NO_DETAIL} event={event([gate()])} />);
+
+    await user.click(within(strip()!).getByRole('button', { name: 'Copy the gate id msg_gate' }));
+
+    expect(await navigator.clipboard.readText()).toBe('msg_gate');
+    // The copy button is a sibling of the row, not a child of it — so the dock is left alone.
+    expect(await node('task_aaaaaaaa')).toHaveAttribute('data-selected', 'false');
+  });
+
   it('shows only the selected run’s gates — never another run’s', async () => {
     const gates = [
       gate({ id: 'msg_here', question: 'Blocking this run' }),

@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import type { CoordinatorRun, Run } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
+import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -290,9 +291,14 @@ function CoordinatorRuns({ runs }: { runs: CoordinatorRun[] }) {
       <h3 className="text-[10px] font-semibold tracking-widest uppercase">Coordinator runs</h3>
       <ul className="mt-1.5 space-y-1">
         {runs.map((run) => (
-          <li key={run.id} title={run.coordinatorHandle} className="flex items-center gap-1.5">
+          <li key={run.id} title={run.coordinatorHandle} className="group/copy flex items-center gap-1.5">
             <code className="font-mono">{shortHandle(run.coordinatorHandle)}</code>
             <span className="opacity-70">· {run.status}</span>
+            <CopyButton
+              value={run.coordinatorHandle}
+              label="coordinator handle"
+              className={cn('ml-auto size-5', COPY_ON_HOVER)}
+            />
           </li>
         ))}
       </ul>

@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import type { CastMember, Run } from '../../shared/types.ts';
 import { agentLook, MONOGRAM_CLASS, STALE_HEARTBEAT_MS } from '../canvas/theme.ts';
+import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SECTION_IN } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
 
@@ -59,7 +60,7 @@ export function Cast({ run, selectedAgent, onSelectAgent, now }: CastProps) {
       {/* The orchestrator itself, at the head of its own cast. It is not a button: there is nothing
           to filter *to* — the whole canvas is already its work, and the conversation already its
           conversation. It is here because a cast with no lead is a list of subordinates. */}
-      <div className="flex items-center gap-2.5 px-4 py-1.5 pl-7">
+      <div className="group/copy flex items-center gap-2.5 px-4 py-1.5 pl-7">
         <span
           className={cn(MONOGRAM_CLASS, 'size-5 text-[9.5px]')}
           style={{ background: 'var(--foreground)', color: 'var(--background)' }}
@@ -72,11 +73,21 @@ export function Cast({ run, selectedAgent, onSelectAgent, now }: CastProps) {
             {run.handle ?? '— no handle on record —'}
           </code>
         </span>
+
+        {/* The handle is the orchestrator's only identity in the schema, it is a uuid, and the row
+            is 18rem wide — so it is shown truncated and copied whole (`copy.tsx`). Nothing to copy
+            on the synthetic run: it has no handle, which is the entire reason it exists. */}
+        {run.handle !== null && (
+          <CopyButton value={run.handle} label="orchestrator handle" className={COPY_ON_HOVER} />
+        )}
       </div>
 
       <ul>
         {run.cast.map((member) => (
-          <li key={member.handle}>
+          // The copy button is a **sibling** of the row, not a child of it: the row is a button, and
+          // a button inside a button is not a thing HTML has. It rides on top of the space the row
+          // keeps clear for it (`pr-9`), so nothing shifts when it appears.
+          <li key={member.handle} className="group/copy relative">
             <Agent
               member={member}
               cast={run.cast}
@@ -84,6 +95,12 @@ export function Cast({ run, selectedAgent, onSelectAgent, now }: CastProps) {
               // Clicking the selected agent lets it go — the way out is where the way in was.
               onSelect={() => onSelectAgent(member.handle === selectedAgent ? null : member.handle)}
               now={now}
+            />
+
+            <CopyButton
+              value={member.handle}
+              label="agent handle"
+              className={cn('absolute top-1/2 right-1.5 -translate-y-1/2', COPY_ON_HOVER)}
             />
           </li>
         ))}
@@ -116,7 +133,9 @@ function Agent({
       onClick={onSelect}
       title={member.handle}
       className={cn(
-        'hover:bg-accent/60 relative flex w-full cursor-pointer items-center gap-2.5 py-1.5 pr-3 pl-7 text-left transition-colors',
+        // `pr-9` is the room the copy button rides in (`Cast`, above) — kept clear at all times, so
+        // the last-seen badge does not jump sideways the moment the pointer arrives.
+        'hover:bg-accent/60 relative flex w-full cursor-pointer items-center gap-2.5 py-1.5 pr-9 pl-7 text-left transition-colors',
         'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
         selected && 'bg-selection-soft/70'
       )}
