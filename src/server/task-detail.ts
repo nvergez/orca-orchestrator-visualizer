@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { parsePayload, taskIdOf } from '../shared/payload.ts';
 import { mergeReceipts, receiptOfResult, receiptOfWorkerDone } from '../shared/receipt.ts';
-import type { Completion, Dispatch, TaskDetail } from '../shared/types.ts';
+import type { Dispatch, TaskDetail, WorkerCompletion } from '../shared/types.ts';
 import { type Columns, selectWhere, text } from './rows.ts';
 import { COMPLETION_COLUMNS, DISPATCH_TASK_ID, hasColumn, MESSAGE_SEQUENCE } from './schema.ts';
 import { DISPATCH_COLUMNS, toDispatch } from './tasks.ts';
@@ -63,7 +63,10 @@ export function readTaskDetail(db: DatabaseSync, columns: Columns, id: string): 
     // The whole receipt, merged across both evidence sources with provenance (#67): agreement
     // deduplicates into one fact wearing two sources; conflict stays two facts. The compact,
     // capped reading of the same evidence is the conversation's (`conversation.ts`).
-    receipt: mergeReceipts(receiptOfResult(result), ...completions.map((done) => receiptOfWorkerDone(done.payload))),
+    receipt: mergeReceipts(
+      receiptOfResult(result),
+      ...completions.map((done) => receiptOfWorkerDone(parsePayload(done.payload)))
+    ),
     completions,
   };
 }
@@ -71,15 +74,17 @@ export function readTaskDetail(db: DatabaseSync, columns: Columns, id: string): 
 /**
  * Every `worker_done` message that named this task — the raw half of the outcome (#67).
  *
- * The payloads ride whole and verbatim (parsed when they parse, the string when they do not),
- * because the recognized facts above are **additive**: whatever the readers did not recognize
- * is still evidence, and the inspector renders it as it was written. A payload that names no
- * task — or a task this is not — is not guessed in; it stays in the message feed where the
- * attribution rules already place it (SPEC §4.4).
+ * The payloads ride as the **column text, verbatim**, because the recognized facts above are
+ * additive: whatever the readers did not recognize is still evidence, and the inspector
+ * renders it as it was written — a re-serialized parse would silently collapse a duplicated
+ * key or reformat a number, which is exactly the kind of quiet loss "verbatim" forbids. The
+ * parse happens on a copy, to answer the one question the raw text cannot: whose task is
+ * this? A payload that names no task — malformed ones included — is not guessed in; it stays
+ * in the message feed where the attribution rules already place it (SPEC §4.4).
  *
  * Bounded the way the bodies are: read for the one clicked task, never in a snapshot.
  */
-function readCompletions(db: DatabaseSync, columns: Columns, id: string): Completion[] {
+function readCompletions(db: DatabaseSync, columns: Columns, id: string): WorkerCompletion[] {
   // `type` finds the worker_done rows; `payload` is what they handed back. Losing either
   // costs exactly this feature, and `meta.degraded` names it (`schema.ts`, #67).
   if (!COMPLETION_COLUMNS.every((column) => hasColumn(columns, column))) return [];
@@ -95,15 +100,15 @@ function readCompletions(db: DatabaseSync, columns: Columns, id: string): Comple
     `WHERE type = 'worker_done' ORDER BY ${order}`
   );
 
-  const completions: Completion[] = [];
+  const completions: WorkerCompletion[] = [];
   for (const row of rows) {
-    const payload = parsePayload(row.payload);
-    if (taskIdOf(payload) !== id) continue;
+    const raw = text(row.payload);
+    if (raw === null || taskIdOf(parsePayload(raw)) !== id) continue;
 
     completions.push({
       messageId: text(row.id) ?? '',
       at: isoInstant(row.created_at) ?? '',
-      payload,
+      payload: raw,
     });
   }
 

@@ -405,17 +405,19 @@ export function agentOfTurn(turn: Turn): string | null {
  * One `worker_done` message that named this task — the second evidence source an outcome has
  * (#67), kept whole and raw.
  *
- * `payload` is exactly what `parsePayload` made of the column: the parsed value when the text
- * parses, the string itself when it does not. Never a lossy cast — an unknown shape reaching
- * the screen verbatim is the entire point of carrying it.
+ * `payload` is the TEXT column **verbatim** — the bytes the worker wrote, not a parse of
+ * them. A `JSON.parse → stringify` round trip looks the same and is not: it silently
+ * collapses a duplicated key, reformats a number, and re-orders nothing you can prove. The
+ * readers parse a *copy* to recognize facts; what reaches the screen is the evidence itself,
+ * which is the only rendering the word "verbatim" allows (SPEC §12.4).
  */
-export type Completion = {
+export type WorkerCompletion = {
   /** The message's own id — real, Orca-written, and so copyable (SPEC §7.9). */
   messageId: string;
   /** When it was sent. ISO, like every instant on this wire. */
   at: string;
-  /** The payload, parsed when it parses — verbatim retained evidence either way. */
-  payload: unknown;
+  /** The `messages.payload` column, exactly as written. */
+  payload: string;
 };
 
 export type TaskDetail = {
@@ -434,7 +436,7 @@ export type TaskDetail = {
    */
   receipt: ReceiptFact[];
   /** Every `worker_done` message that named this task, oldest first, payloads raw. */
-  completions: Completion[];
+  completions: WorkerCompletion[];
 };
 
 /**

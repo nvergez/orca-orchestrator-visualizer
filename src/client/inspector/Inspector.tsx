@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { CastMember, Completion, Dispatch, Gate, Task, TaskDetail, Turn } from '../../shared/types.ts';
+import type { CastMember, Dispatch, Gate, Task, TaskDetail, Turn, WorkerCompletion } from '../../shared/types.ts';
 import { GATE_THEME, type StatusTheme, themeOf } from '../canvas/theme.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { selectTurns } from '../conversation/select.ts';
@@ -195,8 +195,10 @@ export function Inspector({
                   <ReceiptFacts facts={detail.receipt} showSources />
                   {detail.completions.length > 0 && (
                     <ul className="mt-2 flex flex-col gap-2">
-                      {detail.completions.map((completion) => (
-                        <li key={completion.messageId}>
+                      {detail.completions.map((completion, index) => (
+                        // The id can be empty — nothing in this schema is validated — and two
+                        // id-less rows must still be two rows (the same fallback `Attempts` uses).
+                        <li key={completion.messageId || index}>
                           <CompletionEvidence completion={completion} now={now} />
                         </li>
                       ))}
@@ -373,16 +375,19 @@ function Body({ text, loading, empty }: { text: string | null; loading: boolean;
 /**
  * One `worker_done` payload, raw and whole (#67) — the evidence under the facts above it.
  *
- * Verbatim is the contract: an unknown shape, an unrecognized field, a value the readers had
- * never seen — all of it reaches the screen exactly as the worker wrote it, because whatever
- * was not recognized is still retained evidence, and evidence that disappears when the parser
- * shrugs is the failure this whole feature exists to prevent. A payload that never parsed at
- * all renders as the string it is.
+ * Verbatim is the contract, and it is taken literally: this is the TEXT column's bytes, not a
+ * parse re-serialized to look like them — a round trip through `JSON.parse` silently collapses
+ * a duplicated key and reformats a number, which is exactly the quiet loss the word forbids.
+ * An unknown shape, an unrecognized field, a value the readers had never seen: all of it
+ * reaches the screen as the worker wrote it, because whatever was not recognized is still
+ * retained evidence, and evidence that disappears when a parser shrugs is the failure this
+ * whole feature exists to prevent.
  *
  * The message id is real and Orca-written — `orca orchestration` can name it — so it copies,
- * the way every real id in this panel does (SPEC §7.9).
+ * the way every real id in this panel does (SPEC §7.9). A row whose id column was empty
+ * simply offers no button: a copy of nothing is not quiet, it is a lie about what is held.
  */
-function CompletionEvidence({ completion, now }: { completion: Completion; now: number }) {
+function CompletionEvidence({ completion, now }: { completion: WorkerCompletion; now: number }) {
   return (
     <section
       data-testid="completion"
@@ -390,11 +395,13 @@ function CompletionEvidence({ completion, now }: { completion: Completion; now: 
     >
       <header className="text-muted-foreground flex items-center gap-1 font-mono text-[10px]">
         <span>worker_done · payload</span>
-        <CopyButton
-          value={completion.messageId}
-          label="message id"
-          className={cn('size-5 pointer-coarse:size-8', COPY_ON_HOVER)}
-        />
+        {completion.messageId !== '' && (
+          <CopyButton
+            value={completion.messageId}
+            label="message id"
+            className={cn('size-5 pointer-coarse:size-8', COPY_ON_HOVER)}
+          />
+        )}
         {completion.at !== '' && (
           <span className="ml-auto tabular-nums" title={ageOf(completion.at, now).title}>
             {ageOf(completion.at, now).label}
@@ -406,7 +413,7 @@ function CompletionEvidence({ completion, now }: { completion: Completion; now: 
         data-testid="completion-payload"
         className="text-foreground/90 mt-1.5 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap"
       >
-        {typeof completion.payload === 'string' ? completion.payload : JSON.stringify(completion.payload, null, 2)}
+        {completion.payload}
       </pre>
     </section>
   );

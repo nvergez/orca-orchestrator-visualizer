@@ -239,16 +239,18 @@ describe('the inspector detail carries the whole receipt, and the raw evidence b
 
     const detail = await detailOf(builder, 'task_raw');
 
+    // The payload is the column's text, byte for byte — never a parse re-serialized to look
+    // like it, which would silently collapse a duplicated key or reformat a number (#67).
     expect(detail.completions).toEqual([
       {
         messageId: 'msg_known',
         at: at(20).toISOString(),
-        payload: { taskId: 'task_raw', reportPath: 'docs/report.md' },
+        payload: '{"taskId":"task_raw","reportPath":"docs/report.md"}',
       },
       {
         messageId: 'msg_strange',
         at: at(30).toISOString(),
-        payload: { taskId: 'task_raw', outcome: { nested: ['x'] }, score: 0.9 },
+        payload: '{"taskId":"task_raw","outcome":{"nested":["x"]},"score":0.9}',
       },
     ]);
 
@@ -294,6 +296,34 @@ describe('the inspector detail carries the whole receipt, and the raw evidence b
     // An unparseable payload names no task, so it cannot honestly be attributed to this one —
     // it stays in the message feed, unattached, rather than being guessed into a completion.
     expect(detail.completions).toEqual([]);
+  });
+
+  it('keeps what JSON itself would quietly lose — a key one document states twice', async () => {
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_twice', handle: COORDINATOR, status: 'completed', createdAt: AT, completedAt: at(40) })
+      .message({
+        id: 'msg_twice',
+        type: 'worker_done',
+        fromHandle: WORKER,
+        toHandle: COORDINATOR,
+        subject: 'Done',
+        payload: { taskId: 'task_twice' },
+        createdAt: at(20),
+      })
+      .write(tempDbPath());
+    // Legal JSON, hostile shape: `JSON.parse` keeps only the last `branch`. A parse-then-
+    // stringify rendering would erase the first one before any reader ran.
+    corruptPayload(dbPath, 'msg_twice', '{"taskId":"task_twice","branch":"nvergez/a","branch":"nvergez/b"}');
+    harness = await serve(dbPath);
+
+    const detail = (await (await harness.task('task_twice')).json()) as TaskDetail;
+
+    // The recognized fact is honest about what parsing sees (last wins)…
+    expect(detail.receipt).toEqual([
+      { kind: 'branch', value: 'nvergez/b', sources: ['worker_done.payload · branch'] },
+    ]);
+    // …and the verbatim payload still shows both, because it is the column's text itself.
+    expect(detail.completions[0]!.payload).toBe('{"taskId":"task_twice","branch":"nvergez/a","branch":"nvergez/b"}');
   });
 });
 

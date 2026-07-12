@@ -1,5 +1,6 @@
 import { ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { keyOf } from '../shared/receipt.ts';
 import type { ReceiptFact } from '../shared/types.ts';
 import { CHIP_CLASS } from './chip.ts';
 import { CopyId } from './copy.tsx';
@@ -37,17 +38,19 @@ export type ReceiptFactsProps = {
   testId?: string;
 };
 
-/** What the copy button calls the value — `Copy the branch nvergez/67`. */
-const KIND_LABEL: Record<Exclude<ReceiptFact['kind'], 'link'>, string> = {
-  branch: 'branch',
-  ticket: 'ticket',
-  agent: 'completing agent',
-  report: 'report path',
-  file: 'file path',
+/**
+ * How each copyable kind presents: what the copy button calls the value (`Copy the branch
+ * nvergez/67`), and whether that word is also said beside the chip — `68` is a ticket only if
+ * told so, while a path already says what it is. One table, so a new kind cannot get a label
+ * in one place and forget the caption in the other.
+ */
+const KIND_LOOK: Record<Exclude<ReceiptFact['kind'], 'link'>, { label: string; captioned: boolean }> = {
+  branch: { label: 'branch', captioned: true },
+  ticket: { label: 'ticket', captioned: true },
+  agent: { label: 'completing agent', captioned: true },
+  report: { label: 'report path', captioned: true },
+  file: { label: 'file path', captioned: false },
 };
-
-/** The kinds whose value alone does not say what it is — `68` is a ticket only if told so. */
-const CAPTIONED: ReadonlySet<ReceiptFact['kind']> = new Set(['branch', 'ticket', 'agent', 'report']);
 
 export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId = 'receipt' }: ReceiptFactsProps) {
   if (facts.length === 0) return null;
@@ -56,11 +59,11 @@ export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId =
     <ul data-testid={testId} className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
       {facts.map((fact) => (
         <li
-          key={`${fact.kind} ${fact.value}`}
+          key={keyOf(fact)}
           className={cn('flex max-w-full items-center gap-1', showSources && 'w-full flex-wrap')}
         >
-          {CAPTIONED.has(fact.kind) && (
-            <span className="text-muted-foreground shrink-0 text-[10px]">{KIND_LABEL[fact.kind as keyof typeof KIND_LABEL]}</span>
+          {fact.kind !== 'link' && KIND_LOOK[fact.kind].captioned && (
+            <span className="text-muted-foreground shrink-0 text-[10px]">{KIND_LOOK[fact.kind].label}</span>
           )}
 
           {fact.kind === 'link' ? (
@@ -76,7 +79,7 @@ export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId =
               <span className="truncate">{fact.value}</span>
             </a>
           ) : (
-            <CopyId id={fact.value} label={KIND_LABEL[fact.kind]} />
+            <CopyId id={fact.value} label={KIND_LOOK[fact.kind].label} />
           )}
 
           {/* The provenance, said out loud — the same small grey truth-telling every turn's

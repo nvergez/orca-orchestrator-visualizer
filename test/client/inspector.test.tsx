@@ -772,7 +772,7 @@ describe('the outcome receipts', () => {
       {
         messageId: 'msg_strange',
         at: '2026-07-08T12:38:00.000Z',
-        payload: { taskId: TASK_ID, outcome: { nested: ['x'] }, score: 0.9 },
+        payload: `{"taskId":"${TASK_ID}","outcome":{"nested":["x"]},"score":0.9}`,
       },
     ],
   });
@@ -808,8 +808,8 @@ describe('the outcome receipts', () => {
     const raw = within(outcome).getByTestId('completion-payload');
 
     // Schema tolerance applies to outcomes too (#67): the reader recognized none of this,
-    // and all of it reaches the screen anyway, as it was written.
-    expect(raw.textContent).toContain('"score": 0.9');
+    // and all of it reaches the screen anyway — the column's text itself, not a re-print.
+    expect(raw.textContent).toContain('"score":0.9');
     expect(raw.textContent).toContain('"nested"');
     // The message id is real and Orca-written, so it is copyable (SPEC §7.9).
     expect(within(outcome).getByRole('button', { name: /copy the message id msg_strange/i })).toBeInTheDocument();
