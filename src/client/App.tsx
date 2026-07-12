@@ -6,6 +6,8 @@ import { STATUS_COLORS } from './canvas/theme.ts';
 import { useFeed, usePulses } from './feed/feed.ts';
 import { Feed } from './feed/Feed.tsx';
 import { GateStrip } from './gates/GateStrip.tsx';
+import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
+import { Inspector } from './inspector/Inspector.tsx';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
@@ -30,8 +32,9 @@ import { useRunSelection } from './rail/selection.ts';
  *   staring at a canvas that does not contain the task they just clicked would be the worse
  *   surprise. (The rule this does not break is the *automatic* one — a run starting on its own
  *   never moves the canvas; it gets a chip, and the chip is the rail's, from #16.)
- * - **A node → its story.** The feed filters to that task's messages, end to end. Clicking the
- *   same node again clears the filter, so the way out is where the way in was.
+ * - **A node → its story.** The dock swaps to the inspector, which is that task's story end to
+ *   end — its spec, its result, every attempt, its messages, its gates, its neighbours (#20).
+ *   Clicking the same node again lets it go, so the way out is where the way in was.
  *
  * **The gate strip is the third thing the shell owns** (#19), and for the same reason: it sits
  * above the canvas, it belongs to the selected *run*, and clicking it selects a *task* — three
@@ -39,8 +42,10 @@ import { useRunSelection } from './rail/selection.ts';
  * not in the dock, because a question that has stopped your orchestration has to be in your
  * way; and it is rendered only while that run has an open gate, so it stays a signal.
  *
- * The node inspector (#20) is still to come; the dock it will swap into is this one, and until
- * it does, the feed is what it shows.
+ * **The dock holds one panel, and it swaps** (#20, SPEC §7.1): the feed by default, the node
+ * inspector while a task is selected — never both stacked, because at this node count the canvas
+ * deserves the width. Which is why the selection lives here and not in either of them: it is the
+ * thing that decides *which panel exists*.
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
@@ -48,7 +53,18 @@ const NO_RUNS: Run[] = [];
 const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
 
-export function App({ event }: { event: StreamEvent | null }) {
+export type AppProps = {
+  event: StreamEvent | null;
+  /**
+   * How the inspector fetches a task's bodies (#20). It defaults to the real `GET /api/task/:id`
+   * and is a *prop* so the shell can be driven against a canned detail — the same reason
+   * `StreamEvent` arrives as one: everything the client renders comes in through its props, and
+   * the network lives at the edges (`Live.tsx`, `inspector/detail.ts`).
+   */
+  loadTask?: TaskLoader;
+};
+
+export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
   const { selected, select, newRunId } = useRunSelection(runs);
 
@@ -82,6 +98,22 @@ export function App({ event }: { event: StreamEvent | null }) {
   // Only ever a task on the canvas: a selection is cleared whenever the run changes, and a run
   // whose tasks a reset deleted takes its selection with it.
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
+
+  // **Every** gate this task raised, answered ones included (#19 derived them; #20 shows them).
+  // The node wears one ⛔ marker because it has room for one; the inspector is where the decision
+  // that was actually made is legible.
+  const taskGates = useMemo(
+    () =>
+      event && selectedTask
+        ? event.snapshot.gates.filter((gate) => gate.taskId === selectedTask.id)
+        : NO_GATES,
+    [event, selectedTask]
+  );
+
+  // The bodies, on the click and not before — the 172 KB the snapshot exists to not send
+  // (SPEC §6.3). The fetch is the shell's because the *selection* is: the panel that reads it is
+  // mounted and unmounted by this very state.
+  const { detail, error: detailError } = useTaskDetail(selectedTask?.id ?? null, event, loadTask);
 
   /** The rail. A different run is a different canvas, so the task selection does not survive it. */
   function selectRun(runId: string): void {
@@ -157,13 +189,24 @@ export function App({ event }: { event: StreamEvent | null }) {
           </div>
         </div>
 
-        <Feed
-          messages={messages}
-          runId={selected?.id ?? null}
-          selectedTask={selectedTask}
-          onClearTask={() => setSelectedTaskId(null)}
-          onSelectMessage={selectMessage}
-        />
+        {/*
+          One panel, and it swaps (SPEC §7.1). A selected task is the whole of the condition:
+          the inspector is what a selection *is* on screen, and letting the task go is what
+          brings the feed back.
+        */}
+        {selectedTask ? (
+          <Inspector
+            task={selectedTask}
+            gates={taskGates}
+            tasks={tasks}
+            detail={detail}
+            error={detailError}
+            onClose={() => setSelectedTaskId(null)}
+            onSelectTask={showTask}
+          />
+        ) : (
+          <Feed messages={messages} runId={selected?.id ?? null} onSelectMessage={selectMessage} />
+        )}
       </div>
     </main>
   );

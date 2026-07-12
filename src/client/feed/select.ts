@@ -1,7 +1,7 @@
 import type { FeedMessage } from '../../shared/types.ts';
 
 /**
- * What the feed *shows* — the three filters, and the one ruling that made this ticket
+ * What a panel of messages *shows* — the scope, and the one ruling that made this module
  * necessary in the first place.
  *
  * **Heartbeats are 65% of all traffic** (302 of 466 in the live database) and all of them
@@ -23,10 +23,16 @@ import type { FeedMessage } from '../../shared/types.ts';
  */
 
 export type FeedFilter = {
-  /** The selected run, or null for the "All" scope — the global `sequence` timeline. */
+  /**
+   * The selected run, or null for every message there is.
+   *
+   * Null is what the **inspector** passes (#20): its messages are one task's, fetched from
+   * `/api/task/:id` and already the right set — what it wants from here is the heartbeat rule,
+   * which is this module's and not a second copy of it. And it is what the feed's "All" scope
+   * passes, for a different reason: the global `sequence` timeline is the only true total order
+   * the schema has.
+   */
   runId: string | null;
-  /** A selected task narrows the feed to that task's story, across the whole database. */
-  taskId: string | null;
   /** The one thing the user can ask back in. Off by default. */
   showHeartbeats: boolean;
 };
@@ -43,6 +49,24 @@ export type FeedSelection = {
    */
   hidden: number;
 };
+
+/** What a panel renders: the rows, what the default is holding back, and the clock to age them by. */
+export type FeedView = FeedSelection & {
+  /** The instant every age in the panel is measured from — one clock, so a list ages in step. */
+  now: number;
+};
+
+/**
+ * The selection, and the clock — the pair both panels of messages need, taken together so that
+ * neither has to reach for `Date.now()` in its own render (and so the two cannot disagree about
+ * what "now" is).
+ *
+ * The impurity stops here: `selectFeed` below is pure, which is what lets the suite assert it
+ * against a real snapshot of the 65%-heartbeat corpus (`test/server/messages.test.ts`).
+ */
+export function viewOf(messages: readonly FeedMessage[], filter: FeedFilter): FeedView {
+  return { ...selectFeed(messages, filter), now: Date.now() };
+}
 
 export function selectFeed(messages: readonly FeedMessage[], filter: FeedFilter): FeedSelection {
   const shown: FeedMessage[] = [];
@@ -62,14 +86,9 @@ export function selectFeed(messages: readonly FeedMessage[], filter: FeedFilter)
   return { shown, hidden };
 }
 
-function inScope(message: FeedMessage, { runId, taskId }: FeedFilter): boolean {
-  // A selected task is the *narrower* filter, and it wins over the scope: "read this task's
-  // story end to end" (#12, story 34) is a question about the task, not about the run the
-  // canvas happens to be showing.
-  if (taskId !== null) return message.taskId === taskId;
-
-  // "All" — every message in the database, in one timeline. The global `sequence` order is
-  // the only true total order the schema has, and it costs nothing to expose (SPEC §7.3).
+function inScope(message: FeedMessage, { runId }: FeedFilter): boolean {
+  // Every message it was handed — the feed's "All" scope, and the inspector, which has already
+  // narrowed to one task's story and is here for the heartbeat rule alone.
   if (runId === null) return true;
 
   // A message the server could not place (`runId: null`) appears in "All" and nowhere else —

@@ -2,7 +2,15 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
+import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type { Gate, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+
+/**
+ * Clicking a gate selects the task it blocks, which swaps the dock to the inspector (#20) — and
+ * the inspector fetches. These tests are about the *strip*, so it is handed a detail rather than
+ * being allowed to reach for a network.
+ */
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], messages: [] });
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input, and the same
@@ -120,7 +128,7 @@ async function node(id: string): Promise<HTMLElement> {
 
 describe('the gate strip', () => {
   it('shows the question, the options and the task it blocks', async () => {
-    render(<App event={event([gate()])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate()])} />);
 
     const shown = strip();
     expect(shown).not.toBeNull();
@@ -134,13 +142,13 @@ describe('the gate strip', () => {
   it('is not there at all when nothing in the selected run is blocked', () => {
     // The whole point of the strip: it disappears when nothing is blocked, so it is a signal
     // and not furniture (SPEC §7.4).
-    render(<App event={event([])} />);
+    render(<App loadTask={NO_DETAIL} event={event([])} />);
 
     expect(strip()).toBeNull();
   });
 
   it('is not there when every gate in the run has been answered', () => {
-    render(<App event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
 
     expect(strip()).toBeNull();
   });
@@ -148,7 +156,7 @@ describe('the gate strip', () => {
   it('selects the task a gate blocks when the gate is clicked', async () => {
     // Straight from the question to its context (#12, story 26): the node is selected, which
     // is what centres it on the canvas and filters the feed to its story.
-    render(<App event={event([gate()])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate()])} />);
 
     await userEvent.click(within(strip()!).getByRole('button', { name: /Which driver/ }));
 
@@ -158,7 +166,7 @@ describe('the gate strip', () => {
   it('shows a gate that names no task, and offers nothing to click through to', async () => {
     // 32 of the 53 live gate messages carry no `payload.taskId`. They block the *run*, so they
     // still interrupt — there is simply no node to send the user to (SPEC §4.5).
-    render(<App event={event([gate({ taskId: null })])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate({ taskId: null })])} />);
 
     const shown = strip();
     expect(within(shown!).getByText(/Which driver/)).toBeVisible();
@@ -173,7 +181,7 @@ describe('the gate strip', () => {
     ];
     const runs = [run(), run({ id: OTHER_RUN_ID, handle: OTHER_HANDLE, label: 'Another run' })];
 
-    render(<App event={event(gates, [task()], runs)} />);
+    render(<App loadTask={NO_DETAIL} event={event(gates, [task()], runs)} />);
 
     expect(within(strip()!).getByText(/Blocking this run/)).toBeVisible();
     expect(within(strip()!).queryByText(/Blocking another run/)).toBeNull();
@@ -184,7 +192,7 @@ describe('the gate strip', () => {
     const tasks = [task(), task({ id: 'task_bbbbbbbb', runId: OTHER_RUN_ID, title: 'The other task' })];
     const runs = [run(), run({ id: OTHER_RUN_ID, handle: OTHER_HANDLE, label: 'Another run' })];
 
-    render(<App event={event(gates, tasks, runs)} />);
+    render(<App loadTask={NO_DETAIL} event={event(gates, tasks, runs)} />);
 
     // The rail opens on the most recently active run, which here is the unblocked one.
     expect(strip()).toBeNull();
@@ -202,7 +210,7 @@ describe('the gate strip', () => {
       gate({ id: 'msg_2', taskId: null, question: 'Asked second', createdAt: '2026-07-08T12:40:00.000Z' }),
     ];
 
-    render(<App event={event(gates)} />);
+    render(<App loadTask={NO_DETAIL} event={event(gates)} />);
 
     const questions = within(strip()!)
       .getAllByTestId('gate')
@@ -215,19 +223,19 @@ describe('the gate strip', () => {
 
 describe('the gate marker on a node', () => {
   it('marks a task that is blocked on an open gate', async () => {
-    render(<App event={event([gate()])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate()])} />);
 
     expect(within(await node('task_aaaaaaaa')).getByTestId('gate-marker')).toBeVisible();
   });
 
   it('does not mark a task whose gate has been answered', async () => {
-    render(<App event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
 
     expect(within(await node('task_aaaaaaaa')).queryByTestId('gate-marker')).toBeNull();
   });
 
   it('does not mark a task that has no gate at all', async () => {
-    render(<App event={event([])} />);
+    render(<App loadTask={NO_DETAIL} event={event([])} />);
 
     expect(within(await node('task_aaaaaaaa')).queryByTestId('gate-marker')).toBeNull();
   });
@@ -238,7 +246,7 @@ describe('the rail', () => {
     const gates = [gate({ id: 'msg_there', runId: OTHER_RUN_ID, taskId: null })];
     const runs = [run(), run({ id: OTHER_RUN_ID, handle: OTHER_HANDLE, label: 'Another run' })];
 
-    render(<App event={event(gates, [task()], runs)} />);
+    render(<App loadTask={NO_DETAIL} event={event(gates, [task()], runs)} />);
 
     const rows = screen.getAllByTestId('run-row');
     const blocked = rows.find((row) => row.dataset.run === OTHER_RUN_ID)!;
