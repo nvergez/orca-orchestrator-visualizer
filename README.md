@@ -190,7 +190,28 @@ database — gate messages with no gate rows, split timestamp formats, null hand
 task ids — because a fixture that is tidier than reality certifies exactly the bugs this tool
 was written to avoid.
 
-Releases are published by hand. There is no publish-on-tag automation.
+### Releasing
+
+A release is a pull request labelled `release`. package.json is the source of truth for the
+version, so the bump is a reviewable line in the diff and not something CI decides on its own:
+
+1. Bump `version` in `package.json` in the PR.
+2. Add the row for it to the [compatibility table](#compatibility) — the packaging test fails
+   until the table has a row for the new `major.minor`.
+3. Label the PR `release`. CI now also checks that the version is one npm does not already have,
+   so a forgotten bump fails on the PR rather than after the merge.
+4. Merge. The [release workflow](.github/workflows/release.yml) re-runs the full check suite on
+   the merge commit, publishes to npm, pushes the `v<version>` tag, and cuts a GitHub Release
+   with generated notes.
+
+There is no npm token anywhere in this repo. The workflow authenticates to npm with
+[trusted publishing](https://docs.npmjs.com/trusted-publishers): npm is configured to trust this
+repo's `release.yml`, GitHub mints a short-lived OIDC token for the job, and npm exchanges it for
+publish rights. Every published version therefore carries a signed provenance attestation linking
+it back to the commit it was built from.
+
+Merging without the label publishes nothing. A `release` label on a PR that did not bump the
+version publishes nothing either, and says so on the run.
 
 ## License
 

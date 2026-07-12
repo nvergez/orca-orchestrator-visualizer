@@ -3,7 +3,27 @@
   "version": "0.1.0",
   "description": "Unofficial, third-party, read-only web visualizer for Orca's orchestration database",
   "license": "MIT",
+  "author": "Nicolas Vergez",
   "type": "module",
+  "keywords": [
+    "orca",
+    "orchestration",
+    "visualizer",
+    "agents",
+    "sqlite",
+    "cli"
+  ],
+  "homepage": "https://github.com/nvergez/orca-orchestrator-visualizer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nvergez/orca-orchestrator-visualizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nvergez/orca-orchestrator-visualizer/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.5"
   },
@@ -20,6 +40,7 @@
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
     "start": "node dist/server/main.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "lint": "eslint .",
