@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { visibleMessages } from '../../src/client/feed/select.ts';
+import { selectFeed } from '../../src/client/feed/select.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { liveShapeCorpus } from '../fixtures/corpus.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
@@ -315,10 +315,11 @@ describe('heartbeats', () => {
     expect(messages).toHaveLength(466);
     expect(heartbeats).toHaveLength(302);
 
-    const shown = visibleMessages(messages, { runId: null, taskId: null, showHeartbeats: false });
+    const { shown, hidden } = selectFeed(messages, { runId: null, taskId: null, showHeartbeats: false });
 
-    expect(shown).toHaveLength(messages.length - heartbeats.length);
     expect(shown).toHaveLength(164);
+    expect(hidden).toBe(302);
+    // The default content, named: the four types that are actually events (SPEC §7.7).
     expect(new Set(shown.map((message) => message.type))).toEqual(
       new Set(['worker_done', 'decision_gate', 'escalation', 'status'])
     );
@@ -328,9 +329,10 @@ describe('heartbeats', () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const { messages } = await harness.snapshot();
-    const shown = visibleMessages(messages, { runId: null, taskId: null, showHeartbeats: true });
+    const { shown, hidden } = selectFeed(messages, { runId: null, taskId: null, showHeartbeats: true });
 
     expect(shown).toHaveLength(466);
+    expect(hidden).toBe(0);
   });
 });
 

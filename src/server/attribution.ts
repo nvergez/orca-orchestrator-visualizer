@@ -22,14 +22,22 @@ import { instantOf } from './time.ts';
  *    a run, because a message in the wrong run is a lie the user cannot see through, while a
  *    message in "All" is merely one they have to go and look for.
  *
- * The window is `[startedAt, endedAt + IDLE_GAP_MS]`, and the tail matters as much as the
- * head. A live run's `endedAt` is its *last task's creation* — nothing has completed yet — so
- * every message a running orchestration sends arrives after it. A window clamped hard to
- * `endedAt` would leave the live case, the one the feed exists for, entirely unattributed.
- * The grace is the same six hours that segment runs in the first place (`runs.ts`): it is
- * already this tool's answer to "how long can one terminal go quiet and still be the same
- * run", and inventing a second constant for the same question would be inventing a second
- * answer to it.
+ * **The window is `[startedAt, endedAt + IDLE_GAP_MS]`, and the grace on the tail is a
+ * deliberate reading of SPEC §4.3–4.4, not an accident.** The spec fixes a run's window as
+ * `startedAt → endedAt`, where `endedAt` is the last completion *or creation*. For a **live**
+ * run there are no completions — so `endedAt` is its last task's *creation*, and every message
+ * a running orchestration then sends arrives after it. Clamped hard, the window would
+ * unattribute the live case, which is the case the feed exists to serve.
+ *
+ * The grace is the same six hours that segment runs in the first place (`runs.ts`): already
+ * this tool's answer to "how long can one terminal go quiet and still be the same run", and a
+ * second constant for the same question would be a second answer to it.
+ *
+ * It has a cost, and it is paid in the right currency. Runs are *split* on `created_at` while
+ * `endedAt` can be a later `completed_at`, so two consecutive runs of one handle can now have
+ * overlapping windows — and a handle-attributed message inside the overlap matches both, and
+ * so goes to null. It **loses** attribution there; it never invents one. Rule 3 is what makes
+ * that safe, and it is why the grace is on the window and not on the tie-break.
  */
 
 /** What a message row can offer about where it belongs. Everything else about it is text. */

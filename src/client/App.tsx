@@ -4,7 +4,7 @@ import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { STATUS_COLORS } from './canvas/theme.ts';
 import { useFeed, usePulses } from './feed/feed.ts';
-import { Feed, type FeedScope } from './feed/Feed.tsx';
+import { Feed } from './feed/Feed.tsx';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
@@ -48,9 +48,9 @@ export function App({ event }: { event: StreamEvent | null }) {
   const { messages, arrived } = useFeed(event);
   const pulses = usePulses(arrived);
 
+  // The one piece of panel state that is *not* a panel's: the task the canvas outlines and the
+  // task the feed is filtered to are the same task, and neither panel can see the other.
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [scope, setScope] = useState<FeedScope>('run');
-  const [showHeartbeats, setShowHeartbeats] = useState(false);
 
   // The scoping, in one line. Every task carries the run the server inferred for it, so the
   // client never re-derives the grouping — it only picks which one to draw.
@@ -120,10 +120,6 @@ export function App({ event }: { event: StreamEvent | null }) {
         <Feed
           messages={messages}
           runId={selected?.id ?? null}
-          scope={scope}
-          onScope={setScope}
-          showHeartbeats={showHeartbeats}
-          onShowHeartbeats={setShowHeartbeats}
           selectedTask={selectedTask}
           onClearTask={() => setSelectedTaskId(null)}
           onSelectMessage={selectMessage}

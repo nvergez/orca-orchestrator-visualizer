@@ -1,5 +1,6 @@
 import { shortHandle } from '../../shared/handles.ts';
 import type { CoordinatorRun, Run } from '../../shared/types.ts';
+import { CHIP_STYLE } from '../chip.ts';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
 /**
@@ -46,7 +47,7 @@ export function RunRail({ runs, coordinatorRuns, selectedId, onSelect, newRunId 
         instruction: the canvas is never yanked out from under you.
       */}
       {newRunId && (
-        <button type="button" onClick={() => onSelect(newRunId)} style={CHIP_STYLE}>
+        <button type="button" onClick={() => onSelect(newRunId)} style={{ ...CHIP_STYLE, margin: '0 12px 8px' }}>
           new run started ↑
         </button>
       )}
@@ -165,13 +166,3 @@ function CoordinatorRuns({ runs }: { runs: CoordinatorRun[] }) {
   );
 }
 
-const CHIP_STYLE = {
-  margin: '0 12px 8px',
-  padding: '4px 8px',
-  borderRadius: 999,
-  border: '1px solid #93c5fd',
-  background: '#eff6ff',
-  color: '#1e3a8a',
-  fontSize: 11,
-  cursor: 'pointer',
-};

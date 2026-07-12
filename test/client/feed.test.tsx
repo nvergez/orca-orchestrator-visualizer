@@ -496,6 +496,28 @@ describe('the node pulse', () => {
     );
   });
 
+  it('flashes a decision gate amber', async () => {
+    await push(
+      event({ messages: [] }),
+      event({
+        messages: [message({ type: 'decision_gate', subject: 'Which way?', taskId: 'task_aaaaaaaa' })],
+      })
+    );
+
+    await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'decision_gate'));
+    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_COLORS.dispatched.border}` });
+  });
+
+  it('does not flash a plain status message — three colours were agreed, and only three', async () => {
+    await push(
+      event({ messages: [] }),
+      event({ messages: [message({ type: 'status', subject: 'Progress note', taskId: 'task_aaaaaaaa' })] })
+    );
+
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(node('task_aaaaaaaa')).not.toHaveAttribute('data-pulse');
+  });
+
   it('stops flashing about a second later — a pulse that stayed would just be a colour', async () => {
     await push(
       event({ messages: [] }),

@@ -31,13 +31,38 @@ export type FeedFilter = {
   showHeartbeats: boolean;
 };
 
-export function visibleMessages(messages: readonly FeedMessage[], filter: FeedFilter): FeedMessage[] {
-  return messages.filter((message) => matches(message, filter));
+export type FeedSelection = {
+  /** The rows to render, in `sequence` order — oldest first. */
+  shown: FeedMessage[];
+  /**
+   * How many rows in scope the heartbeat filter is holding back.
+   *
+   * Counted rather than implied, and returned from the same pass that decides `shown`: a user
+   * looking at 164 rows in a database of 466 messages is owed the reason, or the tool looks
+   * like it lost three hundred of them.
+   */
+  hidden: number;
+};
+
+export function selectFeed(messages: readonly FeedMessage[], filter: FeedFilter): FeedSelection {
+  const shown: FeedMessage[] = [];
+  let hidden = 0;
+
+  for (const message of messages) {
+    if (!inScope(message, filter)) continue;
+
+    if (!filter.showHeartbeats && message.type === 'heartbeat') {
+      hidden++;
+      continue;
+    }
+
+    shown.push(message);
+  }
+
+  return { shown, hidden };
 }
 
-function matches(message: FeedMessage, { runId, taskId, showHeartbeats }: FeedFilter): boolean {
-  if (!showHeartbeats && message.type === 'heartbeat') return false;
-
+function inScope(message: FeedMessage, { runId, taskId }: FeedFilter): boolean {
   // A selected task is the *narrower* filter, and it wins over the scope: "read this task's
   // story end to end" (#12, story 34) is a question about the task, not about the run the
   // canvas happens to be showing.

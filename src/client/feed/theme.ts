@@ -14,18 +14,40 @@ import { STATUS_COLORS, type StatusColor, UNKNOWN_STATUS_COLOR } from '../canvas
  * same treatment an unknown task status gets (SPEC §5): shown, in a colour that claims nothing.
  */
 
-/** The four types the feed shows by default, plus the one it hides (SPEC §7.7). */
-const MESSAGE_COLORS: Record<string, StatusColor> = {
-  worker_done: STATUS_COLORS.completed,
-  escalation: STATUS_COLORS.failed,
-  decision_gate: STATUS_COLORS.dispatched,
-  status: STATUS_COLORS.pending,
+/** What a message type looks like, and whether something *happening* is worth a flash. */
+type MessageStyle = { color: StatusColor; pulses: boolean };
+
+/**
+ * One table, because "which colour" and "which types pulse" are one question asked twice —
+ * kept apart, they are two places to edit when Orca invents a message type, and two chances
+ * to disagree about what it means.
+ *
+ * **The `false`s are the decision, not the colours.** A pulse says *something just happened
+ * here*, and it is worth having only while it is rare:
+ *
+ * - `heartbeat` is 65% of all traffic and every one of them names a task (SPEC §7.7). Pulsing
+ *   them would flash the canvas continuously and say nothing — their liveness already reached
+ *   the screen as the node's "last seen" badge (SPEC §4.6).
+ * - `status` does not pulse either: the spec names three colours to flash in, and a fourth
+ *   would be a fourth meaning nobody has agreed to.
+ */
+const MESSAGE_STYLES: Record<string, MessageStyle> = {
+  worker_done: { color: STATUS_COLORS.completed, pulses: true },
+  escalation: { color: STATUS_COLORS.failed, pulses: true },
+  decision_gate: { color: STATUS_COLORS.dispatched, pulses: true },
+  status: { color: STATUS_COLORS.pending, pulses: false },
   // Only ever on screen when the toggle asks for it. Blue: it means "still here", nothing more.
-  heartbeat: STATUS_COLORS.ready,
+  heartbeat: { color: STATUS_COLORS.ready, pulses: false },
 };
 
+const UNKNOWN_MESSAGE_STYLE: MessageStyle = { color: UNKNOWN_STATUS_COLOR, pulses: false };
+
+function styleOf(type: string): MessageStyle {
+  return MESSAGE_STYLES[type] ?? UNKNOWN_MESSAGE_STYLE;
+}
+
 export function colorOfMessage(type: string): StatusColor {
-  return MESSAGE_COLORS[type] ?? UNKNOWN_STATUS_COLOR;
+  return styleOf(type).color;
 }
 
 /**
@@ -34,23 +56,10 @@ export function colorOfMessage(type: string): StatusColor {
  */
 export const PULSE_MS = 1000;
 
-/**
- * The three types that pulse a node, and **the fact that nothing else does** — which is the
- * decision, not the colours.
- *
- * Heartbeats are 65% of all traffic and every one of them names a task (SPEC §7.7). Pulsing
- * them would flash the canvas continuously and mean nothing, so they do not pulse — their
- * liveness already reached the screen as the node's "last seen" badge. `status` does not
- * pulse either: the spec names three colours, and inventing a fourth would be inventing a
- * fourth meaning.
- *
- * A pulse says *something just happened here*. It is worth having only while it is rare.
- */
-const PULSE_TYPES = ['worker_done', 'escalation', 'decision_gate'] as const;
-
 export type Pulse = { type: string; color: string };
 
+/** The flash a message leaves on its node — or null when its type is not worth flashing. */
 export function pulseOf(type: string): Pulse | null {
-  if (!(PULSE_TYPES as readonly string[]).includes(type)) return null;
-  return { type, color: colorOfMessage(type).border };
+  const style = styleOf(type);
+  return style.pulses ? { type, color: style.color.border } : null;
 }

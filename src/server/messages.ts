@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { taskIdOf } from '../shared/payload.ts';
 import type { FeedMessage } from '../shared/types.ts';
 import type { Attribution } from './attribution.ts';
 import { type Columns, type Row, text } from './rows.ts';
@@ -114,9 +115,4 @@ function parsePayload(value: unknown): unknown {
   } catch {
     return raw;
   }
-}
-
-function taskIdOf(payload: unknown): string | null {
-  if (typeof payload !== 'object' || payload === null) return null;
-  return text((payload as { taskId?: unknown }).taskId);
 }

@@ -16,7 +16,7 @@ import { type Pulse, PULSE_MS, pulseOf } from './theme.ts';
  * the list.
  */
 
-export type Feed = {
+export type FeedState = {
   /** Everything seen so far, oldest first. The panel decides which way to render it. */
   messages: FeedMessage[];
   /**
@@ -31,8 +31,8 @@ export type Feed = {
 
 const NOTHING: FeedMessage[] = [];
 
-export function useFeed(event: StreamEvent | null): Feed {
-  const [feed, setFeed] = useState<Feed>({ messages: NOTHING, arrived: NOTHING });
+export function useFeed(event: StreamEvent | null): FeedState {
+  const [feed, setFeed] = useState<FeedState>({ messages: NOTHING, arrived: NOTHING });
   const seen = useRef(new Map<number, FeedMessage>());
   const connected = useRef(false);
 

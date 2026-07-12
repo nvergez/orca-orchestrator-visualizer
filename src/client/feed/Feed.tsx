@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { shortHandle } from '../../shared/handles.ts';
+import { taskIdOf } from '../../shared/payload.ts';
 import type { FeedMessage, Task } from '../../shared/types.ts';
+import { SELECTED_OUTLINE } from '../canvas/theme.ts';
+import { CHIP_STYLE } from '../chip.ts';
 import { relativeTime } from '../relative-time.ts';
-import { type FeedFilter, visibleMessages } from './select.ts';
+import { type FeedFilter, selectFeed } from './select.ts';
 import { colorOfMessage } from './theme.ts';
 
 /**
@@ -21,6 +24,11 @@ import { colorOfMessage } from './theme.ts';
  * - **The task filter**, which is the feed's half of the bidirectional link: select a node and
  *   the feed becomes that task's story, end to end.
  *
+ * The first two are *this panel's* state and are held here. The third is not: the task the feed
+ * is filtered to is the task the canvas has outlined, and a selection two panels share belongs
+ * to neither of them — it belongs to the shell (`App.tsx`), which is the only thing that can
+ * see both.
+ *
  * `read` and `delivered_at` are **not** rendered anywhere here. They are internal mailbox
  * bookkeeping, not orchestration semantics (SPEC §6.3) — and the server does not even put them
  * on the wire, so this panel could not render them if it wanted to.
@@ -31,10 +39,6 @@ export type FeedProps = {
   messages: FeedMessage[];
   /** The selected run — the default scope. */
   runId: string | null;
-  scope: FeedScope;
-  onScope: (scope: FeedScope) => void;
-  showHeartbeats: boolean;
-  onShowHeartbeats: (show: boolean) => void;
   /** The selected task, when there is one: the feed is then that task's story. */
   selectedTask: Task | null;
   onClearTask: () => void;
@@ -42,23 +46,16 @@ export type FeedProps = {
   onSelectMessage: (message: FeedMessage) => void;
 };
 
-export type FeedScope = 'run' | 'all';
+type FeedScope = 'run' | 'all';
 
-export function Feed({
-  messages,
-  runId,
-  scope,
-  onScope,
-  showHeartbeats,
-  onShowHeartbeats,
-  selectedTask,
-  onClearTask,
-  onSelectMessage,
-}: FeedProps) {
+export function Feed({ messages, runId, selectedTask, onClearTask, onSelectMessage }: FeedProps) {
+  const [scope, setScope] = useState<FeedScope>('run');
+  const [showHeartbeats, setShowHeartbeats] = useState(false);
+
   const selectedTaskId = selectedTask?.id ?? null;
 
   const { shown, hidden, now } = useMemo(
-    () => select(messages, { runId: scope === 'all' ? null : runId, taskId: selectedTaskId, showHeartbeats }),
+    () => viewOf(messages, { runId: scope === 'all' ? null : runId, taskId: selectedTaskId, showHeartbeats }),
     [messages, runId, scope, selectedTaskId, showHeartbeats]
   );
 
@@ -81,15 +78,15 @@ export function Feed({
         </h2>
 
         <div role="group" aria-label="Feed scope" style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-          <ScopeButton label="This run" active={scope === 'run'} onClick={() => onScope('run')} />
-          <ScopeButton label="All" active={scope === 'all'} onClick={() => onScope('all')} />
+          <ScopeButton label="This run" active={scope === 'run'} onClick={() => setScope('run')} />
+          <ScopeButton label="All" active={scope === 'all'} onClick={() => setScope('all')} />
         </div>
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3f3f46' }}>
           <input
             type="checkbox"
             checked={showHeartbeats}
-            onChange={(changed) => onShowHeartbeats(changed.target.checked)}
+            onChange={(changed) => setShowHeartbeats(changed.target.checked)}
           />
           Show heartbeats
         </label>
@@ -100,7 +97,15 @@ export function Feed({
             data-testid="task-filter"
             onClick={onClearTask}
             title="Stop filtering the feed to this task"
-            style={CHIP_STYLE}
+            style={{
+              ...CHIP_STYLE,
+              display: 'block',
+              marginTop: 6,
+              maxWidth: '100%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
           >
             {selectedTask.title} ✕
           </button>
@@ -139,26 +144,17 @@ export function Feed({
   );
 }
 
-type Selection = {
-  /** The rows to render, oldest first. */
+type FeedView = {
   shown: FeedMessage[];
-  /** How many the heartbeat filter is holding back — the number that explains 466 → 164. */
+  /** What the heartbeat default is costing you, so 466 → 164 is explained rather than mysterious. */
   hidden: number;
-  /** The instant the ages are measured from — re-read whenever the selection or the feed does. */
+  /** The instant the ages are measured from — re-read whenever the feed or the selection does. */
   now: number;
 };
 
-/**
- * What is on screen, and what the default is *costing* you.
- *
- * `hidden` is counted rather than implied. A user looking at 164 rows in a database of 466
- * messages is owed the reason, or the tool looks like it lost 300 of them.
- */
-function select(messages: FeedMessage[], filter: FeedFilter): Selection {
-  const shown = visibleMessages(messages, filter);
-  const everything = filter.showHeartbeats ? shown : visibleMessages(messages, { ...filter, showHeartbeats: true });
-
-  return { shown, hidden: everything.length - shown.length, now: Date.now() };
+/** The rows, the number of them the default is holding back, and the clock they are aged against. */
+function viewOf(messages: FeedMessage[], filter: FeedFilter): FeedView {
+  return { ...selectFeed(messages, filter), now: Date.now() };
 }
 
 /**
@@ -178,6 +174,10 @@ function Row({
 }) {
   const [expanded, setExpanded] = useState(false);
   const color = colorOfMessage(message.type);
+
+  // The writer named a task and the server could not find it: the reference is broken, and the
+  // row says so rather than looking like a message that never referred to anything.
+  const dangling = message.taskId === null && taskIdOf(message.payload) !== null;
 
   return (
     <article
@@ -221,14 +221,14 @@ function Row({
           <span
             data-testid="unlinked-subject"
             title={
-              namesATask(message)
+              dangling
                 ? 'This message names a task that is no longer in the database — a reset deleted it.'
                 : undefined
             }
             style={{ color: '#3f3f46' }}
           >
             {message.subject}
-            {namesATask(message) && <span style={{ color: '#a1a1aa' }}> · unlinked</span>}
+            {dangling && <span style={{ color: '#a1a1aa' }}> · unlinked</span>}
           </span>
         ) : (
           <button
@@ -303,12 +303,6 @@ function Age({ at, now }: { at: string; now: number }) {
   );
 }
 
-/** Did the writer name a task, whether or not that task still exists? */
-function namesATask(message: FeedMessage): boolean {
-  const payload = message.payload;
-  return typeof payload === 'object' && payload !== null && typeof (payload as { taskId?: unknown }).taskId === 'string';
-}
-
 function emptyWording(selectedTask: Task | null, scope: FeedScope): string {
   if (selectedTask) return 'No messages mention this task.';
   return scope === 'all' ? 'No messages in this database yet.' : 'No messages in this run yet.';
@@ -323,7 +317,7 @@ function ScopeButton({ label, active, onClick }: { label: string; active: boolea
       style={{
         padding: '3px 8px',
         borderRadius: 6,
-        border: `1px solid ${active ? '#3b82f6' : '#d4d4d8'}`,
+        border: `1px solid ${active ? SELECTED_OUTLINE : '#d4d4d8'}`,
         background: active ? '#eff6ff' : '#ffffff',
         color: active ? '#1e3a8a' : '#3f3f46',
         fontSize: 11,
@@ -336,22 +330,6 @@ function ScopeButton({ label, active, onClick }: { label: string; active: boolea
 }
 
 const AGE_STYLE = { marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: '#a1a1aa' };
-
-const CHIP_STYLE = {
-  display: 'block',
-  marginTop: 6,
-  maxWidth: '100%',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap' as const,
-  padding: '2px 8px',
-  borderRadius: 999,
-  border: '1px solid #93c5fd',
-  background: '#eff6ff',
-  color: '#1e3a8a',
-  fontSize: 11,
-  cursor: 'pointer',
-};
 
 const BODY_STYLE = { margin: '4px 0 0', whiteSpace: 'pre-wrap' as const, color: '#3f3f46' };
 
