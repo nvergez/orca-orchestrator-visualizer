@@ -61,3 +61,35 @@ jobs:
           curl -fsS -o /dev/null http://127.0.0.1:4269/api/snapshot   # the API
           curl -fsS -o /dev/null http://127.0.0.1:4269/               # the frontend it packed
           kill %1
+
+  # Merging a PR labelled `release` publishes the version in package.json, so that version has
+  # to be one npm does not already have. The failure mode without this job is silent — the merge
+  # succeeds, the release workflow skips the publish, and nobody looks at a green run. Asked here
+  # instead, the answer is still "edit the PR".
+  #
+  # That the compatibility table talks about the new version is checked by the packaging test,
+  # which asserts the table has a row for the manifest's major.minor.
+  release-preflight:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.x
+
+      - name: The version this PR would publish must not already be on npm
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+
+          # Empty output means "no such version" — and an error means "no such package". npm
+          # exits 0 for the first of those, so the output is what gets tested.
+          if [ -n "$(npm view "orca-viz@$version" version 2>/dev/null || true)" ]; then
+            echo "::error file=package.json::orca-viz@$version is already published. Bump the version in package.json, or drop the \`release\` label."
+            exit 1
+          fi
+
+          echo "Merging this PR will publish orca-viz@$version." >> "$GITHUB_STEP_SUMMARY"

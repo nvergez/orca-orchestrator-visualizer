@@ -1,0 +1,137 @@
+name: Release
+
+# A release is a merged PR labelled `release`. The version it publishes is whatever is in
+# package.json on the merge commit — package.json is the source of truth, so the bump is a
+# reviewable line in the diff rather than a decision the CI makes on its own.
+#
+# The trigger is the push to main rather than the `pull_request` closed event, because a
+# `pull_request` run from a fork gets neither `id-token: write` nor a writable token, and
+# trusted publishing needs both. So: react to the commit, then ask which PR it came from.
+on:
+  push:
+    branches: [main]
+  # The escape hatch: re-run a release that half-failed, or publish a version the label missed.
+  # It obeys the same "already on npm?" check as everything else, so it cannot double-publish.
+  workflow_dispatch:
+
+# Two releases racing each other to the registry is not a state worth reasoning about.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.label.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Did this commit arrive from a PR labelled `release`?
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo 'release=true' >> "$GITHUB_OUTPUT"
+            echo "Manually dispatched — treating this commit as a release." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # The commit-to-PR lookup, rather than the branch name: it is the one thing that
+          # survives a squash merge, a rebase merge and a merge commit alike.
+          labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '.[] | select(.merged_at != null) | .labels[].name' || true)
+
+          if printf '%s\n' "$labels" | grep -qx 'release'; then
+            echo 'release=true' >> "$GITHUB_OUTPUT"
+            echo "This commit came from a PR labelled \`release\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'release=false' >> "$GITHUB_OUTPUT"
+            echo "No \`release\` label on this commit's PR — nothing to publish." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: The version in package.json, and whether npm already has it
+        id: version
+        if: steps.label.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # `npm view` on a version that does not exist prints nothing and still exits 0, and on
+          # a package that does not exist at all it errors. Both mean "not published", so the
+          # test is on the output, not the exit code.
+          if [ -n "$(npm view "orca-viz@$version" version 2>/dev/null || true)" ]; then
+            echo 'published=true' >> "$GITHUB_OUTPUT"
+            echo "::warning::orca-viz@$version is already on npm — the publish will be skipped. Bump the version in package.json to release."
+          else
+            echo 'published=false' >> "$GITHUB_OUTPUT"
+            echo "orca-viz@$version is new — publishing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the tag, cut the GitHub Release
+      id-token: write # npm trusted publishing (OIDC) — this is the credential
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.x
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing landed in npm 11.5.1, and the npm bundled with Node 24 may be older.
+      # No NPM_TOKEN is set anywhere: the credential is the OIDC token GitHub mints for this
+      # job, exchanged by npm for a short-lived one. Provenance is attached automatically.
+      - name: npm 11.5.1+ — trusted publishing needs it
+        run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # The PR that got merged was green, but what publishes is *this* commit. Publishing is the
+      # one thing in this repo that cannot be undone, so it re-earns the green.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - name: Publish orca-viz@${{ needs.gate.outputs.version }} to npm
+        if: needs.gate.outputs.published == 'false'
+        run: npm publish
+
+      # Deliberately after the publish, and deliberately not conditioned on it: if a previous run
+      # published and then died before tagging, this re-runs cleanly and finishes the job.
+      - name: Tag v${{ needs.gate.outputs.version }} and cut the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION is already tagged." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git tag "v$VERSION" "$GITHUB_SHA"
+            git push origin "v$VERSION"
+          fi
+
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "The GitHub Release for v$VERSION already exists." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          fi
+
+          echo "https://www.npmjs.com/package/orca-viz/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"
