@@ -117,7 +117,6 @@ function enrichmentOf(over: Partial<Enrichment> = {}): Enrichment {
         activity: {
           state: 'working',
           agentType: 'claude',
-          taskTitle: 'Implement issue #61',
           lastAssistantMessage: 'Running the suite now.',
           toolName: 'Bash',
           toolInput: 'npm test',
@@ -147,6 +146,10 @@ describe('live Orca context on the cast', () => {
     expect(activity).toHaveTextContent('working');
     expect(activity).toHaveTextContent('Bash');
     expect(activity).toHaveTextContent('npm test');
+    // The row shows a glimpse; the hover has the rest — including which agent binary it is
+    // and how current the reading is, the same convention the handle above it follows.
+    expect(activity.getAttribute('title')).toContain('claude');
+    expect(activity.getAttribute('title')).toContain('as of');
   });
 
   it('shows the worktree alone when the server attached no activity — ambiguity stays blank', async () => {

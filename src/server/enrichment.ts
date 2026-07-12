@@ -11,8 +11,9 @@ import type {
 import type { StreamSource } from './stream.ts';
 
 /**
- * Live Orca context (#61, SPEC §12) — the one feature in this tool that is allowed to spawn
- * the `orca` CLI, and everything about how it is allowed to.
+ * Live Orca context (#61 — the live-supervision roadmap #51; its SPEC §12 chapter lands
+ * with #65) — the one feature in this tool that is allowed to spawn the `orca` CLI, and
+ * everything about how it is allowed to.
  *
  * The database cannot say what an agent is *literally doing right now* — the current tool
  * call, the last assistant message, the worktree it works in. Only `orca worktree ps --json`
@@ -35,6 +36,11 @@ import type { StreamSource } from './stream.ts';
  * - **Never authoritative.** Failure of any kind — timeout, exit code, malformed JSON,
  *   schema drift — costs exactly the `enrichment` field, labelled honestly, and cannot
  *   delay, replace, clear or contradict the SQLite snapshot it rides on.
+ * - **The cache serves snapshots, not failures.** "Caches the last success" means the hot
+ *   path never spawns — every snapshot between refreshes is a join against the last good
+ *   answer. It does not mean a *failed* refresh keeps serving that answer: `unavailable`
+ *   clears it, because "here is what A2 is doing right now" sourced from before the CLI
+ *   stopped answering is a guess wearing a timestamp, and this feature never guesses.
  *
  * **Read-only remains absolute** (SPEC §1.2). The two argv below are the whole command
  * surface: both are pure reads. Nothing here may ever go near a command that mutates
@@ -89,7 +95,6 @@ export const runOrcaCommand: RunOrcaCommand = (args, timeoutMs) =>
 export type PsAgent = {
   state: string;
   agentType: string | null;
-  taskTitle: string | null;
   lastAssistantMessage: string | null;
   toolName: string | null;
   toolInput: string | null;
@@ -120,36 +125,37 @@ export type TerminalEntry = { handle: string; worktreeId: string };
 /** The parsed pair one refresh produced — the cache the joins run against. */
 export type OrcaView = { worktrees: PsWorktree[]; terminals: TerminalEntry[] };
 
-/** The RPC envelope both commands share: `{ ok, result }`. Anything else is drift. */
-function resultOf(stdout: string): Record<string, unknown> {
-  const envelope = JSON.parse(stdout) as { ok?: unknown; result?: unknown };
-  if (envelope?.ok !== true || typeof envelope.result !== 'object' || envelope.result === null) {
-    throw new Error('unexpected orca CLI envelope');
-  }
-  return envelope.result as Record<string, unknown>;
-}
-
 const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
 const preview = (value: unknown): string | null => asString(value)?.slice(0, ENRICHMENT_PREVIEW_CHARS) ?? null;
 
 /**
- * Malformed **containers** are drift and fail the read — the caller says `unavailable`.
- * Malformed **entries** are skipped: an entry that cannot state its identity cannot join
- * anything, and dropping it quietly narrows the join, which is the safe direction.
+ * Both commands answer the same envelope — `{ ok: true, result: { <container>: [...] } }` —
+ * and both parsers apply the same rule: a malformed **container** is drift and fails the
+ * whole read (the caller says `unavailable`); a malformed **entry** is skipped, because an
+ * entry that cannot state its identity cannot join anything, and quietly narrowing the join
+ * is the safe direction. This is that rule, written once.
  */
-export function parseWorktreePs(stdout: string): PsWorktree[] {
-  const result = resultOf(stdout);
-  if (!Array.isArray(result.worktrees)) throw new Error('worktree ps carried no worktrees array');
+function parseEntries<T>(stdout: string, container: string, parse: (entry: Record<string, unknown>) => T | null): T[] {
+  const envelope = JSON.parse(stdout) as { ok?: unknown; result?: Record<string, unknown> };
+  const raw = envelope?.ok === true ? envelope.result?.[container] : undefined;
+  if (!Array.isArray(raw)) throw new Error(`the orca CLI answered without a ${container} array`);
 
-  const worktrees: PsWorktree[] = [];
-  for (const raw of result.worktrees as unknown[]) {
-    const entry = raw as Record<string, unknown>;
+  const entries: T[] = [];
+  for (const item of raw as unknown[]) {
+    const parsed = parse(item as Record<string, unknown>);
+    if (parsed !== null) entries.push(parsed);
+  }
+  return entries;
+}
+
+export function parseWorktreePs(stdout: string): PsWorktree[] {
+  return parseEntries(stdout, 'worktrees', (entry) => {
     const worktreeId = asString(entry?.worktreeId);
     const path = asString(entry?.path);
-    if (worktreeId === null || path === null) continue;
+    if (worktreeId === null || path === null) return null;
 
-    worktrees.push({
+    return {
       worktreeId,
       path,
       branch: asString(entry.branch)?.replace(/^refs\/heads\//, '') ?? null,
@@ -157,9 +163,8 @@ export function parseWorktreePs(stdout: string): PsWorktree[] {
       displayName: asString(entry.displayName),
       liveTerminalCount: typeof entry.liveTerminalCount === 'number' ? entry.liveTerminalCount : null,
       agents: Array.isArray(entry.agents) ? (entry.agents as unknown[]).map(parseAgent) : null,
-    });
-  }
-  return worktrees;
+    };
+  });
 }
 
 function parseAgent(raw: unknown): PsAgent {
@@ -168,7 +173,6 @@ function parseAgent(raw: unknown): PsAgent {
     // Verbatim, like every enum this tool has never heard of (SPEC §5).
     state: asString(agent?.state) ?? '',
     agentType: asString(agent?.agentType),
-    taskTitle: preview(agent?.taskTitle),
     lastAssistantMessage: preview(agent?.lastAssistantMessage),
     toolName: asString(agent?.toolName),
     toolInput: preview(agent?.toolInput),
@@ -180,18 +184,11 @@ function parseAgent(raw: unknown): PsAgent {
 }
 
 export function parseTerminalList(stdout: string): TerminalEntry[] {
-  const result = resultOf(stdout);
-  if (!Array.isArray(result.terminals)) throw new Error('terminal list carried no terminals array');
-
-  const terminals: TerminalEntry[] = [];
-  for (const raw of result.terminals as unknown[]) {
-    const entry = raw as Record<string, unknown>;
+  return parseEntries(stdout, 'terminals', (entry) => {
     const handle = asString(entry?.handle);
     const worktreeId = asString(entry?.worktreeId);
-    if (handle === null || worktreeId === null) continue;
-    terminals.push({ handle, worktreeId });
-  }
-  return terminals;
+    return handle === null || worktreeId === null ? null : { handle, worktreeId };
+  });
 }
 
 /**
@@ -262,9 +259,8 @@ export class OrcaEnrichment {
   private readonly timeoutMs: number;
   private readonly intervalMs: number;
 
-  private state: EnrichmentState = 'pending';
-  private view: OrcaView | null = null;
-  private fetchedAt: string | null = null;
+  /** The last refresh's whole outcome — the three facts only ever move together. */
+  private answer: Answer = { state: 'pending', view: null, fetchedAt: null };
 
   private counter = 0;
   /** What the last generation bump saw — `fetchedAt` deliberately excluded, or every good
@@ -314,7 +310,7 @@ export class OrcaEnrichment {
       // context cached before a shutdown would join yesterday's activity to a handle the
       // next Orca will never mint again.
       if (this.liveness() !== 'live') {
-        this.settle('suspended', null, null);
+        this.settle({ state: 'suspended', view: null, fetchedAt: null });
         return;
       }
 
@@ -322,12 +318,16 @@ export class OrcaEnrichment {
         this.run(WORKTREE_PS, this.timeoutMs),
         this.run(TERMINAL_LIST, this.timeoutMs),
       ]);
-      this.settle('ok', { worktrees: parseWorktreePs(ps), terminals: parseTerminalList(terminals) }, nowIso());
+      this.settle({
+        state: 'ok',
+        view: { worktrees: parseWorktreePs(ps), terminals: parseTerminalList(terminals) },
+        fetchedAt: nowIso(),
+      });
     } catch {
       // Timeout, nonzero exit, spawn failure, malformed JSON, drifted containers — one
       // honest word for all of them. The last good answer is *not* kept on screen: activity
       // this adapter can no longer vouch for is a guess wearing a timestamp.
-      this.settle('unavailable', null, null);
+      this.settle({ state: 'unavailable', view: null, fetchedAt: null });
     } finally {
       this.refreshing = false;
     }
@@ -339,25 +339,27 @@ export class OrcaEnrichment {
    * (orchestrators and cast); context for anybody else would be wire spent on nobody.
    */
   enrich(handles: Iterable<string>): Enrichment {
+    const { state, view, fetchedAt } = this.answer;
     return {
-      state: this.state,
-      fetchedAt: this.fetchedAt,
-      workers: this.state === 'ok' && this.view !== null ? joinWorkers(handles, this.view) : [],
+      state,
+      fetchedAt,
+      workers: state === 'ok' && view !== null ? joinWorkers(handles, view) : [],
     };
   }
 
-  private settle(state: EnrichmentState, view: OrcaView | null, fetchedAt: string | null): void {
-    this.state = state;
-    this.view = view;
-    this.fetchedAt = fetchedAt;
+  private settle(answer: Answer): void {
+    this.answer = answer;
 
-    const fingerprint = state + '\n' + (view === null ? '' : JSON.stringify(view));
+    const fingerprint = answer.state + '\n' + (answer.view === null ? '' : JSON.stringify(answer.view));
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;
       this.counter += 1;
     }
   }
 }
+
+/** One refresh's outcome, whole — a state never travels without its view and its instant. */
+type Answer = { state: EnrichmentState; view: OrcaView | null; fetchedAt: string | null };
 
 /**
  * The enrichment-aware `StreamSource`: SQLite answers everything it always answered, and the
@@ -372,7 +374,18 @@ export function withEnrichment(source: StreamSource, adapter: OrcaEnrichment): S
     enrichmentVersion: () => adapter.generation,
     snapshot(since?: number): StreamEvent {
       const event = source.snapshot(since);
-      return { ...event, enrichment: adapter.enrich(snapshotHandles(event.snapshot.runs)) };
+
+      // The liveness gate, enforced at the wire and not only on the timer. The SQLite poll
+      // notices a quit within one tick; the adapter only on its own slower one — and for
+      // that gap a cached `ok` would put "what the agent is doing right now" on screen
+      // beside a stale badge, about an app that is not running. Live-only means the *event*
+      // is never allowed to say both; the adapter's next tick then drops the cache for real.
+      const enrichment: Enrichment =
+        event.meta.liveness === 'live'
+          ? adapter.enrich(snapshotHandles(event.snapshot.runs))
+          : { state: 'suspended', fetchedAt: null, workers: [] };
+
+      return { ...event, enrichment };
     },
   };
 }

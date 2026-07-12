@@ -375,7 +375,8 @@ export type TaskDetail = {
 };
 
 /**
- * **Live Orca context, joined to an exact worker identity** (#61, SPEC §12).
+ * **Live Orca context, joined to an exact worker identity** (#61 — the live-supervision
+ * roadmap #51; its SPEC §12 chapter lands with #65).
  *
  * Everything above this type is SQLite's. This is the one thing on the wire that is not: an
  * explicitly opt-in adapter asks the `orca` CLI — `worktree ps --json`, plus `terminal list
@@ -406,7 +407,6 @@ export type EnrichedActivity = {
   /** The pane's own word — `working`, `done`, or whatever a newer Orca says. Verbatim (SPEC §5). */
   state: string;
   agentType: string | null;
-  taskTitle: string | null;
   lastAssistantMessage: string | null;
   toolName: string | null;
   toolInput: string | null;
@@ -433,7 +433,12 @@ export type EnrichmentState = 'pending' | 'ok' | 'unavailable' | 'suspended';
 
 export type Enrichment = {
   state: EnrichmentState;
-  /** ISO of the CLI read `workers` came from. Null whenever there is no good answer to date. */
+  /**
+   * ISO of the CLI read `workers` came from. Null whenever there is no good answer to date.
+   * On the wire for the `curl` reader `/api/snapshot` exists for (SPEC §6.4): "how old is
+   * this context" is the first honest question about a cache. Deliberately *outside* the
+   * server's change fingerprint — a fresh timestamp on an unchanged answer pushes nobody.
+   */
   fetchedAt: string | null;
   /** Only handles the snapshot actually names, and only exact joins. Empty unless `ok`. */
   workers: EnrichedWorker[];

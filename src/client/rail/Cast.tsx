@@ -225,7 +225,17 @@ function OrcaContext({ worker, owner }: { worker: EnrichedWorker | null; owner: 
         <span
           data-testid={`${owner}-activity`}
           className="text-muted-foreground block truncate text-[10px]"
-          title={[activity.toolName, activity.toolInput].filter(Boolean).join(' — ') || activity.lastAssistantMessage || undefined}
+          // The row shows a glimpse; the hover has the rest — which agent binary, the whole
+          // tool input, and how current the reading is. Same convention as the handle above.
+          title={
+            [
+              activity.agentType,
+              [activity.toolName, activity.toolInput].filter(Boolean).join(' — ') || activity.lastAssistantMessage,
+              activity.updatedAt === null ? null : `as of ${new Date(activity.updatedAt).toLocaleTimeString()}`,
+            ]
+              .filter(Boolean)
+              .join(' · ') || undefined
+          }
         >
           {/* The pane's own word for its state, verbatim — `working`, `done`, or whatever a
               newer Orca says (SPEC §5) — then the most current thing known about it. */}

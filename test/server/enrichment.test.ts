@@ -6,7 +6,9 @@ import {
   OrcaEnrichment,
   parseTerminalList,
   parseWorktreePs,
+  runOrcaCommand,
   TERMINAL_LIST,
+  withEnrichment,
   WORKTREE_PS,
   type OrcaView,
   type RunOrcaCommand,
@@ -14,7 +16,7 @@ import {
 import { EventStream, type StreamClient, type StreamSource } from '../../src/server/stream.ts';
 import type { Liveness, StreamEvent } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
-import { tempDbPath } from '../fixtures/temp-dir.ts';
+import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
@@ -53,7 +55,6 @@ function psWorktree(over: Record<string, unknown> = {}): Record<string, unknown>
         paneKey: 'aaaa:bbbb',
         state: 'working',
         agentType: 'claude',
-        taskTitle: 'Implement issue #61',
         lastAssistantMessage: 'Running the suite now.',
         toolName: 'Bash',
         toolInput: 'npm test',
@@ -91,7 +92,6 @@ describe('the exact terminal-handle join', () => {
         activity: {
           state: 'working',
           agentType: 'claude',
-          taskTitle: 'Implement issue #61',
           lastAssistantMessage: 'Running the suite now.',
           toolName: 'Bash',
           toolInput: 'npm test',
@@ -214,11 +214,7 @@ function fakeCli(
 
 function goodCli(worktrees: unknown[] = [psWorktree()], terminals: unknown[] = [terminal(WORKER)]) {
   return fakeCli((args) =>
-    JSON.stringify(
-      args === WORKTREE_PS || args[0] === 'worktree'
-        ? { ok: true, result: { worktrees } }
-        : { ok: true, result: { terminals } }
-    )
+    JSON.stringify(args[0] === 'worktree' ? { ok: true, result: { worktrees } } : { ok: true, result: { terminals } })
   );
 }
 
@@ -339,25 +335,29 @@ describe('the adapter', () => {
   });
 });
 
-/** A counting stream source whose enrichment generation the test moves by hand. */
-function stubSource(): StreamSource & { bump(): void; reads: { snapshots: number } } {
-  let generation = 0;
-  const reads = { snapshots: 0 };
-  const event = (): StreamEvent => ({
+/** A bare, valid event over an empty database — what a stub source hands the code under test. */
+function plainEvent(liveness: Liveness = 'live'): StreamEvent {
+  return {
     seq: 0,
     meta: {
       dbPath: '/tmp/db',
       schemaVersion: 5,
       schemaSupport: 'supported',
       degraded: [],
-      liveness: 'live',
+      liveness,
       orcaPid: 1,
       dbMtime: new Date(0).toISOString(),
       resetDetected: false,
     },
     snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
-  });
+  };
+}
+
+/** A counting stream source whose enrichment generation the test moves by hand. */
+function stubSource(): StreamSource & { bump(): void; reads: { snapshots: number } } {
+  let generation = 0;
+  const reads = { snapshots: 0 };
 
   return {
     dataVersion: () => 1,
@@ -365,7 +365,7 @@ function stubSource(): StreamSource & { bump(): void; reads: { snapshots: number
     enrichmentVersion: () => generation,
     snapshot: () => {
       reads.snapshots += 1;
-      return event();
+      return plainEvent();
     },
     bump: () => {
       generation += 1;
@@ -373,6 +373,71 @@ function stubSource(): StreamSource & { bump(): void; reads: { snapshots: number
     reads,
   };
 }
+
+describe('the wire-level liveness gate', () => {
+  it('never lets a cached ok ride beside a snapshot that says Orca is not live', async () => {
+    let liveness: Liveness = 'live';
+    const adapter = new OrcaEnrichment(() => liveness, { run: goodCli() });
+    await adapter.refresh();
+    expect(adapter.enrich([WORKER]).state).toBe('ok');
+
+    const source: StreamSource = {
+      dataVersion: () => 1,
+      liveness: () => liveness,
+      snapshot: () => plainEvent(liveness),
+    };
+    const enriched = withEnrichment(source, adapter);
+
+    // Orca quits. The SQLite poll notices within one tick; the adapter only on its own,
+    // slower timer — and in that gap the cache still says `ok`. Live-only is a property of
+    // the *event*: it must never say "stale, and here is what the agent is doing right now".
+    liveness = 'stale';
+    const event = enriched.snapshot();
+    expect(event.meta.liveness).toBe('stale');
+    expect(event.enrichment).toEqual({ state: 'suspended', fetchedAt: null, workers: [] });
+  });
+});
+
+/**
+ * The real runner — a real process, found on a real PATH — because the timeout and the exit
+ * code live in `execFile` options a scripted `RunOrcaCommand` never exercises. The `orca` on
+ * this PATH is a shell script the test wrote; nothing here touches a real Orca.
+ */
+describe('the real command runner', () => {
+  const realPath = process.env.PATH;
+
+  afterEach(() => {
+    process.env.PATH = realPath;
+  });
+
+  function fakeOrcaOnPath(script: string): void {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'orca'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    process.env.PATH = `${dir}:${realPath}`;
+  }
+
+  it('resolves a real process’s stdout', async () => {
+    fakeOrcaOnPath(`echo '{"ok":true,"result":{"worktrees":[]}}'`);
+
+    expect(parseWorktreePs(await runOrcaCommand(WORKTREE_PS, 2000))).toEqual([]);
+  });
+
+  it('rejects a nonzero exit instead of trusting whatever was printed', async () => {
+    fakeOrcaOnPath('echo not-connected >&2; exit 3');
+
+    await expect(runOrcaCommand(WORKTREE_PS, 2000)).rejects.toThrow();
+  });
+
+  it('kills a hung process at the timeout instead of waiting on it', async () => {
+    fakeOrcaOnPath('sleep 30');
+
+    const started = Date.now();
+    await expect(runOrcaCommand(WORKTREE_PS, 150)).rejects.toThrow();
+    // Generously above the 150ms bound and hopelessly below the 30s hang: what is being
+    // asserted is that the timeout, not the child, decided when this ended.
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
 
 describe('pushing enrichment changes', () => {
   it('pushes when only the enrichment generation moved — the DAG data was never the signal', () => {
