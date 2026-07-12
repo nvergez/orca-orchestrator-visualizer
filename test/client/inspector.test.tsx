@@ -254,6 +254,62 @@ describe('the header', () => {
 });
 
 /**
+ * **The identifiers this panel is standing on** (`src/client/copy.tsx`).
+ *
+ * The tool is read-only, so everything a person *does* with a post-mortem happens in
+ * `orca orchestration` — and every one of those commands takes an id. The task's is the header's
+ * (above); the other two the inspector knows are the handle of the agent that held each attempt and
+ * the id of the question the task raised, and both were shown as text nobody could retype.
+ */
+describe('the identifiers', () => {
+  const GATE: Gate = {
+    id: 'msg_gate',
+    messageId: 'msg_gate',
+    runId: RUN_ID,
+    taskId: TASK_ID,
+    question: 'Which driver — node:sqlite or better-sqlite3?',
+    options: [],
+    status: 'open',
+    resolution: null,
+    createdAt: '2026-07-08T12:20:00.000Z',
+  };
+
+  it('copies the whole handle of the agent that held an attempt — the badge shows eight hex of it', async () => {
+    const user = userEvent.setup();
+    render(<App event={event()} loadTask={loaderFor(detail({ attempts: [attempt()] }))} />);
+    await drawn(1);
+
+    const panel = await open();
+    await within(panel).findByTestId('attempt');
+
+    await user.click(within(panel).getByRole('button', { name: `Copy the agent handle ${FIRST_WORKER}` }));
+
+    // The uuid in full. `1a2b3c4d` — what the badge has room for — is not an identity anything
+    // outside this screen would accept.
+    expect(await navigator.clipboard.readText()).toBe(FIRST_WORKER);
+  });
+
+  it('copies the id of a gate the task raised', async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        event={event({
+          snapshot: { runs: [run()], tasks: [task({ gate: GATE })], gates: [GATE], turns: [], coordinatorRuns: [] },
+        })}
+        loadTask={loaderFor(detail())}
+      />
+    );
+    await drawn(1);
+
+    const panel = await open();
+
+    await user.click(within(panel).getByRole('button', { name: `Copy the gate id ${GATE.id}` }));
+
+    expect(await navigator.clipboard.readText()).toBe(GATE.id);
+  });
+});
+
+/**
  * The bodies (SPEC §6.3, §7.8 item 2). They are **not in the snapshot** — a live 71-task dump
  * was 172 KB of it — so the inspector is the only thing that ever asks for them, and it asks on
  * the click.

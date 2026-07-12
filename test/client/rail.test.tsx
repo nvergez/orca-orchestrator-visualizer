@@ -292,6 +292,15 @@ describe('coordinator runs', () => {
     // …and the runs are still there, because nothing about them depended on that table.
     expect(screen.getAllByTestId('run-row')).toHaveLength(1);
   });
+
+  it('copies the coordinator’s handle, which is shortened here like every other one', async () => {
+    const user = userEvent.setup();
+    render(<App event={event([NEWER], BOTH_RUNS_TASKS, [COORDINATOR])} />);
+
+    await user.click(screen.getByRole('button', { name: `Copy the coordinator handle ${HANDLE}` }));
+
+    expect(await navigator.clipboard.readText()).toBe(HANDLE);
+  });
 });
 
 /**
@@ -394,5 +403,45 @@ describe('the cast', () => {
     await user.click(row('run_other'));
 
     await waitFor(() => expect(screen.getAllByTestId('agent-row')[0]!.getAttribute('aria-pressed')).toBe('false'));
+  });
+
+  /**
+   * **The handles, in full, one click away** (`src/client/copy.tsx`).
+   *
+   * A handle is a uuid, the rail is 18rem wide, and so the cast shows eight hex of it and keeps the
+   * rest in a tooltip. That is right for *reading* and useless for *acting*: a handle is what you
+   * hand `orca orchestration` when you go and ask an agent what it is doing. The row shows the short
+   * one and copies the whole one — and copying must not select the agent, because they are two
+   * different intentions and one of them re-scopes the entire screen.
+   */
+  it('copies an agent’s handle in full — never the eight hex the row has room for', async () => {
+    const user = userEvent.setup();
+    render(<App event={event([CREW], CREW_TASKS)} />);
+
+    await user.click(screen.getByRole('button', { name: `Copy the agent handle ${BOB}` }));
+
+    expect(await navigator.clipboard.readText()).toBe(BOB);
+    // The copy button is a *sibling* of the row, not a child of it: clicking it must not dim the
+    // canvas to A2's tasks.
+    expect(screen.getAllByTestId('agent-row')[1]!.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('copies the orchestrator’s handle from the head of its own cast', async () => {
+    const user = userEvent.setup();
+    render(<App event={event([CREW], CREW_TASKS)} />);
+
+    await user.click(screen.getByRole('button', { name: `Copy the orchestrator handle ${HANDLE}` }));
+
+    expect(await navigator.clipboard.readText()).toBe(HANDLE);
+  });
+
+  it('offers nothing to copy on the synthetic run — it has no handle, which is why it exists', () => {
+    const orphans = run({ id: 'run_unattributed', handle: null, label: 'Unattributed', cast: [A1] });
+
+    render(<App event={event([orphans], [task({ id: 'task_1', runId: 'run_unattributed' })])} />);
+
+    expect(screen.queryByRole('button', { name: /copy the orchestrator handle/i })).toBeNull();
+    // …and its agents, who *do* have handles, are copyable as any others are.
+    expect(screen.getByRole('button', { name: `Copy the agent handle ${ALICE}` })).toBeVisible();
   });
 });
