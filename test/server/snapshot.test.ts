@@ -70,11 +70,9 @@ describe('GET /api/snapshot', () => {
   });
 });
 
-/**
- * Render what parses (SPEC §5) — a database from an Orca this tool has never seen — lives in
- * `degradation.test.ts` (#21), where the same orchestration is written at every schema version
- * and each missing column is shown to cost exactly one feature.
- */
+// Render what parses (SPEC §5) — a database from an Orca this tool has never seen — is tested
+// in `degradation.test.ts` (#21), where the same orchestration is written at every schema
+// version and each missing column is shown to cost exactly one feature.
 
 /**
  * A suddenly-empty history has to be explained rather than mysterious (#14). `sequence` is

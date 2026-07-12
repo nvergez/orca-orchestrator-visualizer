@@ -1,7 +1,8 @@
-import { type CSSProperties, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { Meta, Run, StreamEvent, Task } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
+import { STATUS_COLORS } from './canvas/theme.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
@@ -100,7 +101,7 @@ function Notices({ meta }: { meta: Meta }) {
        * looking like a bug. That is the whole point of `meta.degraded` reaching the screen.
        */}
       {schema !== null && (
-        <section role="status" data-state={`schema-${meta.schemaSupport}`} style={BANNER}>
+        <section role="status" data-state={`schema-${meta.schemaSupport}`} style={NOTICE_STYLE}>
           <p style={{ margin: 0 }}>
             {schema} <span style={{ opacity: 0.75 }}>(schema v{meta.schemaVersion})</span>
           </p>
@@ -116,27 +117,13 @@ function Notices({ meta }: { meta: Meta }) {
       )}
 
       {meta.resetDetected && (
-        <p role="status" data-state="reset" style={BANNER}>
+        <p role="status" data-state="reset" style={NOTICE_STYLE}>
           Some history is gone: an <code>orchestration reset</code> wiped messages this database once held.
         </p>
       )}
     </>
   );
 }
-
-/**
- * Amber, from the same palette as a `dispatched` node (`canvas/theme.ts`) — the page's one
- * colour for "read this before you believe the screen".
- */
-const BANNER: CSSProperties = {
-  margin: '4px 0',
-  padding: '6px 10px',
-  border: '1px solid #f59e0b',
-  borderRadius: 4,
-  background: '#fef3c7',
-  color: '#78350f',
-  fontSize: 12,
-};
 
 /** Always on screen, always true: the file, and the schema it turned out to be. */
 function Source({ meta }: { meta: Meta }) {
@@ -161,3 +148,19 @@ function formatTime(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
 }
+
+/**
+ * The page's one colour for "read this before you believe the screen" — the amber a
+ * `dispatched` node already wears, *taken* from `canvas/theme.ts` rather than typed out again.
+ * Those colours were signed off on screen and retuning them is re-approval, not refactoring
+ * (theme.ts) — a second copy of the hex here is a copy that drifts out of that quietly.
+ */
+const NOTICE_STYLE = {
+  margin: '4px 0',
+  padding: '6px 10px',
+  border: `1px solid ${STATUS_COLORS.dispatched.border}`,
+  borderRadius: 4,
+  background: STATUS_COLORS.dispatched.bg,
+  color: STATUS_COLORS.dispatched.text,
+  fontSize: 12,
+};

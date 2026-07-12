@@ -124,9 +124,11 @@ function listen(server: Server, { port, host }: Options): Promise<void> {
 function describeState(meta: Meta): string {
   return [
     // The same sentence the page shows — written once, in src/shared/wording.ts, so the
-    // terminal and the browser cannot drift into telling the user different things.
+    // terminal and the browser cannot drift into telling the user different things. Which is
+    // also why the schema is only *numbered* here: what a drifting schema means is a sentence,
+    // it lives in `wording.ts`, and `describeSchema` prints that one rather than paraphrasing it.
     livenessSentence(meta),
-    `schema v${meta.schemaVersion} (${meta.schemaSupport === 'supported' ? 'the one this build reads' : `${meta.schemaSupport} than this build`})`,
+    `schema v${meta.schemaVersion}`,
     meta.resetDetected ? 'a reset has wiped part of the history' : null,
   ]
     .filter(Boolean)

@@ -5,7 +5,7 @@ import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { inferRuns } from './runs.ts';
-import { detectReset, hasColumn, inspectSchema, type SchemaReport } from './schema.ts';
+import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTasks } from './tasks.ts';
 
@@ -97,7 +97,7 @@ export class OrcaDatabase {
    * tool has no right to (SPEC §5 — the DAG core is the only one).
    */
   private highWaterMark(): number {
-    if (!hasColumn(this.schema.columns, 'messages.sequence')) return 0;
+    if (!hasColumn(this.schema.columns, MESSAGE_SEQUENCE)) return 0;
 
     const row = this.db.prepare('SELECT MAX(sequence) AS seq FROM messages').get() as { seq: number | null };
     return row.seq ?? 0;

@@ -92,6 +92,24 @@ describe('<App>', () => {
     expect(screen.getByText(/schema v3/)).toBeVisible();
   });
 
+  it('explains a lost feature even when the version number is the one it was built for', () => {
+    // The columns decide, not the version number (#21). An Orca that renamed a column — or
+    // dropped a table — carries a `user_version` this build calls supported and is still
+    // missing a feature. Gating the explanation on the *version* would leave exactly that
+    // user staring at an empty badge with nothing on screen to explain it, which is the bug
+    // `meta.degraded` exists to prevent.
+    render(
+      <App
+        event={event({
+          schemaSupport: 'supported',
+          degraded: ['The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.'],
+        })}
+      />
+    );
+
+    expect(screen.getByText(/"last seen" badge/)).toBeVisible();
+  });
+
   it('says nothing about degradation when an older Orca happens to cost you nothing', () => {
     // The version alone is not a problem — a missing *column* is. An older schema we read in
     // full has no feature to name, and a banner over an empty list would be furniture.

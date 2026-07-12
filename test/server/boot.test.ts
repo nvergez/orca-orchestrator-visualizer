@@ -173,6 +173,18 @@ describe('booting', () => {
     expect(lines.join('\n')).toContain('newer Orca schema — some data may be missing or mislabeled');
   });
 
+  it('names a feature a missing column cost you even at the version it was built for', async () => {
+    // The columns decide, not the version number (#21): a v5 Orca that renamed or dropped one
+    // still costs a feature, and the terminal owes the user that as much as an older Orca does.
+    const dbPath = new FixtureBuilder({ omitColumns: { dispatch_contexts: ['last_heartbeat_at'] } })
+      .task({ createdAt: AT })
+      .write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    expect(lines.join('\n')).toContain('last seen');
+  });
+
   it('says nothing about the schema when the schema is the one it was built for', async () => {
     const { lines } = await run(['--db', fixtureDb(), '--port', '0']);
 

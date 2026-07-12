@@ -23,6 +23,14 @@ export const TABLES = ['tasks', 'dispatch_contexts', 'messages', 'decision_gates
 export type TableName = (typeof TABLES)[number];
 
 /**
+ * The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
+ * It spots an `orchestration reset` (`detectReset`), and it is what the message feed resumes
+ * from (`highWaterMark`, and #17's SSE event id) — three call sites for one column, so it is
+ * named once and guarded by that name.
+ */
+export const MESSAGE_SEQUENCE = 'messages.sequence';
+
+/**
  * A feature the visualizer offers, the column it cannot live without, and what the user is
  * told when that column is not there. These strings go straight to the screen — the user
  * is owed an explanation of *why* a badge vanished, not a silent absence.
@@ -32,28 +40,27 @@ export type TableName = (typeof TABLES)[number];
  * first, then the column, then what the user gets instead. A feature with no entry degrades
  * silently, which is the failure this ticket exists to prevent.
  *
- * `columns` is satisfied when *any* of them is present — one column is the ordinary case, and
- * a pair is how two interchangeable columns (the two title columns) are spelled.
+ * `anyOf` is satisfied when *any* one of its columns is present — a single column is the
+ * ordinary case, and a pair is how two interchangeable columns (the two title columns) are
+ * spelled.
  */
-const FEATURES: { columns: string[]; degraded: string }[] = [
+const FEATURES: { anyOf: string[]; degraded: string }[] = [
   {
     // Both are v5. Either one alone still names the task, so only losing both degrades.
-    columns: ['tasks.task_title', 'tasks.display_name'],
+    anyOf: ['tasks.task_title', 'tasks.display_name'],
     degraded: 'Task titles — this Orca has no task_title/display_name column, so tasks are labelled by their short id.',
   },
   {
-    columns: ['tasks.created_by_terminal_handle'],
+    anyOf: ['tasks.created_by_terminal_handle'],
     degraded:
       'Runs — this Orca has no created_by_terminal_handle column, so runs cannot be inferred and every task lands in Unattributed.',
   },
   {
-    columns: ['dispatch_contexts.last_heartbeat_at'],
+    anyOf: ['dispatch_contexts.last_heartbeat_at'],
     degraded: 'The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.',
   },
   {
-    // The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
-    // It is what spots an `orchestration reset`, and what the message feed resumes from.
-    columns: ['messages.sequence'],
+    anyOf: [MESSAGE_SEQUENCE],
     degraded:
       'Reset detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
   },
@@ -82,7 +89,15 @@ export type SchemaReport = {
  */
 export function hasColumn(columns: SchemaReport['columns'], qualified: string): boolean {
   const [table, column] = qualified.split('.') as [TableName, string];
-  return columns[table]?.has(column) ?? false;
+  const present = columns[table];
+
+  // A table that is not one of Orca's five is a typo in *this* file, not drift in the
+  // database — every real table introspects to a set, an absent one to an empty set. Answering
+  // `false` would report the feature degraded forever and never say why, and this list is
+  // explicitly meant to be added to (`FEATURES`), so the typo has to be loud.
+  if (present === undefined) throw new Error(`not a table in Orca's schema: ${table} (from "${qualified}")`);
+
+  return present.has(column);
 }
 
 function columnsOf(db: DatabaseSync, table: TableName): ReadonlySet<string> {
@@ -127,7 +142,7 @@ export function inspectSchema(db: DatabaseSync): SchemaReport {
     support: supportFor(version),
     // Driven by the columns that are really absent, not by the version number: a database
     // can carry any version and still be missing anything.
-    degraded: FEATURES.filter((feature) => !feature.columns.some(has)).map((feature) => feature.degraded),
+    degraded: FEATURES.filter((feature) => !feature.anyOf.some(has)).map((feature) => feature.degraded),
     columns,
   };
 }
@@ -145,7 +160,7 @@ export function inspectSchema(db: DatabaseSync): SchemaReport {
  * asked a question SQLite would answer by throwing.
  */
 export function detectReset(db: DatabaseSync, columns: SchemaReport['columns']): boolean {
-  if (!hasColumn(columns, 'messages.sequence')) return false;
+  if (!hasColumn(columns, MESSAGE_SEQUENCE)) return false;
 
   let counter: number;
   try {

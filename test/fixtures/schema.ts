@@ -215,8 +215,10 @@ export function schemaSql(options: SchemaOptions = {}): string {
   // every column it names is really there. Without this, asking for a database with (say) no
   // `tasks.status` fails at CREATE INDEX — and the drift the test came to reproduce is
   // unbuildable rather than merely unusual.
+  const present = new Map(TABLES.map((table) => [table, new Set(columnsOf(table, resolved))]));
+
   const indexes = INDEXES.filter((index) =>
-    index.columns.every((column) => columnsOf(index.table, resolved).includes(column))
+    index.columns.every((column) => present.get(index.table)?.has(column))
   ).map((index) => `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${index.name} ON ${index.table}(${index.columns.join(', ')});`);
 
   return [...tables, ...indexes, `PRAGMA user_version = ${resolved.userVersion};`].join('\n');
