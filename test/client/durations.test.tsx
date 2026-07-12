@@ -252,7 +252,7 @@ describe('durations in the inspector', () => {
     render(
       <App
         event={event([run()], [task({ duration: DISPATCH_CLOCK, dispatch: attempt() })])}
-        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, attempts: [attempt()] })}
+        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [attempt()] })}
       />
     );
     const inspector = await openInspector();
@@ -267,7 +267,7 @@ describe('durations in the inspector', () => {
     render(
       <App
         event={event([run()], [task({ duration: TASK_SPAN })])}
-        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, attempts: [] })}
+        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [] })}
       />
     );
     const inspector = await openInspector();
@@ -295,7 +295,7 @@ describe('durations in the inspector', () => {
     render(
       <App
         event={event([run()], [task({ dispatch: second, attemptCount: 2, duration: DISPATCH_CLOCK })])}
-        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, attempts: [first, second] })}
+        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [first, second] })}
       />
     );
     const inspector = await openInspector();
@@ -319,7 +319,7 @@ describe('durations in the inspector', () => {
     render(
       <App
         event={event([run()], [task({ status: 'dispatched', completedAt: null, dispatch: running, attemptCount: 2 })])}
-        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, attempts: [broken, running] })}
+        loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [broken, running] })}
       />
     );
     const inspector = await openInspector();

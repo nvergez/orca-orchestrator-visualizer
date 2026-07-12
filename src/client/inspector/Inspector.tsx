@@ -7,13 +7,14 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { CastMember, Dispatch, Gate, Task, TaskDetail, Turn } from '../../shared/types.ts';
+import type { CastMember, Dispatch, Gate, Task, TaskDetail, Turn, WorkerCompletion } from '../../shared/types.ts';
 import { GATE_THEME, type StatusTheme, themeOf } from '../canvas/theme.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { selectTurns } from '../conversation/select.ts';
 import { TurnRow } from '../conversation/TurnRow.tsx';
 import { COPY_ON_HOVER, CopyButton, CopyId } from '../copy.tsx';
 import { Duration } from '../duration.tsx';
+import { ReceiptFacts } from '../receipt.tsx';
 import { BAND_IN, DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
 import { ageOf, useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -177,6 +178,36 @@ export function Inspector({
                 empty="No result yet — nothing has been reported back."
               />
             </Section>
+
+            {/*
+              **The outcome receipts** (#67, SPEC §12.4) — what the two evidence columns
+              verifiably said this task produced, and the raw evidence itself. The facts are the
+              server's one reading, merged across `tasks.result` and every `worker_done` payload
+              that named the task, with each fact's provenance *on screen* — which is what makes
+              a deduplicated fact honest and keeps a conflict two visible facts. Uncapped: the
+              conversation's compact summary points here for the rest.
+
+              It claims no space when there is nothing to claim it with: a prose result and no
+              completion is the ordinary case, not a lesser one.
+            */}
+            {detail !== null && (detail.receipt.length > 0 || detail.completions.length > 0) && (
+              <Section title="Outcome receipts" index={next()}>
+                <div data-testid="outcome-receipts">
+                  <ReceiptFacts facts={detail.receipt} showSources />
+                  {detail.completions.length > 0 && (
+                    <ul className="mt-2 flex flex-col gap-2">
+                      {detail.completions.map((completion, index) => (
+                        // The id can be empty — nothing in this schema is validated — and two
+                        // id-less rows must still be two rows (the same fallback `Attempts` uses).
+                        <li key={completion.messageId || index}>
+                          <CompletionEvidence completion={completion} now={now} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </Section>
+            )}
 
             <Section title={attemptsTitle(detail?.attempts?.length ?? task.attemptCount)} index={next()}>
               <Attempts attempts={detail?.attempts ?? null} loading={detail === null} now={now} />
@@ -349,6 +380,53 @@ function Body({ text, loading, empty }: { text: string | null; loading: boolean;
     >
       {text}
     </pre>
+  );
+}
+
+/**
+ * One `worker_done` payload, raw and whole (#67) — the evidence under the facts above it.
+ *
+ * Verbatim is the contract, and it is taken literally: this is the TEXT column's bytes, not a
+ * parse re-serialized to look like them — a round trip through `JSON.parse` silently collapses
+ * a duplicated key and reformats a number, which is exactly the quiet loss the word forbids.
+ * An unknown shape, an unrecognized field, a value the readers had never seen: all of it
+ * reaches the screen as the worker wrote it, because whatever was not recognized is still
+ * retained evidence, and evidence that disappears when a parser shrugs is the failure this
+ * whole feature exists to prevent.
+ *
+ * The message id is real and Orca-written — `orca orchestration` can name it — so it copies,
+ * the way every real id in this panel does (SPEC §7.9). A row whose id column was empty
+ * simply offers no button: a copy of nothing is not quiet, it is a lie about what is held.
+ */
+function CompletionEvidence({ completion, now }: { completion: WorkerCompletion; now: number }) {
+  return (
+    <section
+      data-testid="completion"
+      className="group/copy bg-muted/40 border-panel-border/60 rounded-lg border p-2.5"
+    >
+      <header className="text-muted-foreground flex items-center gap-1 font-mono text-[10px]">
+        <span>worker_done · payload</span>
+        {completion.messageId !== '' && (
+          <CopyButton
+            value={completion.messageId}
+            label="message id"
+            className={cn('size-5 pointer-coarse:size-8', COPY_ON_HOVER)}
+          />
+        )}
+        {completion.at !== '' && (
+          <span className="ml-auto tabular-nums" title={ageOf(completion.at, now).title}>
+            {ageOf(completion.at, now).label}
+          </span>
+        )}
+      </header>
+
+      <pre
+        data-testid="completion-payload"
+        className="text-foreground/90 mt-1.5 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap"
+      >
+        {completion.payload}
+      </pre>
+    </section>
   );
 }
 

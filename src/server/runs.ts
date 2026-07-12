@@ -1,5 +1,13 @@
 import { shortHandle } from '../shared/handles.ts';
-import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
+import {
+  type Dispatch,
+  type ReceiptFact,
+  type Run,
+  type Task,
+  TASK_STATUSES,
+  type TaskStatus,
+  type Wave,
+} from '../shared/types.ts';
 import { castOf } from './cast.ts';
 import { runSpan } from './durations.ts';
 import type { Preview } from './tasks.ts';
@@ -79,6 +87,13 @@ export type TaskWithHandle = {
   spec: Preview | null;
   /** The beginning of `tasks.result` — what came back. Null while the task is still working. */
   result: Preview | null;
+  /**
+   * The recognized outcome facts of `tasks.result` (#67) — read from the **whole** column,
+   * because a receipt sliced to the preview above is malformed JSON and recognizes as
+   * nothing. Empty when the result is prose, malformed or absent: an unknown shape is
+   * ordinary retained evidence, not schema drift.
+   */
+  resultReceipt: ReceiptFact[];
 };
 
 export type InferredRuns = {

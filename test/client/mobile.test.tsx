@@ -42,7 +42,7 @@ const META: Meta = {
 };
 
 /** Selecting a task swaps the dock to the inspector, and the inspector fetches. */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], receipt: [], completions: [] });
 
 const HANDLE = 'term_9f8e7d6c-1234-4321-8888-aabbccddeeff';
 const OTHER_HANDLE = 'term_c0ffee00-1234-4321-8888-aabbccddeeff';

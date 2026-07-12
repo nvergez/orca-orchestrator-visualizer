@@ -10,7 +10,7 @@ import type { Gate, Meta, Run, StreamEvent, Task } from '../../src/shared/types.
  * the inspector fetches. These tests are about the *strip*, so it is handed a detail rather than
  * being allowed to reach for a network.
  */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], receipt: [], completions: [] });
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input, and the same
