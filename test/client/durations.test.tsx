@@ -161,6 +161,24 @@ describe('how a duration reads', () => {
   });
 });
 
+describe('a wire this client did not expect', () => {
+  it('falls silent on a contradictory completed observation, rather than rounding it to zero', () => {
+    // The server refuses backwards clocks (`server/durations.ts`), so a negative `ms` on a
+    // *complete* observation can only be a wire this build never wrote — and "0s" would be
+    // exactly the invented number the whole feature exists to never show (issue #66 AC).
+    const hostile: DurationObservation = {
+      clock: 'dispatch',
+      startAt: DISPATCH_DONE_AT,
+      endAt: DISPATCHED_AT,
+      complete: true,
+      ms: -25 * 60 * 1000,
+    };
+    render(<App event={event([run({ duration: hostile })], [])} />);
+
+    expect(within(railRow(RUN_ID)).queryByTestId('run-span')).toBeNull();
+  });
+});
+
 describe('the run span on the rail', () => {
   it('shows a finished run’s span, and names its clock in the tooltip', () => {
     const span: DurationObservation = {

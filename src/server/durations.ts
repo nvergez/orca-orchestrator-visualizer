@@ -1,4 +1,4 @@
-import type { Dispatch, DurationClock, DurationObservation, Task } from '../shared/types.ts';
+import type { Dispatch, DispatchStatus, DurationClock, DurationObservation, Task } from '../shared/types.ts';
 import { instantOf } from './time.ts';
 
 /**
@@ -25,7 +25,7 @@ import { instantOf } from './time.ts';
  */
 
 /** The one dispatch status that says an attempt is still running (HANDOFF.md enums). */
-const IN_FLIGHT_DISPATCH = 'dispatched';
+const IN_FLIGHT_DISPATCH: DispatchStatus = 'dispatched';
 
 /**
  * A closed interval, when both endpoints can carry it: readable, and in order. `ms` is derived

@@ -60,12 +60,15 @@ export type DurationReading = { text: string; title: string };
  * a wire this client did not expect must fall silent rather than say "NaN ago".
  */
 export function readDuration(observation: DurationObservation, now: number): DurationReading | null {
-  const clock = CLOCK_NAMES[observation.clock as DurationClock] ?? observation.clock;
+  const clock = CLOCK_NAMES[observation.clock];
 
   if (!observation.complete) {
-    const start = Date.parse(observation.startAt);
-    if (Number.isNaN(start)) return null;
+    const start = instant(observation.startAt);
+    if (start === null) return null;
 
+    // The clamp inside `formatDurationMs` is for exactly this reading: an open interval is the
+    // one place the *reader's* clock takes part, and a machine a few seconds behind the server
+    // reads as a start, not a debt.
     return {
       text: `${formatDurationMs(now - start)} so far`,
       title: `${clock} — started ${local(observation.startAt)}, not finished per retained evidence; measured against your clock`,
@@ -73,24 +76,32 @@ export function readDuration(observation: DurationObservation, now: number): Dur
   }
 
   // `ms` must agree with the endpoints it rides with (the server derives it from them), and is
-  // optional on the wire — so the endpoints are the fallback, never a second opinion.
+  // optional on the wire — so the endpoints are the fallback, never a second opinion. Negative
+  // is a contradiction the server never writes: a wire that carries one falls silent here,
+  // because rounding it to "0s" would be the invented number this feature exists to never show.
   const ms = observation.ms ?? spanOf(observation);
-  if (ms === null) return null;
+  if (ms === null || ms < 0) return null;
 
   const label = observation.clock === 'task-span' ? `${formatDurationMs(ms)} task span` : formatDurationMs(ms);
   return { text: label, title: `${clock} · ${local(observation.startAt)} → ${local(observation.endAt ?? '')}` };
 }
 
 function spanOf({ startAt, endAt }: DurationObservation): number | null {
-  const start = Date.parse(startAt);
-  const end = Date.parse(endAt ?? '');
-  return Number.isNaN(start) || Number.isNaN(end) ? null : end - start;
+  const start = instant(startAt);
+  const end = instant(endAt ?? '');
+  return start === null || end === null ? null : end - start;
+}
+
+/** One reading of one string as an instant — or null, said once instead of three times. */
+function instant(iso: string): number | null {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
 }
 
 /** The exact instant, in the reader's own timezone — the same rendering `ageOf` gives one. */
 function local(iso: string): string {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? iso : new Date(at).toLocaleString();
+  const at = instant(iso);
+  return at === null ? iso : new Date(at).toLocaleString();
 }
 
 /**

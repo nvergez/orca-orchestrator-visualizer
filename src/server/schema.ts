@@ -229,6 +229,15 @@ const FEATURES: Feature[] = [
     degraded:
       'Run spans — this Orca has no tasks.created_at column, so how long a run occupied the clock cannot be measured.',
   },
+  {
+    // The span's *end* reads the completions too. Without them it still measures — creation to
+    // latest creation — but it understates any run whose last work outlived its last task's
+    // birth. A feature that quietly weakens is the same failure as one that quietly vanishes:
+    // the user reading a shortened span is owed the reason (SPEC §5).
+    anyOf: ['tasks.completed_at'],
+    degraded:
+      'Run span ends — this Orca has no tasks.completed_at column, so a finished run’s span can end only on its latest task creation, and understates any run whose work outlived it.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */

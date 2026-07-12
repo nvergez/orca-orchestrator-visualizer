@@ -332,7 +332,12 @@ describe('durations degrade by name, clock by clock', () => {
     );
 
     expect(matching(meta.degraded, TASK_SPANS)).toHaveLength(1);
-    expect(meta.degraded).toHaveLength(1);
+    // The run span reads the same column for its *end*, and weakens rather than vanishes: it can
+    // now end only on a creation, understating any run whose last work outlived its last task's
+    // birth. A weakened feature degrades by name exactly like a lost one (SPEC §5) — this is the
+    // silent-shortfall case the list exists to prevent.
+    expect(matching(meta.degraded, /^run span ends/i)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(2);
 
     // The preferred clock never read the missing column, so the task still has its duration…
     expect(byId(snapshot.tasks, CHARTED).duration).toMatchObject({ clock: 'dispatch', complete: true });
