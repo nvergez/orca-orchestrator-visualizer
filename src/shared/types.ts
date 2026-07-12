@@ -203,7 +203,9 @@ export type Gate = {
    * - `resolved` — also a message-only gate a reply threaded on (the reply is the resolution).
    * - `unanswered` — a message with neither a threaded reply nor a matching row. It proves no
    *   answer was recorded — **not** that anything is still waiting: `orchestration.ask` never
-   *   persists its timeout (SPEC §4.2, trap 9), so age and silence prove nothing more.
+   *   persists its timeout (SPEC §4.2, trap 9), so age and silence prove nothing more. A row
+   *   status this build has never seen also degrades here: it proves the question was raised,
+   *   not that work is paused (SPEC §4.5's conservative-blocking rule, `server/gates.ts`).
    */
   status: 'pending' | 'resolved' | 'timeout' | 'unanswered';
   /**

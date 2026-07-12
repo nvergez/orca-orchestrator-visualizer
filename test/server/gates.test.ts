@@ -350,7 +350,7 @@ describe('a Coordinator gate twin — a message and a table row for one question
     expect(snapshot.tasks[0]!.gate).toMatchObject({ status: 'pending', blocking: true });
   });
 
-  it('keeps a timeout twin as its own terminal state — never open, never blocking', async () => {
+  it('keeps a timeout twin as its own distinct terminal state — never a blocker', async () => {
     // The row is the only place a timeout is ever persisted (SPEC §4.2, trap 9). Folding it
     // into a blocking state is how timed-out probes kept runs "blocked" for days.
     const builder = orchestration();
@@ -424,18 +424,30 @@ describe('the decision_gates table, merged in additively', () => {
     expect(snapshot.runs[0]!.hasBlockingGates).toBe(true);
   });
 
-  it('treats a row status it has never seen as pending — unknown is not proof the gate is settled', async () => {
+  it('degrades a row status it has never seen to unanswered — visible, and never a claimed blocker', async () => {
     // A newer Orca could add a fifth state (its CHECK constraint is that Orca's, not ours —
-    // hence `allowUnknownEnums`). Terminal is a claim this build cannot verify for a word it
-    // does not know, and a row exists only because a gate was really raised — so an unknown
-    // status degrades to the table's one non-terminal state rather than to silence.
+    // hence `allowUnknownEnums`). Blocking is conservative (SPEC §4.5): "work is paused" is
+    // not a claim this build can prove from a word it does not know — a future terminal state
+    // read as pending would resurrect the false-blocker bug on every such row. So an unknown
+    // status degrades to the one state that claims nothing beyond "no recorded answer", and
+    // the blocked-task cross-check still guards the case where work really is paused.
     const builder = new FixtureBuilder({ allowUnknownEnums: true });
     builder.task({ id: 'task_a', handle: COORDINATOR, title: 'Ship the thing', createdAt: AT });
     builder.gate({ taskId: 'task_a', question: 'From the future', status: 'escalated', createdAt: at(5) });
 
     const gates = await gatesOf(builder);
 
-    expect(gates[0]).toMatchObject({ status: 'pending', blocking: true });
+    expect(gates[0]).toMatchObject({ status: 'unanswered', blocking: false });
+  });
+
+  it('still lets the cross-check prove an unknown-status row blocking, through its blocked task', async () => {
+    const builder = new FixtureBuilder({ allowUnknownEnums: true });
+    builder.task({ id: 'task_a', handle: COORDINATOR, title: 'Ship the thing', status: 'blocked', createdAt: AT });
+    builder.gate({ taskId: 'task_a', question: 'From the future', status: 'escalated', createdAt: at(5) });
+
+    const gates = await gatesOf(builder);
+
+    expect(gates[0]).toMatchObject({ status: 'unanswered', blocking: true });
   });
 
   it('leaves a row whose task no longer exists attached to no run — never guessed into one', async () => {

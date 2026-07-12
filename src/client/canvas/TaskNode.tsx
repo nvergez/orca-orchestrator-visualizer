@@ -203,7 +203,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
  *
  * It replaces the eight hex of the assignee handle that used to sit here. That chip was the
  * loudest object on the card, for a uuid you cannot read, cannot remember and would not act on —
- * and, worse, it was the *only* name the agent had, so "the failed node and the open gate are the
+ * and, worse, it was the *only* name the agent had, so "the failed node and the blocking gate are the
  * same agent" was a fact you had to work out by comparing two strings of hex. The monogram is one
  * glance, it is the same `A2` in the rail and in the conversation, and the handle itself has not
  * gone anywhere: it is in the tooltip, and in full.

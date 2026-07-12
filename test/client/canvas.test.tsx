@@ -210,7 +210,7 @@ describe('the task DAG on the canvas', () => {
 
     // **`A1`, not eight hex of a uuid.** The handle chip used to be the loudest object on the card,
     // for a value nobody can read, remember or act on — and it was the agent's *only* name, so "the
-    // failed node and the open gate are the same agent" was a fact you had to work out by comparing
+    // failed node and the blocking gate are the same agent" was a fact you had to work out by comparing
     // two strings. The monogram is one glance, it is the same `A1` in the rail and in the
     // conversation, and the handle itself is one hover away.
     const badge = within(node('task_worked')).getByTestId('assignee');

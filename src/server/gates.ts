@@ -207,14 +207,17 @@ function readGateRows(db: DatabaseSync, columns: Columns, attribution: Attributi
 /**
  * A row's status, kept as the distinct fact it is (#45): `resolved` and `timeout` are terminal,
  * and folding `timeout` into a blocking state is how timed-out probes kept whole runs "blocked"
- * for days. A status this build has never seen degrades to `pending` — the table's one
- * non-terminal state — because the row proves a gate was really raised, and "terminal" is not a
- * claim this build can verify for a word it does not know.
+ * for days. A status this build has never seen — a newer Orca's fifth state — degrades to
+ * `unanswered`: blocking is conservative (SPEC §4.5), "work is paused" is not a claim this
+ * build can prove from a word it does not know (a future *terminal* state read as pending
+ * would resurrect the false-blocker bug on every such row), and `unanswered` claims nothing
+ * beyond "no recorded answer" while the blocked-task cross-check still catches a real pause.
  */
 function rowStatus(status: string | null): Gate['status'] {
+  if (status === 'pending') return 'pending';
   if (status === 'resolved') return 'resolved';
   if (status === 'timeout') return 'timeout';
-  return 'pending';
+  return 'unanswered';
 }
 
 /**

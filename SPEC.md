@@ -494,7 +494,9 @@ type Turn = {                                // THE CONVERSATION — the four-so
   // 360 turns is 27 KB of nothing:
   truncated?: boolean                        // body was cut; the inspector has the rest
   options?: string[]                         // a gate's options
-  answer?: string                            // the reply that threaded on it; absent ⇒ unanswered
+  answer?: string                            // the recorded resolution — threaded reply or row; absent ⇒ none recorded
+  gateStatus?: Gate['status']                // a gate turn's lifecycle state (#45)
+  blocking?: boolean                         // true ⇔ blocking now; absent when not (#45)
   beatCount?: number; endedAt?: string       // a `heartbeats` row: how many, over what span
   // The AGENT side of the turn is DERIVED (`agentOfTurn`), never carried: it is always one of the
   // two handles already here, and a third copy of a uuid in an object re-sent every five seconds

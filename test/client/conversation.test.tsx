@@ -313,6 +313,45 @@ describe('a question, and its answer', () => {
     await waitFor(() => expect(turns()).toHaveLength(1));
 
     expect(screen.getAllByTestId('gate-option').map((option) => option.dataset.picked)).toEqual(['true', 'false']);
+    // The tick already says the decision — a state chip on top of it would say it twice.
+    expect(screen.queryByTestId('gate-state')).toBeNull();
+  });
+
+  it('shows a recorded answer that names no option — a row-resolved twin must not read as unanswered', async () => {
+    // The #45 collision, at the last surface it can hide on: a Coordinator writes the
+    // resolution only to the `decision_gates` row, so no reply turn follows this question.
+    // If nothing here shows the answer, the resolved gate reads exactly like an open one.
+    render(
+      <App
+        event={withTurns([
+          turn({
+            kind: 'decision_gate',
+            body: 'Keep the accent, or invert it?',
+            options: ['keep', 'invert'],
+            gateStatus: 'resolved',
+            answer: 'Keep it, but only above the fold.',
+          }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    const state = await screen.findByTestId('gate-state');
+    expect(state).toHaveTextContent(/answered:/i);
+    expect(state).toHaveTextContent(/Keep it, but only above the fold\./);
+  });
+
+  it('says a resolved gate whose resolution text was never recorded is still resolved', async () => {
+    render(
+      <App
+        event={withTurns([
+          turn({ kind: 'decision_gate', body: 'Ship it today?', gateStatus: 'resolved' }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/resolved/i);
   });
 
   it('says a blocking question is blocking — waiting for an answer', async () => {
