@@ -1,7 +1,9 @@
 import { Handle, type NodeProps, Position, type Node } from '@xyflow/react';
 import { shortHandle } from '../../shared/handles.ts';
 import type { Task } from '../../shared/types.ts';
-import { colorOf, NODE_HEIGHT, NODE_WIDTH, STALE_HEARTBEAT_MS } from './theme.ts';
+import type { Pulse } from '../feed/theme.ts';
+import { relativeTime } from '../relative-time.ts';
+import { colorOf, NODE_HEIGHT, NODE_WIDTH, SELECTED_OUTLINE, STALE_HEARTBEAT_MS } from './theme.ts';
 
 /**
  * A task, as it appears on the canvas — the node component the dev approved on screen
@@ -9,19 +11,36 @@ import { colorOf, NODE_HEIGHT, NODE_WIDTH, STALE_HEARTBEAT_MS } from './theme.ts
  *
  * Everything it has to say, it says without being hovered: scanning a finished run for the
  * failed node must not require interaction (SPEC §7.5).
+ *
+ * Two of the things it says come from the feed rather than from the task row, and they are
+ * both #18's half of the bidirectional link: the node the feed sent you to is **outlined**,
+ * and a node something has just *happened* to **pulses** in the colour of the message that
+ * happened (`feed/theme.ts`). The node knows neither which message nor why — it is handed a
+ * colour, which is what keeps the canvas ignorant of the feed.
  */
 
-export type TaskNodeData = { task: Task; now: number };
+export type TaskNodeData = {
+  task: Task;
+  now: number;
+  /** The task the feed row pointed at, or the one you clicked. Outlined, and centred by the canvas. */
+  selected: boolean;
+  /** A message about this task just arrived. ~1 s, in its type's colour. Never a heartbeat. */
+  pulse: Pulse | null;
+};
 export type TaskFlowNode = Node<TaskNodeData, 'task'>;
 
 export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
-  const { task, now } = data;
+  const { task, now, selected, pulse } = data;
   const color = colorOf(task.status);
 
   return (
     <div
       data-testid="task-node"
       data-task={task.id}
+      data-selected={selected}
+      // The *type*, not the colour: a test asserts that a `worker_done` flashed this node and
+      // that a heartbeat never did, and neither of those is a question about a hex code.
+      data-pulse={pulse?.type}
       style={{
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
@@ -36,6 +55,17 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
         display: 'flex',
         flexDirection: 'column',
         gap: 3,
+        cursor: 'pointer',
+        // Selection is an *outline*, never the border: the border is the status, and a node
+        // that changed colour when you clicked it would be a node that lied about its state.
+        outline: selected ? `2px solid ${SELECTED_OUTLINE}` : undefined,
+        outlineOffset: 2,
+        ...(pulse && {
+          boxShadow: `0 0 0 3px ${pulse.color}`,
+          // The keyframes are in `index.html` — the one rule inline styles cannot express.
+          animation: 'orca-pulse 1s ease-out',
+          ['--orca-pulse' as string]: pulse.color,
+        }),
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0.4 }} />
@@ -146,16 +176,4 @@ function LastSeen({ task, now }: { task: Task; now: number }) {
       last seen {relativeTime(silentFor)} ago
     </span>
   );
-}
-
-/** Coarse on purpose: the badge answers "is it still there", not "exactly when". */
-function relativeTime(elapsedMs: number): string {
-  const seconds = Math.max(0, Math.round(elapsedMs / 1000));
-  if (seconds < 60) return `${seconds}s`;
-
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
