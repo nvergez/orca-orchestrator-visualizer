@@ -18,7 +18,16 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        className={cn(
+          "size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1",
+          // Radix wraps the children in `display: table; min-width: 100%`, and a table box never
+          // gets narrower than its content's minimum width — it overflows the viewport instead.
+          // So nothing inside a scroller can be *bounded* by it: a `truncate` never truncates
+          // (its nowrap text becomes the table's minimum width) and a `<pre>` widens the panel
+          // rather than wrapping inside it. A block box is what every panel here already assumes
+          // it is scrolling: exactly the viewport's width, and content that has to fit it.
+          "[&>div]:!block"
+        )}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
