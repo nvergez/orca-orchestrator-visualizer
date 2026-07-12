@@ -17,10 +17,11 @@ const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, att
  * event a seam-1 server emits.
  *
  * The gate strip is the one panel in this tool that is allowed to *interrupt*. It appears above
- * the canvas only while the selected run has an unanswered question, and it goes away the
- * moment nothing is blocked — so that it stays a signal and never becomes furniture (SPEC §7.4).
- * What is asserted here is exactly that: what a blocked user sees, and what an unblocked one
- * does not.
+ * the canvas only while the selected run has a **blocking** gate — `gate.blocking`, the
+ * server's separate present-effect fact, never the mere absence of an answer (#45) — and it
+ * goes away the moment nothing is blocked, so that it stays a signal and never becomes
+ * furniture (SPEC §7.4). What is asserted here is exactly that: what a blocked user sees, and
+ * what an unblocked one does not.
  */
 
 const META: Meta = {
@@ -39,6 +40,7 @@ const OTHER_HANDLE = 'term_1a2b3c4d-1234-4321-8888-aabbccddeeff';
 const RUN_ID = 'run_9f8e7d6c_1000';
 const OTHER_RUN_ID = 'run_1a2b3c4d_2000';
 
+/** The default is a blocking gate — an unanswered ask whose task is authoritatively blocked. */
 function gate(over: Partial<Gate> = {}): Gate {
   return {
     id: 'msg_gate',
@@ -47,7 +49,8 @@ function gate(over: Partial<Gate> = {}): Gate {
     taskId: 'task_aaaaaaaa',
     question: 'Which driver: node:sqlite or better-sqlite3?',
     options: ['node:sqlite', 'better-sqlite3'],
-    status: 'open',
+    status: 'unanswered',
+    blocking: true,
     resolution: null,
     createdAt: '2026-07-08T12:05:00.000Z',
     ...over,
@@ -85,7 +88,7 @@ function run(over: Partial<Run> = {}): Run {
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 0, failed: 0, blocked: 0 },
     live: true,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -93,21 +96,23 @@ function run(over: Partial<Run> = {}): Run {
 
 /**
  * The event a server that has read a blocked run really sends: the gate is in `snapshot.gates`,
- * the run it blocks says `hasOpenGates`, and the node it marks carries it. A fixture that set
- * only one of the three would be testing an event the server cannot produce.
+ * the run it blocks says `hasBlockingGates`, and the node it marks carries it — the oldest
+ * blocking one, or the latest as history (`server/gates.ts`). A fixture that set only one of
+ * the three would be testing an event the server cannot produce.
  */
 function event(gates: Gate[], tasks: Task[] = [task()], runs: Run[] = [run()]): StreamEvent {
-  const open = new Set(gates.filter((each) => each.status === 'open').map((each) => each.runId));
+  const blocked = new Set(gates.filter((each) => each.blocking).map((each) => each.runId));
+  const markerOf = (taskId: string): Gate | null => {
+    const held = gates.filter((candidate) => candidate.taskId === taskId);
+    return held.find((candidate) => candidate.blocking) ?? held[held.length - 1] ?? null;
+  };
 
   return {
     seq: 0,
     meta: META,
     snapshot: {
-      runs: runs.map((each) => ({ ...each, hasOpenGates: open.has(each.id) })),
-      tasks: tasks.map((each) => ({
-        ...each,
-        gate: each.gate ?? gates.find((candidate) => candidate.taskId === each.id) ?? null,
-      })),
+      runs: runs.map((each) => ({ ...each, hasBlockingGates: blocked.has(each.id) })),
+      tasks: tasks.map((each) => ({ ...each, gate: each.gate ?? markerOf(each.id) })),
       gates,
       turns: [],
       coordinatorRuns: [],
@@ -151,9 +156,35 @@ describe('the gate strip', () => {
   });
 
   it('is not there when every gate in the run has been answered', () => {
-    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
+    render(
+      <App
+        loadTask={NO_DETAIL}
+        event={event([gate({ status: 'resolved', blocking: false, resolution: 'node:sqlite' })])}
+      />
+    );
 
     expect(strip()).toBeNull();
+  });
+
+  it('is not there for an unanswered ask that is not blocking — history is not an interruption', () => {
+    // The #45 regression, on screen: a reply-less ask on a finished or moving task proves only
+    // that no answer was recorded. The strip is driven by `blocking`, never by silence — the
+    // question stays reachable in the conversation and the inspector instead.
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'unanswered', blocking: false })])} />);
+
+    expect(strip()).toBeNull();
+  });
+
+  it('is not there for a timed-out gate — a terminal state, not a blocker', () => {
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'timeout', blocking: false })])} />);
+
+    expect(strip()).toBeNull();
+  });
+
+  it('shows a table-backed pending gate — durable proof the run is waiting', async () => {
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'pending', blocking: true })])} />);
+
+    expect(within(strip()!).getByText(/Which driver/)).toBeVisible();
   });
 
   it('selects the task a gate blocks when the gate is clicked', async () => {
@@ -230,7 +261,7 @@ describe('the gate strip', () => {
     expect(strip()).toBeNull();
   });
 
-  it('lists every open gate in the run, oldest first — the one blocking longest at the top', () => {
+  it('lists every blocking gate in the run, oldest first — the one blocking longest at the top', () => {
     const gates = [
       gate({ id: 'msg_1', question: 'Asked first', createdAt: '2026-07-08T12:05:00.000Z' }),
       gate({ id: 'msg_2', taskId: null, question: 'Asked second', createdAt: '2026-07-08T12:40:00.000Z' }),
@@ -248,14 +279,27 @@ describe('the gate strip', () => {
 });
 
 describe('the gate marker on a node', () => {
-  it('marks a task that is blocked on an open gate', async () => {
+  it('marks a task that is blocked on a blocking gate', async () => {
     render(<App loadTask={NO_DETAIL} event={event([gate()])} />);
 
     expect(within(await node('task_aaaaaaaa')).getByTestId('gate-marker')).toBeVisible();
   });
 
   it('does not mark a task whose gate has been answered', async () => {
-    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'resolved', resolution: 'node:sqlite' })])} />);
+    render(
+      <App
+        loadTask={NO_DETAIL}
+        event={event([gate({ status: 'resolved', blocking: false, resolution: 'node:sqlite' })])}
+      />
+    );
+
+    expect(within(await node('task_aaaaaaaa')).queryByTestId('gate-marker')).toBeNull();
+  });
+
+  it('does not mark a task over an unanswered ask that is not blocking it', async () => {
+    // The ⛔ is a warning that work is paused *now*. The unanswered question is still the
+    // task's history — the inspector shows it — but the node stays quiet (#45).
+    render(<App loadTask={NO_DETAIL} event={event([gate({ status: 'unanswered', blocking: false })])} />);
 
     expect(within(await node('task_aaaaaaaa')).queryByTestId('gate-marker')).toBeNull();
   });
@@ -269,7 +313,7 @@ describe('the gate marker on a node', () => {
 
 describe('the rail', () => {
   it('flags a run that is blocked, so the blocked one can be picked without opening it', () => {
-    const gates = [gate({ id: 'msg_there', runId: OTHER_RUN_ID, taskId: null })];
+    const gates = [gate({ id: 'msg_there', runId: OTHER_RUN_ID, taskId: null, status: 'pending' })];
     const runs = [run(), run({ id: OTHER_RUN_ID, handle: OTHER_HANDLE, label: 'Another run' })];
 
     render(<App loadTask={NO_DETAIL} event={event(gates, [task()], runs)} />);
@@ -280,5 +324,19 @@ describe('the rail', () => {
 
     expect(within(blocked).getByTestId('run-gate-marker')).toBeVisible();
     expect(within(unblocked).queryByTestId('run-gate-marker')).toBeNull();
+  });
+
+  it('does not flag a run over non-blocking gate history', () => {
+    // Four live runs — two of them days finished — wore this flag before #45, over stale
+    // probes nobody was waiting on.
+    const gates = [
+      gate({ id: 'msg_a', status: 'unanswered', blocking: false, taskId: null }),
+      gate({ id: 'msg_b', status: 'timeout', blocking: false, taskId: null }),
+      gate({ id: 'msg_c', status: 'resolved', blocking: false, resolution: 'done', taskId: null }),
+    ];
+
+    render(<App loadTask={NO_DETAIL} event={event(gates)} />);
+
+    expect(within(screen.getByTestId('run-row')).queryByTestId('run-gate-marker')).toBeNull();
   });
 });

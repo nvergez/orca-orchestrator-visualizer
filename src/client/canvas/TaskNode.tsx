@@ -249,16 +249,18 @@ function shadowOf(status: string, pulse: Pulse | null, dimmed: boolean): string 
 /**
  * The octagon — this task is not working, it is *waiting on you* (SPEC §7.5).
  *
- * Only while the gate is open: an answered question is history, and history belongs in the
- * inspector, not as a warning on a node that is getting on with its work. The gate the server
- * hands the node is already the right one — the open one, when the task has several.
+ * Only while the gate is **blocking** (#45): a resolved or timed-out question is history, and
+ * an unanswered ask whose task is not authoritatively blocked proves nothing about *now* —
+ * both belong in the inspector, not as a warning on a node that is getting on with its work.
+ * The gate the server hands the node is already the right one — the blocking one, when the
+ * task has several.
  *
- * The status colour underneath it stays whatever the row says. A `dispatched` task with an open
- * gate is still dispatched; the marker adds the reason it is not moving, and repainting the node
+ * The status colour underneath it stays whatever the row says. A `blocked` task with a blocking
+ * gate is still blocked; the marker adds the reason it is not moving, and repainting the node
  * would be inventing a status Orca never wrote.
  */
 function GateMarker({ task }: { task: Task }) {
-  if (task.gate?.status !== 'open') return null;
+  if (task.gate?.blocking !== true) return null;
 
   return (
     <Badge

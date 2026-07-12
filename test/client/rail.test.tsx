@@ -47,7 +47,7 @@ function run(over: Partial<Run> = {}): Run {
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 1, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };

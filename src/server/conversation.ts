@@ -272,7 +272,14 @@ function messageTurns(messages: FeedMessage[], cast: Cast, gateOfMessage: Map<st
       // a message the panel has failed to render rather than a message with nothing to say.
       body: gate ? gate.question : message.body !== '' ? message.body : message.subject,
       ...(gate && gate.options.length > 0 && { options: gate.options }),
+      // The recorded decision, wherever it was recorded: the threaded reply, or — for a
+      // Coordinator gate twin — the `decision_gates` row the resolution was written to (#45).
       ...(gate?.status === 'resolved' && gate.resolution !== null && { answer: gate.resolution }),
+      // The two separate gate facts (#45): the recorded lifecycle, and whether it is blocking
+      // *now* — which is what decides "blocking — waiting" against "no answer recorded" on
+      // screen. `blocking` is only ever said when true (`Turn`).
+      ...(gate && { gateStatus: gate.status }),
+      ...(gate?.blocking && { blocking: true }),
       source: answers
         ? `messages.thread_id = the gate's id · #${message.sequence}`
         : `messages · #${message.sequence}`,

@@ -160,10 +160,10 @@ export function RunRail({
           >
             <RadarDot live={selectedRun?.live ?? false} />
             <b className="truncate text-[13px] font-semibold">{selectedRun?.label ?? 'Orchestrators'}</b>
-            {selectedRun?.hasOpenGates && (
+            {selectedRun?.hasBlockingGates && (
               <OctagonAlert
                 role="img"
-                aria-label="blocked on an open decision gate"
+                aria-label="blocked on a decision gate"
                 className="text-gate size-4 shrink-0"
               />
             )}
@@ -353,7 +353,7 @@ function RunRow({
           {run.live ? 'running now' : 'ended'}
         </span>
         <b className="truncate text-[13px] font-semibold">{run.label}</b>
-        <BlockedFlag blocked={run.hasOpenGates} />
+        <BlockedFlag blocked={run.hasBlockingGates} />
       </span>
 
       <code className="text-muted-foreground/80 relative mt-0.5 block truncate pl-4 font-mono text-[10.5px]">
@@ -387,7 +387,10 @@ function Dot() {
 }
 
 /**
- * The octagon — this orchestration is sitting on a question nobody has answered (`run.hasOpenGates`).
+ * The octagon — a decision gate is provably blocking this orchestration right now
+ * (`run.hasBlockingGates`, #45). Not merely "a question was never answered": stale probes on
+ * finished runs wore this flag for days before the blocking fact was separated from the
+ * lifecycle state.
  *
  * The rail's job is to let you pick the orchestrator worth opening *without* opening it (SPEC §7.2),
  * and a blocked one is the most worth opening there is: it is not slow, it is **stopped**, and it
@@ -401,10 +404,10 @@ function BlockedFlag({ blocked }: { blocked: boolean }) {
     <OctagonAlert
       data-testid="run-gate-marker"
       role="img"
-      aria-label="blocked on an open decision gate"
+      aria-label="blocked on a decision gate"
       className="text-gate ml-auto size-3.5 shrink-0"
     >
-      <title>Blocked on an open decision gate</title>
+      <title>Blocked on a decision gate</title>
     </OctagonAlert>
   );
 }

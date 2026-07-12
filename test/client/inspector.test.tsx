@@ -76,7 +76,7 @@ function run(over: Partial<Run> = {}): Run {
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 0, failed: 1, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -269,7 +269,8 @@ describe('the identifiers', () => {
     taskId: TASK_ID,
     question: 'Which driver — node:sqlite or better-sqlite3?',
     options: [],
-    status: 'open',
+    status: 'unanswered',
+    blocking: false,
     resolution: null,
     createdAt: '2026-07-08T12:20:00.000Z',
   };
@@ -550,7 +551,8 @@ describe('the exchange', () => {
 /**
  * The gate Q&A (SPEC §7.8, item 5) — **including gates that were already answered**, which is the
  * whole point: it is how you reconstruct what was decided, and why the run went the way it did.
- * The node's ⛔ marker only ever shows an *open* gate; this is where the answered one lives.
+ * The node's ⛔ marker only ever shows a *blocking* gate; this is the history — every lifecycle
+ * state, each worded as the fact it is (#45).
  */
 describe('the gate Q&A', () => {
   function gate(over: Partial<Gate> = {}): Gate {
@@ -562,6 +564,7 @@ describe('the gate Q&A', () => {
       question: 'Which driver — node:sqlite or better-sqlite3?',
       options: ['node:sqlite', 'better-sqlite3'],
       status: 'resolved',
+      blocking: false,
       resolution: 'node:sqlite — zero native dependencies.',
       createdAt: '2026-07-08T12:20:00.000Z',
       ...over,
@@ -585,10 +588,12 @@ describe('the gate Q&A', () => {
     expect(within(asked).getByText(/node:sqlite — zero native dependencies\./)).toBeVisible();
   });
 
-  it('shows an open one as still waiting, rather than as answered with nothing', async () => {
+  it('shows a blocking one as blocking — waiting for an answer', async () => {
+    // Both blocking shapes wear the warning: a table-backed pending gate, and an unanswered
+    // ask whose task is authoritatively blocked right now (#45).
     render(
       <App
-        event={withGates([gate({ status: 'open', resolution: null })])}
+        event={withGates([gate({ status: 'pending', blocking: true, resolution: null })])}
         loadTask={loaderFor(detail())}
       />
     );
@@ -596,7 +601,39 @@ describe('the gate Q&A', () => {
 
     const panel = await open();
 
-    expect(within(panel).getByTestId('gate-qa')).toHaveTextContent(/waiting/i);
+    expect(within(panel).getByTestId('gate-qa')).toHaveTextContent(/blocking — waiting/i);
+  });
+
+  it('says an unanswered non-blocker recorded no answer — never that anything is waiting', async () => {
+    // A reply-less ask proves only that no answer was retained (CONTEXT.md, "Unanswered
+    // Ask"). "Waiting" would be the pre-#45 lie, one panel down.
+    render(
+      <App
+        event={withGates([gate({ status: 'unanswered', blocking: false, resolution: null })])}
+        loadTask={loaderFor(detail())}
+      />
+    );
+    await drawn(1);
+
+    const panel = await open();
+    const qa = within(panel).getByTestId('gate-qa');
+
+    expect(qa).toHaveTextContent(/no answer recorded/i);
+    expect(qa).not.toHaveTextContent(/waiting|blocked/i);
+  });
+
+  it('shows a timed-out gate as timed out — a terminal state with its own name', async () => {
+    render(
+      <App
+        event={withGates([gate({ status: 'timeout', blocking: false, resolution: null })])}
+        loadTask={loaderFor(detail())}
+      />
+    );
+    await drawn(1);
+
+    const panel = await open();
+
+    expect(within(panel).getByTestId('gate-qa')).toHaveTextContent(/timed out/i);
   });
 
   it('shows every gate this task raised, not only the one the node marks', async () => {
@@ -604,7 +641,7 @@ describe('the gate Q&A', () => {
       <App
         event={withGates([
           gate({ id: 'msg_one', question: 'Asked first, and answered' }),
-          gate({ id: 'msg_two', question: 'Asked second, still open', status: 'open', resolution: null }),
+          gate({ id: 'msg_two', question: 'Asked second, no answer', status: 'unanswered', resolution: null }),
         ])}
         loadTask={loaderFor(detail())}
       />

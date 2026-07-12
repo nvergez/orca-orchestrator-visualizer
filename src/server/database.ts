@@ -70,16 +70,17 @@ export class OrcaDatabase {
   snapshot(since = 0): StreamEvent {
     const { liveness, entries, runs, tasks, attribution } = this.derive();
 
-    // The gates, from the `decision_gate` *messages* that raise them and never from the empty
-    // table they nominally belong to (SPEC §4.2, trap 1). They are placed by the same
-    // attribution the conversation uses — a gate is a message, and it is placed like one — and
-    // then hung back on the runs they block (`hasOpenGates`) and the nodes they mark.
+    // The gates, from the `decision_gate` *messages* that raise them, enriched by the
+    // authoritative `decision_gates` rows their Coordinator twins keep (SPEC §4.2, trap 1;
+    // §4.5, #45). They are placed by the same attribution the conversation uses — a gate is a
+    // message, and it is placed like one — then given their present blocking effect from the
+    // tasks' current state and hung back on the runs they block (`hasBlockingGates`) and the
+    // nodes they mark.
     //
     // They are read *here* rather than in `derive()` because they are the snapshot's alone: a
     // task detail already has its gates (they were in the snapshot the client is holding), and
     // making a node click scan `messages` twice over for them would be work done to be discarded.
-    const gates = readGates(this.db, this.schema.columns, attribution);
-    const gated = attachGates(runs, tasks, gates);
+    const gated = attachGates(runs, tasks, readGates(this.db, this.schema.columns, attribution));
 
     // **Every** message, once — and then used twice, which is the only way to read them once.
     //
@@ -104,12 +105,12 @@ export class OrcaDatabase {
       snapshot: {
         runs: gated.runs,
         tasks: gated.tasks,
-        gates,
+        gates: gated.gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
         // report out of `tasks.result`. It is the whole of what this screen is for, and the client
         // does nothing to it but choose a scope.
-        turns: conversationOf({ entries, runs: gated.runs, gates, messages }),
+        turns: conversationOf({ entries, runs: gated.runs, gates: gated.gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },

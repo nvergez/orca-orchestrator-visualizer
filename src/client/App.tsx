@@ -152,13 +152,15 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   );
 
   // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
-  // them. Which question is still open, and which run it blocks, are answers the server has
-  // already worked out from the `decision_gate` messages (`server/gates.ts`); re-deriving
-  // either here would be re-implementing the one trap the ticket exists to avoid.
-  const openGates = useMemo(
+  // them. Which question is blocking *now*, and which run it blocks, are answers the server
+  // has already worked out from the gate messages, the `decision_gates` rows and the tasks'
+  // current state (`server/gates.ts`, #45); re-deriving either here would be re-implementing
+  // the one trap the ticket exists to avoid. The strip interrupts over `blocking` alone —
+  // an unanswered historical ask is not enough evidence to interrupt (SPEC §7.1).
+  const blockingGates = useMemo(
     () =>
       event && selected
-        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.status === 'open')
+        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.blocking)
         : NO_GATES,
     [event, selected]
   );
@@ -304,7 +306,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
               be in your way, or it is a question you will not see until you go looking for it —
               and you go looking for it only once you have already noticed nothing is moving.
             */}
-            <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
+            <GateStrip gates={blockingGates} tasks={tasks} onSelectTask={showTask} />
 
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}

@@ -153,10 +153,11 @@ function describeRun(handle: string | null, members: TaskWithHandle[], orcaIsLiv
     // No history mode: yesterday's run renders through this same code path, and the dot is the
     // whole difference. It takes a running Orca *and* work that could still move.
     live: orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status)),
-    // False here, and true only once the gates have actually been read: they come from
-    // `decision_gate` *messages* (`gates.ts`), which this module has never seen — it is handed
-    // tasks. `attachGates` flips it for the runs a gate really is blocking.
-    hasOpenGates: false,
+    // False here, and true only once the gates have actually been read and their blocking
+    // effect derived: they come from `decision_gate` messages and `decision_gates` rows
+    // (`gates.ts`), which this module has never seen — it is handed tasks. `attachGates`
+    // flips it for the runs a gate really is blocking.
+    hasBlockingGates: false,
     edgeCount: countEdges(tasks),
   };
 }

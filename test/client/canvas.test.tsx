@@ -114,7 +114,7 @@ function runOf(tasks: Task[], over: Partial<Run> = {}): Run {
     ],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 0, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     // As the server counts it: only deps whose other end is in the run, so a dep left dangling by a
     // reset is not an edge here either.
     edgeCount: tasks.reduce((total, task) => total + task.deps.filter((dep) => inRun.has(dep)).length, 0),

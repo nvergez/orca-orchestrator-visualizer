@@ -80,7 +80,7 @@ function run(over: Partial<Run> = {}): Run {
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 2, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -315,18 +315,75 @@ describe('a question, and its answer', () => {
     expect(screen.getAllByTestId('gate-option').map((option) => option.dataset.picked)).toEqual(['true', 'false']);
   });
 
-  it('says an unanswered question is still waiting — which is why the run is stopped', async () => {
+  it('says a blocking question is blocking — waiting for an answer', async () => {
+    // The blocking chip follows the server's separate `blocking` fact, never the mere absence
+    // of a reply (#45): here the gate's task is authoritatively blocked right now.
     render(
       <App
         event={withTurns([
-          turn({ kind: 'decision_gate', body: 'A block, or inherit?', options: ['a block', 'inherit'] }),
+          turn({
+            kind: 'decision_gate',
+            body: 'A block, or inherit?',
+            options: ['a block', 'inherit'],
+            gateStatus: 'unanswered',
+            blocking: true,
+          }),
         ])}
         loadTask={NO_DETAIL}
       />
     );
 
-    expect(await screen.findByTestId('gate-open')).toHaveTextContent(/waiting for an answer/i);
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/blocking — waiting for an answer/i);
     expect(screen.getAllByTestId('gate-option').map((option) => option.dataset.picked)).toEqual(['false', 'false']);
+  });
+
+  it('says an unanswered non-blocker recorded no answer — not that anything is waiting', async () => {
+    // A reply-less ask proves nothing beyond the missing answer: `orchestration.ask` never
+    // persists its timeout, and the live database is full of finished runs wearing stale
+    // probes (#45). "Waiting" here was the lie this issue exists to remove.
+    render(
+      <App
+        event={withTurns([
+          turn({
+            kind: 'decision_gate',
+            body: 'ping: can you read this?',
+            options: ['yes', 'no'],
+            gateStatus: 'unanswered',
+          }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    const state = await screen.findByTestId('gate-state');
+    expect(state).toHaveTextContent(/no answer recorded/i);
+    expect(state).not.toHaveTextContent(/waiting|blocked/i);
+  });
+
+  it('names a timed-out gate as timed out — its own terminal state, never an open question', async () => {
+    render(
+      <App
+        event={withTurns([
+          turn({ kind: 'decision_gate', body: 'Ship it today?', options: ['yes', 'no'], gateStatus: 'timeout' }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/timed out/i);
+  });
+
+  it('states the gate’s fate even when the question offered no options', async () => {
+    // Half the live gate messages are hand-written escalations with no options at all. Their
+    // state chip must not live inside an options list they do not have.
+    render(
+      <App
+        event={withTurns([turn({ kind: 'decision_gate', body: 'Which base branch?', gateStatus: 'unanswered' })])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/no answer recorded/i);
   });
 });
 

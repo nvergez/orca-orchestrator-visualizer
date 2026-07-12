@@ -45,7 +45,7 @@ const RUN: Run = {
   waves: [],
   statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 0, failed: 0, blocked: 0 },
   live: true,
-  hasOpenGates: false,
+  hasBlockingGates: false,
   edgeCount: 0,
 };
 

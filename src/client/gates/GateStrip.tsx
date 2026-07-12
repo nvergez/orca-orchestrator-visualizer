@@ -16,10 +16,12 @@ import { useIsMobile } from '../viewport.tsx';
  * It is the one panel in this tool that is allowed to **interrupt**, and everything about it
  * follows from that (SPEC §7.4):
  *
- * - **It appears only when the selected run has an open gate.** Nothing blocked, nothing on
- *   screen — a strip that is always there is furniture, and furniture stops being read. This is
- *   why it is not a tab: a tab you forget to open is exactly what a blocking question must not
- *   be behind.
+ * - **It appears only when the selected run has a gate whose `blocking` flag is true.** Nothing
+ *   blocked, nothing on screen — a strip that is always there is furniture, and furniture stops
+ *   being read. And `blocking` is the server's separate present-effect fact (#45), never the
+ *   mere absence of a reply: an unanswered historical ask is not enough evidence to interrupt.
+ *   This is why it is not a tab: a tab you forget to open is exactly what a blocking question
+ *   must not be behind.
  * - **It shows the question, the options, and the task it blocks**, and clicking it selects
  *   that task — straight from the question to the context that raised it.
  * - **A gate that names no task still appears.** 32 of the 53 gate messages in the live
@@ -32,16 +34,16 @@ import { useIsMobile } from '../viewport.tsx';
  * And it is the **one surface in the tool with an aurora behind it** (SPEC §7.9). Everything else
  * on this page is a fact you read and it holds still. This is a fact that is *waiting* — and a
  * light that will not sit still is what a thing that will not go away looks like. It is slow (a
- * 19-to-25-second cycle) because it has to stay bearable for as long as the gate stays open, which
+ * 19-to-25-second cycle) because it has to stay bearable for as long as the gate blocks, which
  * on a real database is hours.
  *
- * The gates arrive already derived, already scoped to the run and already open: the server owns
- * all of that (`server/gates.ts`), because a client that re-derived which questions were still
- * unanswered would be a second implementation of the ticket's whole trap.
+ * The gates arrive already derived, already scoped to the run and already blocking: the server
+ * owns all of that (`server/gates.ts`), because a client that re-derived which questions were
+ * really blocking would be a second implementation of the ticket's whole trap.
  */
 
 export type GateStripProps = {
-  /** The selected run's **open** gates, oldest first. Empty ⇒ nothing renders at all. */
+  /** The selected run's **blocking** gates, oldest first. Empty ⇒ nothing renders at all. */
   gates: Gate[];
   /** The selected run's tasks — a gate names a task id, and a person needs its title. */
   tasks: Task[];
@@ -67,14 +69,14 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
       // A status, not an alert: it is important, and it is not an emergency. An assertive live
       // region would interrupt a screen reader mid-sentence every time a run got blocked.
       role="status"
-      aria-label={`${gates.length} open decision ${gates.length === 1 ? 'gate' : 'gates'}`}
+      aria-label={`${gates.length} blocking decision ${gates.length === 1 ? 'gate' : 'gates'}`}
       initial={enter({ opacity: 0, y: -10 })}
       animate={{ opacity: 1, y: 0 }}
       transition={SPRING}
       className={cn(
         'relative shrink-0 overflow-hidden rounded-xl border px-4 py-2.5',
-        // Several open gates in one run is a real shape (13 open across the live database), and
-        // an unbounded strip would eat the canvas it is supposed to be pointing at.
+        // Several blocking gates in one run is a real shape, and an unbounded strip would eat
+        // the canvas it is supposed to be pointing at.
         'max-h-40 overflow-y-auto',
         // A phone's canvas is the scarcer one, so the budget tightens with it — and tightens
         // again in landscape, where vertical room is the whole fight.

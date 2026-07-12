@@ -43,7 +43,7 @@ import { useIsMobile } from '../viewport.tsx';
  *    dispatched with, the orchestrator's answer to a gate, and the final receipt are not messages at
  *    all — Orca injects a dispatch straight into the worker's PTY (SPEC §4.2, trap 2) — so they could
  *    never have appeared in it. Now both sides do.
- * 5. **The gate Q&A, answered ones included.** The node's ⛔ marker only ever shows an *open* gate;
+ * 5. **The gate Q&A, answered ones included.** The node's ⛔ marker only ever shows a *blocking* gate;
  *    an answered question is how you reconstruct the decision that sent the run the way it went.
  * 6. **Dependencies, in and out**, as chips that select the neighbour — the DAG, walked one hop at a
  *    time, without hunting for the node on the canvas.
@@ -59,7 +59,7 @@ import { useIsMobile } from '../viewport.tsx';
 
 export type InspectorProps = {
   task: Task;
-  /** **Every** gate this task raised — open and answered alike (`snapshot.gates`, #19). */
+  /** **Every** gate this task raised — blocking and history alike (`snapshot.gates`, #19). */
   gates: Gate[];
   /**
    * **Every task in the database**, not the canvas's — a dep is an id, and a person needs a title.
@@ -488,33 +488,37 @@ function dispatchTheme(status: string): StatusTheme {
 }
 
 /**
- * A question this task raised, and what was decided — **including a gate that was already
- * answered**, which is the point of showing it here at all. The node marks only an *open* gate;
- * the answer to a closed one is what tells you why the run went the way it did.
+ * A question this task raised, and what became of it — **including gates that are pure
+ * history**, which is the point of showing it here at all. The node marks only a *blocking*
+ * gate; the resolved, timed-out and unanswered ones live here, each worded as the fact it is
+ * (#45): a resolved gate keeps its answer, a timed-out one keeps its name, and a reply-less ask
+ * says **no answer was recorded** — never "waiting", which silence cannot prove.
  *
  * It never offers to answer: this tool does not write to the database (SPEC §1.2).
  */
 function GateQA({ gate }: { gate: Gate }) {
-  const open = gate.status === 'open';
+  // The one loud shape: a gate that is blocking *now* — the server's separate present-effect
+  // fact, whether from a pending row or a blocked task's unanswered ask (`server/gates.ts`).
+  const blocking = gate.blocking;
 
   return (
     <section
       data-testid="gate-qa"
       className={cn(
         'group/copy relative overflow-hidden rounded-lg border p-2.5 text-xs',
-        // An open question is the colour of a blocker; an answered one is history, and history
-        // is quiet.
-        open ? GATE_THEME.surface : 'bg-muted/40 text-foreground/80 border-panel-border/60'
+        // A blocking question is the colour of a blocker; everything else is history, and
+        // history is quiet.
+        blocking ? GATE_THEME.surface : 'bg-muted/40 text-foreground/80 border-panel-border/60'
       )}
       style={
-        open
+        blocking
           ? { boxShadow: '0 0 20px -10px color-mix(in oklch, var(--gate) 80%, transparent)' }
           : undefined
       }
     >
       <div className="relative flex items-start gap-1.5">
         <p className="flex min-w-0 flex-1 gap-1.5 font-semibold whitespace-pre-line">
-          {open && <OctagonAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
+          {blocking && <OctagonAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
           <span>{gate.question}</span>
         </p>
 
@@ -531,7 +535,7 @@ function GateQA({ gate }: { gate: Gate }) {
               key={option}
               className={cn(
                 'rounded-full border px-2 py-px text-[11px] font-medium max-lg:py-1',
-                open ? 'border-gate/60 bg-background/70' : 'bg-background'
+                blocking ? 'border-gate/60 bg-background/70' : 'bg-background'
               )}
             >
               {option}
@@ -541,16 +545,24 @@ function GateQA({ gate }: { gate: Gate }) {
       )}
 
       <p className="relative mt-1.5 text-[11px]">
-        {open ? (
-          <i>Waiting — nobody has answered this yet.</i>
-        ) : (
-          <>
-            <b>Answered:</b> <span className="whitespace-pre-line">{gate.resolution ?? '(no answer was recorded)'}</span>
-          </>
-        )}
+        <GateFate gate={gate} />
       </p>
     </section>
   );
+}
+
+/** The one line under the question: what the database records, and nothing it does not. */
+function GateFate({ gate }: { gate: Gate }) {
+  if (gate.status === 'resolved') {
+    return (
+      <>
+        <b>Answered:</b> <span className="whitespace-pre-line">{gate.resolution ?? '(no answer was recorded)'}</span>
+      </>
+    );
+  }
+  if (gate.blocking) return <i>Blocking — waiting for an answer.</i>;
+  if (gate.status === 'timeout') return <i>Timed out — no decision was recorded.</i>;
+  return <i>No answer recorded.</i>;
 }
 
 /**
