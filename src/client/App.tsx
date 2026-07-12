@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import type { Meta, Run, StreamEvent, Task } from '../shared/types.ts';
-import { livenessSentence } from '../shared/wording.ts';
+import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
+import { STATUS_COLORS } from './canvas/theme.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 
@@ -88,29 +89,37 @@ function Status({ meta }: { meta: Meta }) {
  * furniture, and furniture stops being read.
  */
 function Notices({ meta }: { meta: Meta }) {
+  const schema = schemaSentence(meta);
+
   return (
     <>
-      {meta.schemaSupport === 'newer' && (
-        <p role="status" data-state="schema-newer">
-          This database is from a newer Orca schema (v{meta.schemaVersion}) — some data may be missing or mislabeled.
-        </p>
+      {/*
+       * The schema banner (#21) — one banner for both directions of drift, because they are
+       * the same fact told from two sides: this database is not the one the build was written
+       * for. A newer Orca gets the warning and nothing else; an older one gets the list of
+       * what a missing column cost, so a badge that never renders is *explained* rather than
+       * looking like a bug. That is the whole point of `meta.degraded` reaching the screen.
+       */}
+      {schema !== null && (
+        <section role="status" data-state={`schema-${meta.schemaSupport}`} style={NOTICE_STYLE}>
+          <p style={{ margin: 0 }}>
+            {schema} <span style={{ opacity: 0.75 }}>(schema v{meta.schemaVersion})</span>
+          </p>
+
+          {meta.degraded.length > 0 && (
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {meta.degraded.map((feature) => (
+                <li key={feature}>{feature}</li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       {meta.resetDetected && (
-        <p role="status" data-state="reset">
+        <p role="status" data-state="reset" style={NOTICE_STYLE}>
           Some history is gone: an <code>orchestration reset</code> wiped messages this database once held.
         </p>
-      )}
-
-      {meta.degraded.length > 0 && (
-        <section data-state="degraded">
-          <h2>Reduced by an older Orca (schema v{meta.schemaVersion})</h2>
-          <ul>
-            {meta.degraded.map((feature) => (
-              <li key={feature}>{feature}</li>
-            ))}
-          </ul>
-        </section>
       )}
     </>
   );
@@ -139,3 +148,19 @@ function formatTime(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
 }
+
+/**
+ * The page's one colour for "read this before you believe the screen" — the amber a
+ * `dispatched` node already wears, *taken* from `canvas/theme.ts` rather than typed out again.
+ * Those colours were signed off on screen and retuning them is re-approval, not refactoring
+ * (theme.ts) — a second copy of the hex here is a copy that drifts out of that quietly.
+ */
+const NOTICE_STYLE = {
+  margin: '4px 0',
+  padding: '6px 10px',
+  border: `1px solid ${STATUS_COLORS.dispatched.border}`,
+  borderRadius: 4,
+  background: STATUS_COLORS.dispatched.bg,
+  color: STATUS_COLORS.dispatched.text,
+  fontSize: 12,
+};

@@ -71,17 +71,51 @@ describe('<App>', () => {
   });
 
   it('lists what an older Orca cost you, so a missing badge is explained rather than a bug', () => {
+    // Every feature, not the first one: this list *is* the explanation for an empty badge, and
+    // a truncated one sends the user hunting for a bug that is really a missing column (#21).
     render(
       <App
         event={event({
-          schemaVersion: 4,
+          schemaVersion: 3,
           schemaSupport: 'older',
-          degraded: ['Task titles — this Orca has no task_title/display_name column.'],
+          degraded: [
+            'Task titles — this Orca has no task_title/display_name column, so tasks are labelled by their short id.',
+            'Runs — this Orca has no created_by_terminal_handle column, so every task lands in Unattributed.',
+          ],
         })}
       />
     );
 
+    expect(screen.getByText(/older Orca schema/i)).toBeVisible();
     expect(screen.getByText(/Task titles/)).toBeVisible();
+    expect(screen.getByText(/Runs — this Orca has no created_by_terminal_handle/)).toBeVisible();
+    expect(screen.getByText(/schema v3/)).toBeVisible();
+  });
+
+  it('explains a lost feature even when the version number is the one it was built for', () => {
+    // The columns decide, not the version number (#21). An Orca that renamed a column — or
+    // dropped a table — carries a `user_version` this build calls supported and is still
+    // missing a feature. Gating the explanation on the *version* would leave exactly that
+    // user staring at an empty badge with nothing on screen to explain it, which is the bug
+    // `meta.degraded` exists to prevent.
+    render(
+      <App
+        event={event({
+          schemaSupport: 'supported',
+          degraded: ['The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.'],
+        })}
+      />
+    );
+
+    expect(screen.getByText(/"last seen" badge/)).toBeVisible();
+  });
+
+  it('says nothing about degradation when an older Orca happens to cost you nothing', () => {
+    // The version alone is not a problem — a missing *column* is. An older schema we read in
+    // full has no feature to name, and a banner over an empty list would be furniture.
+    render(<App event={event({ schemaVersion: 4, schemaSupport: 'older', degraded: [] })} />);
+
+    expect(screen.queryByText(/older Orca schema/i)).toBeNull();
   });
 
   it('explains a history that a reset wiped, rather than leaving it a mystery', () => {

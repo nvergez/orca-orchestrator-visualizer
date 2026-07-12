@@ -146,6 +146,51 @@ describe('booting', () => {
     expect(lines.join('\n')).toContain('connected to a running Orca (pid 4242)');
   });
 
+  /**
+   * The terminal gets the same truth as the page (#21). A user who starts the tool against an
+   * Orca it does not quite fit should learn that *here*, before they go hunting the browser
+   * for a badge that was never going to render.
+   */
+  it('names the features an older Orca cost you, rather than counting them', async () => {
+    const dbPath = new FixtureBuilder({ userVersion: 4 }).task({ createdAt: AT }).write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    const printed = lines.join('\n');
+    expect(printed).toContain('older Orca schema');
+    // Which feature, and what you get instead — not "1 feature(s) degraded".
+    expect(printed).toContain('Task titles');
+    expect(printed).toContain('short id');
+  });
+
+  it('warns that a newer Orca may be mislabeled, and starts anyway', async () => {
+    const dbPath = new FixtureBuilder({ userVersion: 6 }).task({ createdAt: AT }).write(tempDbPath());
+
+    const { lines, booted } = await run(['--db', dbPath, '--port', '0']);
+
+    expect(booted).not.toBeNull(); // A newer schema is a banner, never a refusal.
+    // The same sentence the page puts in its banner, written once in `shared/wording.ts`.
+    expect(lines.join('\n')).toContain('newer Orca schema — some data may be missing or mislabeled');
+  });
+
+  it('names a feature a missing column cost you even at the version it was built for', async () => {
+    // The columns decide, not the version number (#21): a v5 Orca that renamed or dropped one
+    // still costs a feature, and the terminal owes the user that as much as an older Orca does.
+    const dbPath = new FixtureBuilder({ omitColumns: { dispatch_contexts: ['last_heartbeat_at'] } })
+      .task({ createdAt: AT })
+      .write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    expect(lines.join('\n')).toContain('last seen');
+  });
+
+  it('says nothing about the schema when the schema is the one it was built for', async () => {
+    const { lines } = await run(['--db', fixtureDb(), '--port', '0']);
+
+    expect(lines.join('\n')).not.toMatch(/degraded|mislabeled/i);
+  });
+
   it('refuses a port that is taken rather than silently hopping to another one', async () => {
     const blocker = createServer();
     await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));

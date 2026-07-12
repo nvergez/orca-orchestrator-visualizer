@@ -66,6 +66,25 @@ export type SchemaOptions = {
 
 type Column = { name: string; type: string; constraints?: string };
 
+/**
+ * Orca's indexes, as `sqlite_master` has them. Each names the columns it covers, so a fixture
+ * at a version (or with an omission) that lacks one of them simply does not create it —
+ * `idx_messages_undelivered_inbox` is the real example: `delivered_at` arrived at v3, and the
+ * index arrived with it.
+ */
+const INDEXES: { name: string; table: TableName; columns: string[]; unique?: boolean }[] = [
+  { name: 'idx_tasks_status', table: 'tasks', columns: ['status'] },
+  { name: 'idx_tasks_parent', table: 'tasks', columns: ['parent_id'] },
+  { name: 'idx_dispatch_task', table: 'dispatch_contexts', columns: ['task_id'] },
+  { name: 'idx_dispatch_status', table: 'dispatch_contexts', columns: ['status'] },
+  { name: 'idx_messages_id', table: 'messages', columns: ['id'], unique: true },
+  { name: 'idx_inbox', table: 'messages', columns: ['to_handle', 'read'] },
+  { name: 'idx_thread', table: 'messages', columns: ['thread_id'] },
+  { name: 'idx_messages_undelivered_inbox', table: 'messages', columns: ['to_handle', 'read', 'delivered_at', 'sequence'] },
+  { name: 'idx_gates_task', table: 'decision_gates', columns: ['task_id'] },
+  { name: 'idx_gates_status', table: 'decision_gates', columns: ['status'] },
+];
+
 function check(column: string, values: string[], allowUnknownEnums: boolean): string {
   return allowUnknownEnums ? '' : `\n    CHECK(${column} IN (${values.map((v) => `'${v}'`).join(', ')}))`;
 }
@@ -191,22 +210,16 @@ export function schemaSql(options: SchemaOptions = {}): string {
     return `CREATE TABLE ${table} (\n${columns}\n);`;
   });
 
-  const indexes = [
-    'CREATE INDEX idx_tasks_status ON tasks(status);',
-    'CREATE INDEX idx_tasks_parent ON tasks(parent_id);',
-    'CREATE INDEX idx_dispatch_task ON dispatch_contexts(task_id);',
-    'CREATE INDEX idx_dispatch_status ON dispatch_contexts(status);',
-    'CREATE UNIQUE INDEX idx_messages_id ON messages(id);',
-    'CREATE INDEX idx_inbox ON messages(to_handle, read);',
-    'CREATE INDEX idx_thread ON messages(thread_id);',
-    'CREATE INDEX idx_gates_task ON decision_gates(task_id);',
-    'CREATE INDEX idx_gates_status ON decision_gates(status);',
-  ];
-  if (resolved.userVersion >= 3) {
-    indexes.push(
-      'CREATE INDEX idx_messages_undelivered_inbox ON messages(to_handle, read, delivered_at, sequence);'
-    );
-  }
+  // An index over a column this version does not have is not a thing Orca could ever have
+  // written, so it is not a thing the fixture writes either: an index is created only when
+  // every column it names is really there. Without this, asking for a database with (say) no
+  // `tasks.status` fails at CREATE INDEX — and the drift the test came to reproduce is
+  // unbuildable rather than merely unusual.
+  const present = new Map(TABLES.map((table) => [table, new Set(columnsOf(table, resolved))]));
+
+  const indexes = INDEXES.filter((index) =>
+    index.columns.every((column) => present.get(index.table)?.has(column))
+  ).map((index) => `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${index.name} ON ${index.table}(${index.columns.join(', ')});`);
 
   return [...tables, ...indexes, `PRAGMA user_version = ${resolved.userVersion};`].join('\n');
 }
