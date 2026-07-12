@@ -1,11 +1,9 @@
-import { createServer as createHttpServer, type Server } from 'node:http';
+import { createServer as createHttpServer, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-/** SPEC §6.4: one process, one port, serving the API and the frontend from dist/. */
-export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_PORT = 4269;
+import { DEFAULT_HOST } from './cli.ts';
+import type { OrcaDatabase } from './database.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
 export const CLIENT_DIR = fileURLToPath(new URL('../client', import.meta.url));
@@ -38,17 +36,28 @@ function resolveAsset(clientDir: string, urlPath: string): string | null {
 }
 
 export type ServerOptions = {
+  /** The database, already open and read-only. */
+  database: OrcaDatabase;
   /** Where the built frontend lives. Defaults to the bundle this package ships. */
   clientDir?: string;
 };
 
 /**
- * The web server. It serves the pre-built frontend; the JSON API and the SSE stream
- * are added by the tickets that own them (#14, #17).
+ * The web server: one process, one port, serving both the JSON API and the frontend.
+ *
+ * `GET /api/snapshot` is the whole API at this ticket — a one-shot `StreamEvent`, which
+ * makes the tool `curl`-debuggable and is the seam the server tests drive (#12). The SSE
+ * stream (#17) and `GET /api/task/:id` (#20) return the same shapes through the same code.
  */
-export function createServer({ clientDir = CLIENT_DIR }: ServerOptions = {}): Server {
+export function createServer({ database, clientDir = CLIENT_DIR }: ServerOptions): Server {
   return createHttpServer((req, res) => {
     const urlPath = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`).pathname;
+
+    if (urlPath === '/api/snapshot') {
+      sendSnapshot(database, res);
+      return;
+    }
+
     const filePath = resolveAsset(clientDir, urlPath === '/' ? '/index.html' : urlPath);
 
     if (!filePath) {
@@ -69,4 +78,20 @@ export function createServer({ clientDir = CLIENT_DIR }: ServerOptions = {}): Se
         res.end('Not found');
       });
   });
+}
+
+/**
+ * A snapshot can throw — the database can be deleted, or Orca can checkpoint it out from
+ * under a read. A 500 with the reason keeps the process up and tells the user which of
+ * those it was; a thrown exception here would take the whole tool down mid-poll.
+ */
+function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
+  try {
+    const body = JSON.stringify(database.snapshot());
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(body);
+  } catch (error) {
+    res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: (error as Error).message }));
+  }
 }

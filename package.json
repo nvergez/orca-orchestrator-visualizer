@@ -7,7 +7,11 @@
   "engines": {
     "node": ">=22.5"
   },
+  "bin": {
+    "orca-viz": "bin/orca-viz.mjs"
+  },
   "files": [
+    "bin",
     "dist"
   ],
   "scripts": {
