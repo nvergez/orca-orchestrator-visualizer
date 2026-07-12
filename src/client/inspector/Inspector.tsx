@@ -1,5 +1,7 @@
 import { Check, Copy, OctagonAlert, X } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
+import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -8,11 +10,12 @@ import { shortHandle } from '../../shared/handles.ts';
 import type { Dispatch, Gate, Task, TaskDetail } from '../../shared/types.ts';
 import { GATE_THEME, type StatusTheme, themeOf } from '../canvas/theme.ts';
 import { CHIP_CLASS } from '../chip.ts';
-import { DOCK_CLASS } from '../dock.ts';
 import { HeartbeatToggle } from '../feed/HeartbeatToggle.tsx';
 import { MessageRow } from '../feed/MessageRow.tsx';
 import { viewOf } from '../feed/select.ts';
+import { DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
 import { ageOf } from '../relative-time.ts';
+import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 
 /**
  * The whole story of one task (SPEC §7.8) — the panel that swaps in over the feed when a node is
@@ -27,9 +30,11 @@ import { ageOf } from '../relative-time.ts';
  * 2. **The spec** the agent was dispatched with, and **the result** that came back. Fetched on
  *    the click and never carried in a snapshot — 172 KB of prompt text on a live database (SPEC
  *    §6.3).
- * 3. **Every dispatch attempt**, in `rowid` order. `dispatch_contexts` is the only genuinely
- *    append-only per-task history in this schema: the node has room for the latest attempt and a
- *    retry count, and *this* is where the retry and circuit-breaker story is actually legible.
+ * 3. **Every dispatch attempt**, in `rowid` order, **as a timeline** (SPEC §7.9).
+ *    `dispatch_contexts` is the only genuinely append-only per-task history in this schema, and a
+ *    retry is a *sequence* — so it is drawn as one, down a rail, rather than as three cards that
+ *    happen to be stacked. The node has room for the latest attempt and a count; *this* is where
+ *    the retry and circuit-breaker story is actually legible.
  * 4. **The messages that named this task**, oldest first — a story, unlike the feed, which
  *    answers "what just happened" and so reads backwards.
  * 5. **The gate Q&A, answered ones included.** The node's ⛔ marker only ever shows an *open*
@@ -41,6 +46,10 @@ import { ageOf } from '../relative-time.ts';
  * Everything above the bodies comes from the **snapshot** and renders immediately: the header,
  * the gates and the chips are on the wire already (#15, #19), so the panel is useful before the
  * fetch lands and stays useful if the fetch fails.
+ *
+ * The sections **stagger in, top to bottom** — the order a post-mortem reads them, at 40 ms a
+ * step and capped at a quarter of a second. It is not decoration: it is the panel telling you
+ * where its top is, on a dock that has just replaced something else.
  */
 
 export type InspectorProps = {
@@ -89,11 +98,24 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
     [detail, showHeartbeats]
   );
 
+  // The stagger counts sections as they are *rendered*, not as they are declared: the error branch
+  // replaces four of them with one, and a hard-coded index would leave a hole in the sequence.
+  let step = 0;
+  const next = (): number => step++;
+
   return (
-    <aside data-testid="inspector" aria-label={`Task ${task.title}`} className={DOCK_CLASS}>
+    <motion.aside
+      data-testid="inspector"
+      aria-label={`Task ${task.title}`}
+      variants={DOCK_IN}
+      initial={enter('hidden')}
+      animate="shown"
+      transition={SPRING}
+      className={DOCK_CLASS}
+    >
       <Header task={task} onClose={onClose} />
 
-      {/* The same dock the feed wears (`dock.ts`) — it *is* the same dock — and the one thing
+      {/* The same dock the feed wears (`surface.ts`) — it *is* the same dock — and the one thing
           that is this panel's own: it scrolls as a whole, because a spec, an attempt history and
           a message list do not divide a fixed height between them in any honest way. */}
       <ScrollArea className="min-h-0 flex-1">
@@ -103,16 +125,16 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
           — and the sections below, which are the snapshot's, are unaffected and stay.
         */}
         {error !== null ? (
-          <Section title="Spec, result and attempts">
+          <Section title="Spec, result and attempts" index={next()}>
             <p className="text-destructive mt-1 text-[11px]">{error}</p>
           </Section>
         ) : (
           <>
-            <Section title="Spec">
+            <Section title="Spec" index={next()}>
               <Body text={detail?.spec ?? null} loading={detail === null} empty="No spec was dispatched with this task." />
             </Section>
 
-            <Section title="Result">
+            <Section title="Result" index={next()}>
               <Body
                 text={detail?.result ?? null}
                 loading={detail === null}
@@ -120,11 +142,11 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
               />
             </Section>
 
-            <Section title={attemptsTitle(detail?.attempts?.length ?? task.attemptCount)}>
+            <Section title={attemptsTitle(detail?.attempts?.length ?? task.attemptCount)} index={next()}>
               <Attempts attempts={detail?.attempts ?? null} loading={detail === null} now={now} />
             </Section>
 
-            <Section title="Messages">
+            <Section title="Messages" index={next()}>
               <div className="mt-2">
                 <HeartbeatToggle showHeartbeats={showHeartbeats} onChange={setShowHeartbeats} hidden={hidden} />
               </div>
@@ -134,7 +156,7 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
                   {detail === null ? 'Reading…' : 'No message ever mentioned this task.'}
                 </p>
               ) : (
-                <ol className="mt-2 -mx-4 border-t">
+                <ol className="border-panel-border/60 mt-2 -mx-4 border-t">
                   {/* Oldest first: a task's messages are a story, and a story starts at the beginning. */}
                   {shown.map((message) => (
                     <li key={message.sequence}>
@@ -148,7 +170,7 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
         )}
 
         {gates.length > 0 && (
-          <Section title={gates.length === 1 ? 'Decision gate' : `Decision gates (${gates.length})`}>
+          <Section title={gates.length === 1 ? 'Decision gate' : `Decision gates (${gates.length})`} index={next()}>
             <ul className="mt-2 flex flex-col gap-2">
               {gates.map((gate) => (
                 <li key={gate.id}>
@@ -159,7 +181,7 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
           </Section>
         )}
 
-        <Section title="Depends on">
+        <Section title="Depends on" index={next()}>
           <Deps
             testId="deps-in"
             ids={task.deps}
@@ -169,7 +191,7 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
           />
         </Section>
 
-        <Section title="Blocks">
+        <Section title="Blocks" index={next()}>
           <Deps
             testId="deps-out"
             ids={dependents}
@@ -179,7 +201,7 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
           />
         </Section>
       </ScrollArea>
-    </aside>
+    </motion.aside>
   );
 }
 
@@ -192,9 +214,19 @@ export function Inspector({ task, gates, tasks, detail, error, onClose, onSelect
  * (an `http://` origin that is not localhost has none).
  */
 function Header({ task, onClose }: { task: Task; onClose: () => void }) {
+  const theme = themeOf(task.status);
+
   return (
-    <header className="flex shrink-0 flex-col gap-2 border-b px-4 py-3">
-      <div className="flex items-start gap-2">
+    <header className={cn(PANEL_HEADER_CLASS, 'relative gap-2 overflow-hidden')}>
+      {/* The task's own status, as a wash behind its name — so the panel is *this* task's before
+          a word of it is read, the way the node it came from was. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.07]"
+        style={{ background: `radial-gradient(120% 100% at 0% 0%, ${theme.accent}, transparent 70%)` }}
+      />
+
+      <div className="relative flex items-start gap-2">
         <h2 className="min-w-0 flex-1 text-sm leading-snug font-semibold">{task.title}</h2>
 
         <Button
@@ -204,14 +236,14 @@ function Header({ task, onClose }: { task: Task; onClose: () => void }) {
           onClick={onClose}
           title="Close the inspector and go back to the feed"
           aria-label="Close the inspector"
-          className="text-muted-foreground -mt-1 -mr-1 size-7 shrink-0 cursor-pointer"
+          className="text-muted-foreground hover:text-foreground -mt-1 -mr-1 size-7 shrink-0 cursor-pointer"
         >
           <X className="size-4" />
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <StatusChip status={task.status} theme={themeOf(task.status)} />
+      <div className="relative flex flex-wrap items-center gap-1.5">
+        <StatusChip status={task.status} theme={theme} />
         {task.attemptCount > 1 && (
           <span data-testid="retry-marker" className="text-[11px] font-bold text-amber-700 dark:text-amber-400">
             ↻{task.attemptCount} attempts
@@ -289,7 +321,7 @@ function Body({ text, loading, empty }: { text: string | null; loading: boolean;
   return (
     <pre
       className={cn(
-        'bg-muted text-foreground/90 mt-2 rounded-md p-2.5 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap',
+        'bg-muted/60 text-foreground/90 border-panel-border/60 mt-2 rounded-lg border p-2.5 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap',
         // The agent wrote prose and it is read as prose — but a spec that is 4 KB of it must not
         // push the sections below it off the panel.
         'max-h-56 overflow-y-auto'
@@ -306,11 +338,14 @@ function attemptsTitle(count: number): string {
 }
 
 /**
- * **Every** attempt, oldest first — the ticket's whole reason for existing.
+ * **Every** attempt, oldest first — the ticket's whole reason for existing, drawn as the timeline
+ * it actually is (SPEC §7.9).
  *
  * The node badge shows the latest attempt because it has room for one. The rows it folded away
  * are the only record that this task was ever retried: who else held it, how many times it
- * failed, and whether the third attempt tripped the circuit breaker (Orca trips it at 3).
+ * failed, and whether the third attempt tripped the circuit breaker (Orca trips it at 3). Three
+ * stacked cards say "three things"; a rail with three stops on it says "this happened, then this,
+ * then this" — which is the fact.
  */
 function Attempts({ attempts, loading, now }: { attempts: Dispatch[] | null; loading: boolean; now: number }) {
   if (loading) return <p className="text-muted-foreground mt-1 text-[11px]">Reading…</p>;
@@ -319,42 +354,82 @@ function Attempts({ attempts, loading, now }: { attempts: Dispatch[] | null; loa
   }
 
   return (
-    <ol className="mt-2 flex flex-col gap-2">
+    <ol className="relative mt-2 flex flex-col gap-2">
       {attempts.map((dispatch, index) => (
-        <li key={dispatch.id || index} data-testid="attempt" className="bg-muted/40 rounded-md border p-2.5">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <b className="text-[11px] font-semibold">
-              Attempt {index + 1} of {attempts.length}
-            </b>
-
-            <StatusChip status={dispatch.status} theme={dispatchTheme(dispatch.status)} />
-
-            {dispatch.failureCount > 0 && (
-              <span data-testid="failure-count" className="text-[11px] font-bold text-red-700 dark:text-red-400">
-                ✗{dispatch.failureCount}
-              </span>
-            )}
-
-            {dispatch.assigneeHandle !== '' && (
-              <span
-                data-testid="assignee"
-                title={dispatch.assigneeHandle}
-                className="bg-foreground/85 text-background ml-auto rounded px-1.5 py-px font-mono text-[10px]"
-              >
-                {shortHandle(dispatch.assigneeHandle)}
-              </span>
-            )}
-          </div>
-
-          <dl className="text-muted-foreground mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
-            <Fact label="Dispatched" at={dispatch.dispatchedAt} now={now} />
-            <Fact label="Completed" at={dispatch.completedAt} now={now} />
-            <Fact label="Last failure" at={dispatch.lastFailure} now={now} />
-            <Fact label="Last seen" at={dispatch.lastHeartbeatAt} now={now} />
-          </dl>
-        </li>
+        <Attempt
+          key={dispatch.id || index}
+          dispatch={dispatch}
+          index={index}
+          total={attempts.length}
+          last={index === attempts.length - 1}
+          now={now}
+        />
       ))}
     </ol>
+  );
+}
+
+function Attempt({
+  dispatch,
+  index,
+  total,
+  last,
+  now,
+}: {
+  dispatch: Dispatch;
+  index: number;
+  total: number;
+  last: boolean;
+  now: number;
+}) {
+  const theme = dispatchTheme(dispatch.status);
+  const spotlight = useSpotlight();
+
+  return (
+    <li data-testid="attempt" className="relative pl-5">
+      {/* The rail, and this attempt's stop on it. The line does not run past the last one: a
+          timeline that continues after the end is a timeline promising something that never came. */}
+      <span aria-hidden className={cn('absolute top-1.5 left-[3px] size-2 rounded-full', theme.dot)} />
+      {!last && <span aria-hidden className="bg-border absolute top-4 bottom-[-0.5rem] left-[6px] w-px" />}
+
+      <div
+        className={cn('group bg-muted/40 border-panel-border/60 relative rounded-lg border p-2.5', 'overflow-hidden')}
+        {...spotlight}
+      >
+        <Spotlight colour={theme.accent} />
+
+        <div className="relative flex flex-wrap items-center gap-1.5">
+          <b className="text-[11px] font-semibold">
+            Attempt {index + 1} of {total}
+          </b>
+
+          <StatusChip status={dispatch.status} theme={theme} />
+
+          {dispatch.failureCount > 0 && (
+            <span data-testid="failure-count" className="text-[11px] font-bold text-red-700 dark:text-red-400">
+              ✗{dispatch.failureCount}
+            </span>
+          )}
+
+          {dispatch.assigneeHandle !== '' && (
+            <span
+              data-testid="assignee"
+              title={dispatch.assigneeHandle}
+              className="bg-foreground/85 text-background ml-auto rounded px-1.5 py-px font-mono text-[10px]"
+            >
+              {shortHandle(dispatch.assigneeHandle)}
+            </span>
+          )}
+        </div>
+
+        <dl className="text-muted-foreground relative mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+          <Fact label="Dispatched" at={dispatch.dispatchedAt} now={now} />
+          <Fact label="Completed" at={dispatch.completedAt} now={now} />
+          <Fact label="Last failure" at={dispatch.lastFailure} now={now} />
+          <Fact label="Last seen" at={dispatch.lastHeartbeatAt} now={now} />
+        </dl>
+      </div>
+    </li>
   );
 }
 
@@ -404,19 +479,24 @@ function GateQA({ gate }: { gate: Gate }) {
     <section
       data-testid="gate-qa"
       className={cn(
-        'rounded-lg border p-2.5 text-xs',
+        'relative overflow-hidden rounded-lg border p-2.5 text-xs',
         // An open question is the colour of a blocker; an answered one is history, and history
         // is quiet.
-        open ? GATE_THEME.surface : 'bg-muted/40 text-foreground/80'
+        open ? GATE_THEME.surface : 'bg-muted/40 text-foreground/80 border-panel-border/60'
       )}
+      style={
+        open
+          ? { boxShadow: '0 0 20px -10px color-mix(in oklch, var(--gate) 80%, transparent)' }
+          : undefined
+      }
     >
-      <p className="flex gap-1.5 font-semibold whitespace-pre-line">
+      <p className="relative flex gap-1.5 font-semibold whitespace-pre-line">
         {open && <OctagonAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
         <span>{gate.question}</span>
       </p>
 
       {gate.options.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="relative mt-1.5 flex flex-wrap gap-1">
           {gate.options.map((option) => (
             <span
               key={option}
@@ -431,7 +511,7 @@ function GateQA({ gate }: { gate: Gate }) {
         </div>
       )}
 
-      <p className="mt-1.5 text-[11px]">
+      <p className="relative mt-1.5 text-[11px]">
         {open ? (
           <i>Waiting — nobody has answered this yet.</i>
         ) : (
@@ -501,11 +581,21 @@ function Deps({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/**
+ * One section, and its place in the order the panel arrives in. The `index` is the stagger's, and
+ * it is handed in rather than counted here: a section does not know what came before it.
+ */
+function Section({ title, index, children }: { title: string; index: number; children: React.ReactNode }) {
   return (
-    <section className="border-b px-4 py-3 last:border-b-0">
-      <h3 className="text-muted-foreground text-[10px] font-semibold tracking-widest uppercase">{title}</h3>
+    <motion.section
+      custom={index}
+      variants={SECTION_IN}
+      initial={enter('hidden')}
+      animate="shown"
+      className="border-panel-border/60 border-b px-4 py-3 last:border-b-0"
+    >
+      <h3 className={cn(PANEL_TITLE_CLASS, 'text-[10px]')}>{title}</h3>
       {children}
-    </section>
+    </motion.section>
   );
 }

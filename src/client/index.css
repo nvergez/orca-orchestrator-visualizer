@@ -2,9 +2,9 @@
 @import 'tw-animate-css';
 
 /**
- * The page's whole vocabulary of colour, in one file.
+ * The page's whole vocabulary of colour, depth and movement, in one file.
  *
- * Two palettes live here and they do different jobs:
+ * Three palettes live here and they do different jobs:
  *
  * 1. **The shell** — background, foreground, border, muted, accent. shadcn's tokens, in a
  *    neutral zinc. It is furniture: it should be legible and then get out of the way, because
@@ -15,11 +15,16 @@
  *    and they hold the one rule that matters — the *accent* is the same in both themes, because
  *    it is the colour a node's border, a minimap dot and a pulse all wear, and a green that
  *    changed with the theme would be two greens.
+ * 3. **The field** (SPEC §7.9) — the surface the panels float on, and the depth that lifts them
+ *    off it. This is the layer that makes the tool read as an instrument rather than a document:
+ *    a dark field, a fine grid, a vignette, and panels that are lit objects standing on top of it
+ *    rather than regions divided from it by a 1px line.
  *
  * They are CSS variables rather than TypeScript constants because the theme has to be able to
  * flip under the whole page at once. `canvas/theme.ts` is the seam that hands them to the
- * components: class names for anything Tailwind can paint, `var(--…)` values for the two places
- * that need a colour and not a class — React Flow's minimap fill, and the pulse's box-shadow.
+ * components: class names for anything Tailwind can paint, `var(--…)` values for the three places
+ * that need a colour and not a class — React Flow's minimap fill, the pulse's box-shadow, and the
+ * conic ring of a node with an agent working on it.
  */
 
 @custom-variant dark (&:is(.dark *));
@@ -79,26 +84,62 @@
   --gate: #f97316;
   --gate-soft: #ffedd5;
   --gate-ink: #9a3412;
+
+  /**
+   * The field, and the panels that stand on it (SPEC §7.9).
+   *
+   * `--field` is the page *behind* everything — never the colour of a panel. In light it is a
+   * cool paper grey, so a white panel has something to be white *against*; a white panel on a
+   * white page is not a panel, it is a region.
+   */
+  --field: oklch(0.955 0.003 286.3);
+  --field-glow: oklch(0.62 0.19 259.8 / 0.06);
+  --panel: oklch(1 0 0 / 0.86);
+  --panel-solid: oklch(1 0 0);
+  --panel-border: oklch(0.9 0.004 286.3);
+  --grid-line: oklch(0.21 0.006 285.9 / 0.045);
+
+  /* Depth, in three steps. Panels are lit objects: a shadow is how you know they are on top. */
+  --lift-1: 0 1px 2px oklch(0.21 0.006 285.9 / 0.05), 0 1px 1px oklch(0.21 0.006 285.9 / 0.04);
+  --lift-2:
+    0 2px 4px oklch(0.21 0.006 285.9 / 0.04), 0 6px 16px -4px oklch(0.21 0.006 285.9 / 0.08),
+    0 0 0 1px oklch(0.21 0.006 285.9 / 0.03);
+  --lift-3:
+    0 4px 8px oklch(0.21 0.006 285.9 / 0.04), 0 16px 40px -8px oklch(0.21 0.006 285.9 / 0.12),
+    0 0 0 1px oklch(0.21 0.006 285.9 / 0.04);
+
+  /* How bright a status glow burns. Dark can afford light; light cannot. */
+  --glow-strength: 0.42;
+  --spotlight-strength: 0.1;
+
+  /**
+   * The 1px highlight along the top edge of a card — what makes a fill read as a *surface
+   * catching light* rather than a coloured rectangle. It is what a task node has instead of a
+   * border (SPEC §7.5), and it is a *white* line in both themes, because in both themes the
+   * light is coming from above.
+   */
+  --sheen: oklch(1 0 0 / 0.75);
 }
 
 .dark {
-  --background: oklch(0.165 0.004 285.8);
+  /* Deeper and slightly blue: a control surface, not a grey document with the lights off. */
+  --background: oklch(0.155 0.006 274);
   --foreground: oklch(0.96 0.001 286.4);
-  --card: oklch(0.205 0.006 285.9);
+  --card: oklch(0.205 0.008 274);
   --card-foreground: oklch(0.96 0.001 286.4);
-  --popover: oklch(0.225 0.006 285.9);
+  --popover: oklch(0.225 0.008 274);
   --popover-foreground: oklch(0.96 0.001 286.4);
   --primary: oklch(0.92 0.004 286.3);
   --primary-foreground: oklch(0.21 0.006 285.9);
-  --secondary: oklch(0.27 0.006 286.0);
+  --secondary: oklch(0.27 0.008 274);
   --secondary-foreground: oklch(0.96 0.001 286.4);
-  --muted: oklch(0.25 0.006 286.0);
-  --muted-foreground: oklch(0.68 0.012 286.1);
-  --accent: oklch(0.29 0.007 286.0);
+  --muted: oklch(0.25 0.008 274);
+  --muted-foreground: oklch(0.7 0.014 280);
+  --accent: oklch(0.29 0.01 274);
   --accent-foreground: oklch(0.96 0.001 286.4);
   --destructive: oklch(0.66 0.2 25.3);
-  --border: oklch(0.3 0.007 286.0);
-  --input: oklch(0.32 0.008 286.0);
+  --border: oklch(0.32 0.009 274);
+  --input: oklch(0.34 0.01 274);
   --ring: oklch(0.62 0.19 259.8);
 
   --selection: oklch(0.62 0.19 259.8);
@@ -124,6 +165,24 @@
 
   --gate-soft: #431407;
   --gate-ink: #fed7aa;
+
+  /* The field goes *darker* than any panel on it — the panels are what the light is on. */
+  --field: oklch(0.115 0.008 274);
+  --field-glow: oklch(0.62 0.19 259.8 / 0.1);
+  --panel: oklch(0.205 0.008 274 / 0.72);
+  --panel-solid: oklch(0.205 0.008 274);
+  --panel-border: oklch(0.32 0.009 274);
+  --grid-line: oklch(0.96 0.001 286.4 / 0.035);
+
+  --lift-1: 0 1px 2px oklch(0 0 0 / 0.4);
+  --lift-2: 0 2px 6px oklch(0 0 0 / 0.35), 0 8px 24px -6px oklch(0 0 0 / 0.5), 0 0 0 1px oklch(1 0 0 / 0.03);
+  --lift-3: 0 4px 10px oklch(0 0 0 / 0.4), 0 20px 50px -10px oklch(0 0 0 / 0.65), 0 0 0 1px oklch(1 0 0 / 0.04);
+
+  --glow-strength: 0.85;
+  --spotlight-strength: 0.16;
+
+  /* Far weaker: a white line at 75% on a dark card is a scratch, not a highlight. */
+  --sheen: oklch(1 0 0 / 0.07);
 }
 
 @theme inline {
@@ -176,6 +235,15 @@
   --color-gate-soft: var(--gate-soft);
   --color-gate-ink: var(--gate-ink);
 
+  --color-field: var(--field);
+  --color-panel: var(--panel);
+  --color-panel-solid: var(--panel-solid);
+  --color-panel-border: var(--panel-border);
+
+  --shadow-lift-1: var(--lift-1);
+  --shadow-lift-2: var(--lift-2);
+  --shadow-lift-3: var(--lift-3);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -199,7 +267,8 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply text-foreground font-sans antialiased;
+    background-color: var(--field);
     /* A tool, not a document: the page never scrolls — its panels do. */
     @apply overflow-hidden;
   }
@@ -208,6 +277,34 @@
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Movement (SPEC §7.9).
+ *
+ * Every animation in this file is here because it *says* something. The rule the
+ * whole system is built on: **if it moves, it is happening.** A node that spins a
+ * ring has an agent inside it right now; a dot that pings is a run that is still
+ * going; a strip that breathes is a question nobody has answered. Everything else
+ * on this page holds perfectly still, which is what makes the moving things worth
+ * looking at.
+ * ────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The angle a conic gradient is drawn from. Registered, because an unregistered custom
+ * property is a *string* to the animation engine and a string cannot be interpolated —
+ * this is the one declaration that makes `--orca-angle` a number that can be tweened.
+ */
+@property --orca-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes orca-angle {
+  to {
+    --orca-angle: 360deg;
   }
 }
 
@@ -225,43 +322,183 @@
   }
 }
 
+/** The radar sweep under a live dot: two rings, out of phase, so it reads as a repeating sweep. */
+@keyframes orca-radar {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+/** The slow drift of the aurora behind an open decision gate — a thing that is *waiting*. */
+@keyframes orca-drift {
+  0%,
+  100% {
+    transform: translate3d(-8%, 0, 0) scale(1.1);
+  }
+  50% {
+    transform: translate3d(8%, -6%, 0) scale(1.25);
+  }
+}
+
+/** A sweep of light across a surface: the splash, and text that is still loading. */
+@keyframes orca-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/** The beams behind the splash — light falling, at three different speeds. */
+@keyframes orca-beam {
+  0% {
+    transform: translateY(-100%) scaleY(0.4);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(220%) scaleY(1);
+    opacity: 0;
+  }
+}
+
 /**
- * React Flow paints its chrome from its own custom properties. Handing it ours is what keeps the
- * canvas from being a white rectangle sitting in a dark page — and it is the only styling this
- * file does on someone else's component.
+ * The ring around a node an agent is working inside — the signature of the whole canvas.
+ *
+ * A masked conic gradient, so it is a *ring* and not a square: the element is painted with a
+ * spinning gradient, then everything but its 1.5px padding band is masked away. Wrapped in a
+ * `@supports` because a browser without mask compositing would paint the square — a broken node
+ * is worse than a still one, so the still one is what it degrades to.
  */
+.orca-alive {
+  position: absolute;
+  /* Outside the card, not on it. The node has no border to sit on any more (SPEC §7.5) — so this
+     is the one hard edge a task can wear, and it wears it only while an agent is inside. */
+  inset: -3px;
+  border-radius: calc(var(--radius-xl) + 3px);
+  pointer-events: none;
+}
+
+@supports ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
+  .orca-alive {
+    padding: 1.5px;
+    background: conic-gradient(
+      from var(--orca-angle),
+      transparent 0deg,
+      var(--orca-alive-colour) 45deg,
+      transparent 110deg,
+      transparent 180deg,
+      var(--orca-alive-colour) 225deg,
+      transparent 290deg
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: orca-angle 2.6s linear infinite;
+  }
+}
+
+/**
+ * The cursor-follow highlight on a card (SPEC §7.9). The card writes `--mx`/`--my` straight onto
+ * its own style on `mousemove` — no React state, because a re-render per pixel of pointer travel
+ * across a 72-node canvas is not a thing this tool is going to do.
+ */
+.orca-spotlight {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  background: radial-gradient(
+    220px circle at var(--mx, 50%) var(--my, 50%),
+    color-mix(in oklch, var(--orca-spotlight-colour, var(--foreground)) calc(var(--spotlight-strength) * 100%), transparent),
+    transparent 65%
+  );
+}
+
+.group:hover > .orca-spotlight {
+  opacity: 1;
+}
+
+/**
+ * Nothing moves for a reader who asked for nothing to move. Every animation above is decoration
+ * *over* a fact that is already legible without it — the status is a colour and a word, the live
+ * run is a green dot, the gate is an octagon — so turning them all off costs no information.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * React Flow's chrome, painted from ours.
+ * ────────────────────────────────────────────────────────────────────────────── */
+
 .react-flow {
-  --xy-background-color: var(--background);
-  --xy-edge-stroke: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  --xy-background-color: transparent;
+  --xy-edge-stroke: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
   --xy-edge-stroke-selected: var(--selection);
   --xy-handle-background-color: var(--muted-foreground);
   --xy-handle-border-color: var(--background);
-  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color: var(--panel-solid);
   --xy-controls-button-background-color-hover: var(--accent);
   --xy-controls-button-color: var(--foreground);
   --xy-controls-button-color-hover: var(--foreground);
-  --xy-controls-button-border-color: var(--border);
-  --xy-minimap-background-color: var(--card);
-  --xy-minimap-mask-background-color: color-mix(in oklch, var(--muted) 65%, transparent);
+  --xy-controls-button-border-color: var(--panel-border);
+  --xy-minimap-background-color: var(--panel-solid);
+  --xy-minimap-mask-background-color: color-mix(in oklch, var(--field) 70%, transparent);
   --xy-attribution-background-color: transparent;
 }
 
 .react-flow__controls {
-  @apply overflow-hidden rounded-lg border shadow-sm;
+  @apply overflow-hidden rounded-xl border;
+  border-color: var(--panel-border);
+  box-shadow: var(--lift-2);
 }
 
 .react-flow__controls-button {
-  @apply border-border border-b-[1px];
+  border-bottom-width: 1px;
+  border-color: var(--panel-border);
 }
 
 .react-flow__minimap {
-  @apply rounded-lg border shadow-sm;
+  @apply rounded-xl border;
+  border-color: var(--panel-border);
+  box-shadow: var(--lift-2);
 }
 
 .react-flow__background-pattern {
-  color: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+  color: color-mix(in oklch, var(--muted-foreground) 26%, transparent);
 }
 
 .react-flow__attribution {
   @apply hidden;
+}
+
+/** A node's shadow is React Flow's by default; ours is the node's own, and the two would stack. */
+.react-flow__node {
+  box-shadow: none !important;
 }

@@ -10,15 +10,17 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../feed/theme.ts';
+import { PANEL_CLASS } from '../surface.ts';
 import { buildGraph, type Edge, type Graph } from './graph.ts';
 import { layoutGraph, type Placement } from './layout.ts';
 import { TaskNode, type TaskFlowNode } from './TaskNode.tsx';
-import { NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
+import { isAlive, NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
 
 /**
  * The DAG — one run of it (#16), because every task in the database as one graph is 76 nodes of
@@ -31,9 +33,16 @@ import { NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
  * - **The edgeless task set.** 4 of 13 real runs have no dependencies at all. It gets the
  *   grid and a one-liner that describes the orchestration honestly, rather than an empty
  *   canvas that looks broken (SPEC §7.5).
+ *
+ * The canvas is a **panel on the field** (SPEC §7.9): opaque, where the rail and the dock beside it
+ * are glass. It is the one surface here you are meant to look *into* rather than at, and a
+ * translucent workspace with the page's own grid showing through it would be two grids.
  */
 
 const NODE_TYPES = { task: TaskNode };
+
+/** The floating chrome inside the canvas — the isolated toggle, the edgeless note. Glass, lifted. */
+const CANVAS_CHIP_CLASS = 'bg-panel border-panel-border shadow-lift-2 rounded-full border backdrop-blur-xl';
 
 export type CanvasProps = {
   tasks: Task[];
@@ -76,7 +85,9 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
   if (tasks.length === 0) {
     return (
       <Empty>
-        <p role="status">No tasks in this database yet — nothing has been dispatched.</p>
+        <p role="status" className="max-w-sm text-balance">
+          No tasks in this database yet — nothing has been dispatched.
+        </p>
       </Empty>
     );
   }
@@ -84,13 +95,15 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
   if (!placements) {
     return (
       <Empty>
-        <p role="status">Laying out {tasks.length} tasks…</p>
+        <p role="status" className="max-w-sm text-balance">
+          Laying out {tasks.length} tasks…
+        </p>
       </Empty>
     );
   }
 
   return (
-    <section data-testid="canvas" className="h-full w-full">
+    <section data-testid="canvas" className={cn(PANEL_CLASS, 'bg-panel-solid h-full w-full overflow-hidden')}>
       <ReactFlow<TaskFlowNode>
         nodes={nodes}
         edges={edges}
@@ -107,17 +120,19 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
         <Controls showInteractive={false} />
-        <MiniMap<TaskFlowNode> pannable zoomable nodeColor={(node) => themeOf(node.data.task.status).accent} />
+        <MiniMap<TaskFlowNode>
+          pannable
+          zoomable
+          nodeColor={(node) => themeOf(node.data.task.status).accent}
+          nodeBorderRadius={3}
+        />
 
         {/* Inside `<ReactFlow>`, because that is where its viewport context lives. */}
         <CentreOnSelection selectedTaskId={selectedTaskId} nodes={nodes} />
 
         {graph.edges.length === 0 && (
           <Panel position="top-center">
-            <p
-              data-testid="edgeless-note"
-              className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1 text-xs shadow-sm backdrop-blur"
-            >
+            <p data-testid="edgeless-note" className={cn(CANVAS_CHIP_CLASS, 'text-muted-foreground px-3.5 py-1.5 text-xs')}>
               No dependencies in this run — {tasks.length} tasks dispatched independently.
             </p>
           </Panel>
@@ -131,7 +146,7 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
               size="sm"
               onClick={() => setShowIsolated((shown) => !shown)}
               aria-expanded={showIsolated}
-              className="bg-card/90 h-7 gap-1 rounded-full px-3 text-xs shadow-sm backdrop-blur"
+              className={cn(CANVAS_CHIP_CLASS, 'hover:bg-accent h-7 gap-1 px-3 text-xs')}
             >
               {showIsolated ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
               Isolated tasks ({graph.isolated.length})
@@ -143,14 +158,38 @@ export function Canvas({ tasks, selectedTaskId, onSelectTask, pulses }: CanvasPr
   );
 }
 
-/** The canvas with nothing to draw on it: still the canvas, and still says why. */
+/**
+ * The canvas with nothing to draw on it: still the canvas, and still says why.
+ *
+ * It keeps the panel and the grid — an empty *workspace* is what this is, and a bare sentence
+ * floating on the page would read as a screen that failed to load rather than a run with no
+ * tasks in it.
+ */
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <section
       data-testid="canvas"
-      className="text-muted-foreground flex h-full w-full items-center justify-center p-6 text-sm"
+      className={cn(
+        PANEL_CLASS,
+        'bg-panel-solid text-muted-foreground relative flex h-full w-full items-center justify-center overflow-hidden p-6 text-center text-sm'
+      )}
     >
-      {children}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            'radial-gradient(circle, color-mix(in oklch, var(--muted-foreground) 26%, transparent) 1px, transparent 1px)',
+          backgroundSize: '20px 20px',
+        }}
+      />
+
+      <div className="relative flex flex-col items-center gap-3">
+        <span className="bg-muted text-muted-foreground flex size-9 items-center justify-center rounded-xl">
+          <Waypoints className="size-4.5" />
+        </span>
+        {children}
+      </div>
     </section>
   );
 }
@@ -217,13 +256,20 @@ function toNodes(
   const now = Date.now();
   const shown = showIsolated ? [...graph.connected, ...graph.isolated] : graph.connected;
 
-  return shown.map((task) => ({
+  return shown.map((task, index) => ({
     id: task.id,
     type: 'task' as const,
     position: { x: at.get(task.id)?.x ?? 0, y: at.get(task.id)?.y ?? 0 },
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
-    data: { task, now, selected: task.id === selectedTaskId, pulse: pulses.get(task.id) ?? null },
+    data: {
+      task,
+      now,
+      selected: task.id === selectedTaskId,
+      pulse: pulses.get(task.id) ?? null,
+      // The draw order, so the graph resolves top-down rather than all at once (`motion.ts`).
+      index,
+    },
     draggable: false,
   }));
 }
@@ -238,7 +284,7 @@ function toEdges(edges: Edge[], tasks: Task[]): FlowEdge[] {
   const status = new Map(tasks.map((task) => [task.id, task.status]));
 
   return edges.map((edge) => {
-    const inFlight = status.get(edge.target) === 'dispatched';
+    const inFlight = isAlive(status.get(edge.target) ?? '');
 
     return {
       id: edge.id,
@@ -246,7 +292,7 @@ function toEdges(edges: Edge[], tasks: Task[]): FlowEdge[] {
       target: edge.target,
       animated: inFlight,
       style: {
-        strokeWidth: 1.5,
+        strokeWidth: inFlight ? 2 : 1.5,
         strokeDasharray: inFlight ? '6 4' : undefined,
         // The one edge with something to say says it in the colour of the thing it is saying:
         // work is in flight into this task, and `dispatched` is what that looks like everywhere

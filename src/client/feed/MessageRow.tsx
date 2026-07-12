@@ -1,10 +1,13 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useState } from 'react';
+import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import { taskIdOf } from '../../shared/payload.ts';
 import type { FeedMessage } from '../../shared/types.ts';
+import { EASE, enter } from '../motion.ts';
 import { ageOf } from '../relative-time.ts';
 import { themeOfMessage } from './theme.ts';
 
@@ -21,6 +24,11 @@ import { themeOfMessage } from './theme.ts';
  * takes you to the task it names, and in the inspector there is nowhere to go — you are already
  * standing on that task. No handler, no button.
  *
+ * The row carries **its type's colour on its left edge** (SPEC §7.9) — the same accent the chip
+ * wears, and the same accent the node it names will flash in when the message lands (#18). It is a
+ * 2px bar and it is worth its width: it is what lets a red escalation be *found* in a scroll of a
+ * hundred grey rows without any of them being read.
+ *
  * `read` and `delivered_at` are rendered nowhere: internal mailbox bookkeeping, not orchestration
  * semantics (SPEC §6.3), and the server does not even put them on the wire.
  */
@@ -36,6 +44,7 @@ export type MessageRowProps = {
 export function MessageRow({ message, now, onSelect }: MessageRowProps) {
   const [expanded, setExpanded] = useState(false);
   const theme = themeOfMessage(message.type);
+  const spotlight = useSpotlight();
 
   // The writer named a task and the server could not find it: the reference is broken, and the
   // row says so rather than looking like a message that never referred to anything.
@@ -48,9 +57,18 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
       data-type={message.type}
       data-sequence={message.sequence}
       data-task={message.taskId ?? undefined}
-      className="hover:bg-muted/40 border-b px-4 py-2.5 text-xs transition-colors last:border-b-0"
+      className="group border-panel-border/60 relative border-b px-4 py-2.5 text-xs last:border-b-0"
+      {...spotlight}
     >
-      <div className="flex items-center gap-1.5">
+      {/* The type, as a colour, at the edge of the row — read before the chip beside it is. */}
+      <span
+        aria-hidden
+        className={cn('absolute inset-y-0 left-0 w-[2px] opacity-0 transition-opacity group-hover:opacity-100', theme.dot)}
+      />
+
+      <Spotlight colour={theme.accent} />
+
+      <div className="relative flex items-center gap-1.5">
         {/* The raw type string, whatever it is — an Orca that invents one still names a real
             event, and it is rendered neutral rather than dropped (SPEC §5). */}
         <Badge
@@ -71,7 +89,7 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
         <Age at={message.createdAt} now={now} />
       </div>
 
-      <div className="mt-1">
+      <div className="relative mt-1">
         {linked ? (
           <button
             type="button"
@@ -103,21 +121,35 @@ export function MessageRow({ message, now, onSelect }: MessageRowProps) {
             type="button"
             aria-expanded={expanded}
             onClick={() => setExpanded(!expanded)}
-            className="text-muted-foreground hover:text-foreground mt-1 flex cursor-pointer items-center gap-0.5 text-[11px] transition-colors"
+            className="text-muted-foreground hover:text-foreground relative mt-1 flex cursor-pointer items-center gap-0.5 text-[11px] transition-colors"
           >
             {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             details
           </button>
 
+          {/*
+            No exit animation, and no `AnimatePresence`: the body is *gone* the moment you fold it
+            away, because the click is the answer and a fold that lingers is a fold that has to be
+            waited out. It arrives with a height, though — a panel that grew instantly would take
+            the rows beneath it with it before the eye could follow where they went.
+          */}
           {expanded && (
-            <div data-testid="feed-details" className="mt-1.5">
-              {message.body !== '' && <p className="text-foreground/80 whitespace-pre-wrap">{message.body}</p>}
-              {message.payload !== null && (
-                <pre className="bg-muted text-muted-foreground mt-1.5 overflow-x-auto rounded-md p-2 font-mono text-[10px]">
-                  {JSON.stringify(message.payload, null, 2)}
-                </pre>
-              )}
-            </div>
+            <motion.div
+              data-testid="feed-details"
+              initial={enter({ opacity: 0, height: 0 })}
+              animate={{ opacity: 1, height: 'auto' }}
+              transition={EASE}
+              className="relative overflow-hidden"
+            >
+              <div className="mt-1.5">
+                {message.body !== '' && <p className="text-foreground/80 whitespace-pre-wrap">{message.body}</p>}
+                {message.payload !== null && (
+                  <pre className="bg-muted/70 text-muted-foreground mt-1.5 overflow-x-auto rounded-md p-2 font-mono text-[10px]">
+                    {JSON.stringify(message.payload, null, 2)}
+                  </pre>
+                )}
+              </div>
+            </motion.div>
           )}
         </>
       )}

@@ -1,5 +1,8 @@
 import { Database, Moon, Sun, Waypoints } from 'lucide-react';
+import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useState } from 'react';
+import { Beams } from '@/components/fx/beams';
+import { RadarDot } from '@/components/fx/radar-dot';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -13,8 +16,10 @@ import { Feed } from './feed/Feed.tsx';
 import { GateStrip } from './gates/GateStrip.tsx';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
+import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
+import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 
 /**
@@ -52,6 +57,11 @@ import { useThemeMode } from './theme-mode.ts';
  * inspector while a task is selected — never both stacked, because at this node count the canvas
  * deserves the width. Which is why the selection lives here and not in either of them: it is the
  * thing that decides *which panel exists*.
+ *
+ * **And it is a field with panels on it, not a page with rules drawn across it** (SPEC §7.9). The
+ * panels float, the field shows through the gaps, and `reducedMotion="user"` is set once, here,
+ * so that a reader who has asked their machine for stillness gets a completely still tool without
+ * a single component having to remember to check.
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
@@ -163,62 +173,82 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   if (!event) return <Connecting />;
 
   return (
-    <main className="flex h-full flex-col">
-      <TopBar meta={event.meta} />
+    // One switch, at the top, for a reader who has asked their machine to hold still. Every
+    // transform animation below it stops being a transform; nothing has to opt in.
+    <MotionConfig reducedMotion="user">
+      <main className={FIELD_CLASS}>
+        <Backdrop />
 
-      <Notices meta={event.meta} />
+        <TopBar meta={event.meta} />
 
-      <div className="flex min-h-0 flex-1">
-        <RunRail
-          runs={runs}
-          coordinatorRuns={event.snapshot.coordinatorRuns}
-          selectedId={selected?.id ?? null}
-          onSelect={selectRun}
-          newRunId={newRunId}
-        />
+        <Notices meta={event.meta} />
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/*
-            Above the canvas, and only while something is blocked (#19). It is not a panel in
-            the dock and it is not a tab: a question that has stopped your orchestration has to
-            be in your way, or it is a question you will not see until you go looking for it —
-            and you go looking for it only once you have already noticed nothing is moving.
-          */}
-          <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
-
-          <div className="min-h-0 flex-1">
-            <Canvas
-              tasks={tasks}
-              selectedTaskId={selectedTask?.id ?? null}
-              onSelectTask={selectTask}
-              pulses={pulses}
-            />
-          </div>
-        </div>
-
-        {/*
-          One panel, and it swaps (SPEC §7.1). A selected task is the whole of the condition:
-          the inspector is what a selection *is* on screen, and letting the task go is what
-          brings the feed back.
-        */}
-        {selectedTask ? (
-          <Inspector
-            task={selectedTask}
-            gates={taskGates}
-            // Every task, not the canvas's: a dep chip that could not see across an inferred run
-            // would call a task that is sitting right there in the database deleted.
-            tasks={allTasks}
-            detail={detail}
-            error={detailError}
-            onClose={() => setSelectedTaskId(null)}
-            onSelectTask={showTask}
+        <div className="flex min-h-0 flex-1 gap-2">
+          <RunRail
+            runs={runs}
+            coordinatorRuns={event.snapshot.coordinatorRuns}
+            selectedId={selected?.id ?? null}
+            onSelect={selectRun}
+            newRunId={newRunId}
           />
-        ) : (
-          <Feed messages={messages} runId={selected?.id ?? null} onSelectMessage={selectMessage} />
-        )}
-      </div>
-    </main>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            {/*
+              Above the canvas, and only while something is blocked (#19). It is not a panel in
+              the dock and it is not a tab: a question that has stopped your orchestration has to
+              be in your way, or it is a question you will not see until you go looking for it —
+              and you go looking for it only once you have already noticed nothing is moving.
+            */}
+            <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
+
+            <div className="min-h-0 flex-1">
+              <Canvas
+                tasks={tasks}
+                selectedTaskId={selectedTask?.id ?? null}
+                onSelectTask={selectTask}
+                pulses={pulses}
+              />
+            </div>
+          </div>
+
+          {/*
+            One panel, and it swaps (SPEC §7.1). A selected task is the whole of the condition:
+            the inspector is what a selection *is* on screen, and letting the task go is what
+            brings the feed back.
+
+            Deliberately **no exit animation**: the panel that is leaving has nothing left to say,
+            and a dock that stayed empty for 200 ms on every click would put a stutter between a
+            node and its own story. The one that arrives animates; the one that goes, goes.
+          */}
+          {selectedTask ? (
+            <Inspector
+              task={selectedTask}
+              gates={taskGates}
+              // Every task, not the canvas's: a dep chip that could not see across an inferred run
+              // would call a task that is sitting right there in the database deleted.
+              tasks={allTasks}
+              detail={detail}
+              error={detailError}
+              onClose={() => setSelectedTaskId(null)}
+              onSelectTask={showTask}
+            />
+          ) : (
+            <Feed messages={messages} runId={selected?.id ?? null} onSelectMessage={selectMessage} />
+          )}
+        </div>
+      </main>
+    </MotionConfig>
   );
+}
+
+/**
+ * The field the panels stand on: a fine grid, and a soft glow above the work (SPEC §7.9).
+ *
+ * It is the cheapest thing in the whole redesign and it does the most — a grid says *surface with
+ * coordinates* before a single node has drawn, which is exactly what this tool is looking at.
+ */
+function Backdrop() {
+  return <span aria-hidden className="pointer-events-none absolute inset-0 -z-10" style={FIELD_BACKDROP_STYLE} />;
 }
 
 /**
@@ -231,9 +261,19 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
  */
 function TopBar({ meta }: { meta: Meta }) {
   return (
-    <header className="bg-card flex h-13 shrink-0 items-center gap-3 border-b px-4">
+    <motion.header
+      initial={enter({ opacity: 0, y: -8 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(PANEL_CLASS, 'flex h-13 shrink-0 items-center gap-3 px-4')}
+    >
       <span className="flex shrink-0 items-center gap-2">
-        <span className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md">
+        <span
+          className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md"
+          // The mark is the one thing on the page that is allowed to be simply *nice*: it names
+          // the tool and reports nothing, so a glow on it costs no channel.
+          style={{ boxShadow: '0 0 18px -4px var(--selection)' }}
+        >
           <Waypoints className="size-3.5" />
         </span>
         <b className="text-sm font-semibold tracking-tight whitespace-nowrap">orca-viz</b>
@@ -246,7 +286,7 @@ function TopBar({ meta }: { meta: Meta }) {
       <Source meta={meta} />
 
       <ThemeToggle />
-    </header>
+    </motion.header>
   );
 }
 
@@ -254,6 +294,10 @@ function TopBar({ meta }: { meta: Meta }) {
  * Live, or last-known — the one thing that is always worth saying, said in the words the
  * spec pins down (SPEC §6.1). `src/shared/wording.ts` owns the sentence, so this and the
  * line the terminal prints at boot are the same sentence and cannot drift apart.
+ *
+ * The dot **radars** when it is live, which is the same gesture the rail's live run and a
+ * dispatched node's status dot both wear: on this page, a ring going out means *this is not
+ * finished* (SPEC §7.9).
  */
 function Status({ meta }: { meta: Meta }) {
   const live = meta.liveness === 'live';
@@ -266,16 +310,15 @@ function Status({ meta }: { meta: Meta }) {
         'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
         live
           ? 'bg-status-completed-soft text-status-completed-ink border-status-completed/50'
-          : 'text-muted-foreground bg-muted'
+          : 'text-muted-foreground bg-muted border-transparent'
       )}
+      style={
+        live
+          ? { boxShadow: '0 0 16px -6px color-mix(in oklch, var(--status-completed) 90%, transparent)' }
+          : undefined
+      }
     >
-      <span
-        aria-hidden
-        className={cn(
-          'size-1.5 shrink-0 rounded-full',
-          live ? 'bg-status-completed animate-pulse' : 'bg-muted-foreground/50'
-        )}
-      />
+      <RadarDot live={live} />
       {/* The sentence is the spec's, down to the word (`wording.ts`) — the capital is the
           stylesheet's, because a sentence in a pill still starts like a sentence. */}
       <span className="first-letter:uppercase">{livenessSentence(meta, formatTime)}.</span>
@@ -323,11 +366,19 @@ function ThemeToggle() {
       variant="ghost"
       size="icon"
       onClick={toggle}
-      className="text-muted-foreground size-7 shrink-0 cursor-pointer"
+      className="text-muted-foreground hover:text-foreground size-7 shrink-0 cursor-pointer"
       aria-label={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
       title={mode === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
     >
-      {mode === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      <motion.span
+        key={mode}
+        initial={enter({ opacity: 0, rotate: -90, scale: 0.6 })}
+        animate={{ opacity: 1, rotate: 0, scale: 1 }}
+        transition={EASE}
+        className="flex items-center justify-center"
+      >
+        {mode === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      </motion.span>
     </Button>
   );
 }
@@ -342,7 +393,15 @@ function Notices({ meta }: { meta: Meta }) {
   if (schema === null && !meta.resetDetected) return null;
 
   return (
-    <div className={cn('flex shrink-0 flex-col gap-px border-b text-xs', GATE_THEME.surface)}>
+    <motion.div
+      initial={enter({ opacity: 0, y: -6 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(
+        'flex shrink-0 flex-col gap-px overflow-hidden rounded-xl border text-xs shadow-lift-1',
+        GATE_THEME.surface
+      )}
+    >
       {/*
        * The schema banner (#21) — one banner for both directions of drift, because they are
        * the same fact told from two sides: this database is not the one the build was written
@@ -372,19 +431,59 @@ function Notices({ meta }: { meta: Meta }) {
           this database once held.
         </p>
       )}
-    </div>
+    </motion.div>
   );
 }
 
-/** Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink. */
+/**
+ * Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink.
+ *
+ * **The one screen in this tool with no data on it**, and therefore the one screen where a purely
+ * beautiful thing costs nothing at all: there is nothing here to obscure, no status to compete
+ * with, and no number anybody is trying to read. So it gets the beams, the glow and the sweep of
+ * light across the word — and it gets them for half a second, once, and then the tool starts.
+ */
 function Connecting() {
   return (
-    <main className="flex h-full flex-col items-center justify-center gap-3">
-      <span className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
-        <Waypoints className="size-5" />
-      </span>
-      <h1 className="text-sm font-semibold tracking-tight">orca-viz</h1>
-      <p className="text-muted-foreground animate-pulse text-xs">Connecting to the database…</p>
+    <main className="bg-field relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden">
+      <span aria-hidden className="pointer-events-none absolute inset-0" style={FIELD_BACKDROP_STYLE} />
+      <Beams />
+
+      <motion.span
+        initial={enter({ opacity: 0, scale: 0.8 })}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={SPRING}
+        className="bg-primary text-primary-foreground relative flex size-11 items-center justify-center rounded-2xl"
+        style={{ boxShadow: '0 0 60px -10px var(--selection), 0 0 0 1px oklch(1 0 0 / 0.08)' }}
+      >
+        <Waypoints className="size-5.5" />
+      </motion.span>
+
+      <motion.h1
+        initial={enter({ opacity: 0, y: 6 })}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ ...SPRING, delay: 0.08 }}
+        className="relative text-base font-semibold tracking-tight"
+      >
+        orca-viz
+      </motion.h1>
+
+      {/* A sweep of light across the sentence, rather than a sentence blinking on and off: it is
+          reading a file, and reading is a thing that moves in one direction. */}
+      <motion.p
+        initial={enter({ opacity: 0 })}
+        animate={{ opacity: 1 }}
+        transition={{ ...SPRING, delay: 0.16 }}
+        className="relative bg-clip-text text-xs text-transparent"
+        style={{
+          backgroundImage:
+            'linear-gradient(90deg, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%)',
+          backgroundSize: '200% 100%',
+          animation: 'orca-shimmer 1.8s linear infinite',
+        }}
+      >
+        Connecting to the database…
+      </motion.p>
     </main>
   );
 }

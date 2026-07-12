@@ -121,3 +121,38 @@ export function isKnownStatus(status: string): status is TaskStatus {
 export function themeOf(status: string): StatusTheme {
   return isKnownStatus(status) ? STATUS_THEME[status] : UNKNOWN_STATUS_THEME;
 }
+
+/**
+ * The status with an agent **inside it right now** — the one node on the canvas that is not a
+ * record of something, but a thing that is happening (SPEC §7.9).
+ *
+ * It is the only node that moves: a ring of its own amber turns slowly around it, for exactly as
+ * long as the work is in flight. That is the whole rule the canvas's motion budget is spent on,
+ * and it is why nothing else on the page is allowed to spin — a second spinning thing would make
+ * this one mean "decorated" instead of "working".
+ *
+ * A single status and not a set, because there is only one thing that is *in progress*: `ready` is
+ * waiting for a slot, `blocked` is waiting for an answer, and neither of them has an agent burning
+ * tokens on it.
+ */
+export const ALIVE_STATUS = 'dispatched';
+
+export function isAlive(status: string): boolean {
+  return status === ALIVE_STATUS;
+}
+
+/**
+ * The two statuses loud enough to light the canvas *around* them — work in flight, and work that
+ * broke. They are the two a person scanning a 76-node run is actually looking for, and a glow is
+ * what finds a node before its colour does at a zoom where the text has stopped being legible.
+ *
+ * Nothing else glows. A canvas where every node glows is a canvas with a haze on it.
+ */
+export function glowOf(status: string): string | undefined {
+  if (!isAlive(status) && status !== 'failed') return undefined;
+
+  const accent = themeOf(status).accent;
+  // `--glow-strength` is the theme's: a dark field can take a bright halo, and a white one is
+  // washed out by the same halo at the same strength.
+  return `0 0 24px -6px color-mix(in oklch, ${accent} calc(var(--glow-strength) * 100%), transparent)`;
+}

@@ -399,11 +399,11 @@ CLI surface:
 
 ## 7. Frontend
 
-Stack: **React + Vite + TypeScript**, **React Flow (`@xyflow/react`)** for the canvas, **elkjs** for layout, **Tailwind + shadcn/ui** for everything that is not the canvas. React Flow is **locked** (#6): 76 custom nodes plus a minimap pan and zoom smoothly at real scale; it is not a bottleneck and needs no perf work. Dev runs Vite with a proxy to the server; the shipped artifact is the pre-built `dist/` the server serves (#8 §4).
+Stack: **React + Vite + TypeScript**, **React Flow (`@xyflow/react`)** for the canvas, **elkjs** for layout, **Tailwind + shadcn/ui** for everything that is not the canvas, and **`motion`** for the movement §7.9 spends its budget on. React Flow is **locked** (#6): 76 custom nodes plus a minimap pan and zoom smoothly at real scale; it is not a bottleneck and needs no perf work. Dev runs Vite with a proxy to the server; the shipped artifact is the pre-built `dist/` the server serves (#8 §4).
 
 Every dependency here is bundled at build time and **none of them is a runtime dependency** — `dependencies` is empty and stays empty, because `npx orca-viz` promises nothing to install and nothing to compile (§8). A shadcn component is *this repo's source file* (`src/client/components/ui/`), not an import, which is the entire reason it is allowed in a package that ships zero deps.
 
-**The palette is CSS, not TypeScript** (`src/client/index.css`). The six status colours of §7.5 are the signed-off hexes, verbatim, as custom properties — and `.dark` redefines the *fill* and the *ink* of each while keeping the **accent**, so a green node is one green in both themes and the canvas, the feed chips and the inspector cannot drift into two palettes. `canvas/theme.ts` is the only seam that hands them out: Tailwind class strings for anything Tailwind can paint, and a `var(--…)` value for the two places that need a colour and not a class — React Flow's minimap fill, and the box-shadow of a message pulse (§7.6).
+**The palette is CSS, not TypeScript** (`src/client/index.css`). The six status colours of §7.5 are the signed-off hexes, verbatim, as custom properties — and `.dark` redefines the *fill* and the *ink* of each while keeping the **accent**, so a green node is one green in both themes and the canvas, the feed chips and the inspector cannot drift into two palettes. `canvas/theme.ts` is the only seam that hands them out: Tailwind class strings for anything Tailwind can paint, and a `var(--…)` value for the three places that need a colour and not a class — React Flow's minimap fill, the box-shadow of a message pulse (§7.6), and the conic ring of a node with an agent working inside it (§7.9).
 
 ### 7.1 Layout composition: three zones, four panels (#7 §4)
 
@@ -489,7 +489,11 @@ Locked by #6 against the live prototype and confirmed by the dev on screen:
   | `blocked` | `#f3e8ff` | `#a855f7` | `#581c87` |
   | *unknown* | neutral grey, raw status string as the chip label (§5) | | |
 
-- **Assignee badge** — dark monospace chip, first 8 hex chars of `dispatch.assigneeHandle`; `✗N` when `failureCount > 0` (the circuit breaker trips at 3).
+  **The three hexes are locked; the word "border" in that table is not.** A node is no longer *outlined* in its status — a coloured rectangle drawn all the way around a coloured fill is three ways of saying one thing, and the loudest of them is a hard edge closing the card off on the side furthest from anything you read. The accent column is now painted as a **spine**: a soft, glowing bar of it down the left of the card, with the colour bleeding rightwards and running out before the far edge. The card is held together by its fill, a 1px top sheen and a shadow — the way a lit object is. Nothing about *which* hex a status wears has changed, and a node is still found by colour from across a 76-node run, because that was never the border's job: it was the fill's. The accent is still a real border wherever a **chip** wears the same token (the feed, the inspector), which is why it stays in `theme.surface`.
+
+  Consequently a node carries **no outline at all** unless it is *selected* — which is exactly what makes the selection outline legible (§7.9).
+
+- **Assignee badge** — monospace chip, first 8 hex chars of `dispatch.assigneeHandle`; `✗N` when `failureCount > 0` (the circuit breaker trips at 3). **Quiet** — a tint of the card's own ink, not a solid slab of the foreground: it is a uuid you cannot read and would not act on, and it has no business being the first thing your eye lands on when what you came to the node for was its status.
 - **Last-seen badge** — `"last seen 12s ago"` from `dispatch.lastHeartbeatAt`, **going stale-amber past a threshold** (#7 §7). *Spec-level default: 10 minutes*, i.e. 2× the 5-minute heartbeat cadence Orca instructs its workers to keep; make it a constant, not a magic number. Shown only while the dispatch is `dispatched`.
 - **Gate marker** — orange `⛔ gate` badge when the task has an open gate (§4.5).
 - **Retry marker** — surface `attemptCount > 1`; it is the only visible sign of a retry, and no task has retried in real data yet, so it must be right the first time it happens.
@@ -528,6 +532,34 @@ Node click swaps the right dock. It is exactly what `GET /api/task/:id` exists f
 4. **Messages referencing this task** (`payload.taskId`), sequence-ordered.
 5. **Gate Q&A** — derived from `decision_gate` **messages** (§4.5).
 6. **Deps in / out** as chips that select the neighbour node.
+
+### 7.9 The visual language: a field, panels on it, and motion that means something
+
+§7.1–§7.8 fix **what is on screen**. This fixes **what it looks like**, and it changes nothing above: the six status hexes, the elkjs/top-down layout and the 240 × 84 node are exactly as §7.5 locked them. What changed is the chrome around them.
+
+**Borders are for chips, not for cards.** The shell was four regions divided by 1px rules, and every task node was a rectangle outlined in its own status. Both are gone. A *card* — a panel, a task node — is now defined by **fill, a top sheen and a shadow**; the only hard edges left on the canvas are the two that *mean* something, and they are the selection outline (§7.5) and the turning ring of a node with an agent inside it. A **chip** still wears a border, because a chip is small enough that a border is its shape.
+
+**A field, with panels standing on it.** It is now a **field** (dark, a 32px grid at ~4% opacity, a soft glow above the work) with **panels** floating on it: rounded, translucent, hairline-bordered, lifted by a shadow, separated by a gap the field shows through. The tokens are `--field`, `--panel`, `--panel-border` and a three-step `--lift-*` scale, and the one class every panel wears is `PANEL_CLASS` (`src/client/surface.ts`). No layout moved to get this; it is a border, a radius and a shadow.
+
+**Motion is a channel, and it is spent on meaning — not on arrival.** The rule the whole system is built on:
+
+> **If it moves, it is happening.**
+
+Which buys exactly three gestures, and forbids a fourth:
+
+| Gesture | Means | Where |
+|---|---|---|
+| **A conic ring, turning** | *An agent is inside this node right now* | The `dispatched` node, and **nothing else in the tool** — a second spinning thing would make this one read as "decorated" instead of "working" (`ALIVE_STATUS`, `.orca-alive`) |
+| **A radar ping** | *This is not finished* | The liveness pill, and a live run on the rail — one `RadarDot`, so learning it in one panel teaches it in the other. Not on the node: the node says it by *spinning*, and a card that pinged **and** spun would be shouting the same word twice |
+| **An aurora, drifting** | *A question is unanswered* | The gate strip, and only the gate strip. Slow (19–25 s), because it must stay bearable for as long as the gate stays open, which on a real database is hours |
+
+Everything else on the page **holds perfectly still**, which is what makes those three worth looking at. A glow is the static half of the same budget: only `dispatched` and `failed` nodes carry one, because they are the two a person scanning 76 nodes is actually hunting for, and a canvas where every node glows is a canvas with a haze on it.
+
+**Entrances are short, and they never gate a fact.** Panels, nodes and feed rows arrive with one calm spring (nodes stagger, capped at 280 ms however big the run). New messages land at the top of the feed and *push* the rest down (`layout`) — the one place you can watch an orchestration happen. Rows that **leave** leave instantly: a heartbeat toggle is a filter, not an event, and animating a filter is animating the user's own click back at them.
+
+**Every entrance goes through `enter()`** (`src/client/motion.ts`). An entrance starts at `opacity: 0`, so anything that turns animation off has to be able to say so *before the first paint* — otherwise the panel is simply invisible. `enter()` reads `MotionGlobalConfig.skipAnimations` and hands motion `false` instead of a starting state, so the tool renders finished, on frame one. That is what the suite runs against (`test/client/setup.ts`), and it is why a reader who kills animation gets a working tool rather than an empty one. Transform-driven motion additionally respects `prefers-reduced-motion` through one `<MotionConfig reducedMotion="user">` at the top of `<App>`; the CSS keyframes respect it through one media query in `index.css`.
+
+**`motion` is a devDependency, like everything else here** — bundled at build, ~100 KB raw on top of React Flow and elkjs, and still zero runtime dependencies (§7 preamble, §8).
 
 ---
 
