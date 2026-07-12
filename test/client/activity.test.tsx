@@ -148,7 +148,6 @@ describe('snapshot diffs', () => {
     expect(log.entries[0]).toMatchObject({
       kind: 'status',
       taskId: 'task_build',
-      runId: RUN.id,
       at: T1,
       text: 'Build it · dispatched → completed',
     });
@@ -394,7 +393,27 @@ describe('reconnect and resync', () => {
       T2
     );
 
-    expect(log.entries.map((entry) => entry.id)).toEqual(['msg:3']);
+    expect(log.entries.map((entry) => entry.id)).toEqual(['msg:r1:3']);
+  });
+
+  it('keeps a renumbered message from colliding with a retained pre-reset entry', () => {
+    // The reset renumbers sequences from 1, but the ticker keeps its pre-reset entries — they
+    // were genuinely observed. A post-reset message reusing an already-narrated sequence must
+    // mint a *different* identity, or the list holds two entries under one id (and React two
+    // rows under one key).
+    const before = event({ seq: 10, tasks: [] });
+    const delta = event({ seq: 11, tasks: [], messages: [message({ sequence: 11, type: 'worker_done', subject: 'old 11' })] });
+    const reset = event({ seq: 0, tasks: [] });
+    const renumbered = event({ seq: 11, tasks: [], messages: [message({ sequence: 11, type: 'worker_done', subject: 'new 11' })] });
+
+    const log = observeActivity(
+      observeActivity(observeActivity(observeActivity(null, before, T0), delta, T1), reset, T1),
+      renumbered,
+      T2
+    );
+
+    expect(log.entries.map((entry) => entry.id)).toEqual(['msg:11', 'msg:r1:11']);
+    expect(log.entries.map((entry) => entry.text)).toEqual(['old 11', 'new 11']);
   });
 });
 

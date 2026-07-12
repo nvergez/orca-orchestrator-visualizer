@@ -25,8 +25,10 @@ export const MAX_ACTIVITY_ENTRIES = 100;
 export type ActivityEntry = {
   /**
    * Stable within the session: `status:<taskId>:<tick>`, `dispatch:<contextId>`,
-   * `retry:<contextId>`, `msg:<sequence>`. Observing the same change again — a repeated
-   * snapshot, a replayed message — can only produce the same identity, never a second entry.
+   * `retry:<contextId>`, `msg:<sequence>` — with an `r<epoch>` segment after a reset has
+   * renumbered sequences (`msg:r1:<sequence>`), so a reused number cannot collide with a
+   * retained pre-reset entry. Observing the same change again — a repeated snapshot, a
+   * replayed message — can only produce the same identity, never a second entry.
    */
   id: string;
   /** The three synthesized transitions, or the message type that arrived verbatim. */
@@ -41,7 +43,6 @@ export type ActivityEntry = {
   text: string;
   /** Destination for a click — the task this happened to, when one still exists. */
   taskId: string | null;
-  runId: string | null;
   /** A status entry's destination status, for the dot that wears its colour. Absent elsewhere. */
   status?: string;
 };
@@ -66,6 +67,12 @@ export type ActivityLog = {
   readonly seq: number;
   /** How many folds this log has absorbed — the disambiguator in a status entry's id. */
   readonly ticks: number;
+  /**
+   * How many resets this session has lived through — a cursor that went *down* means an
+   * `orchestration reset` renumbered the messages, and a renumbered sequence must not mint
+   * the id of a pre-reset entry the list still holds.
+   */
+  readonly epoch: number;
 };
 
 /**
@@ -83,31 +90,32 @@ export function observeActivity(log: ActivityLog | null, event: StreamEvent, obs
   const marks = new Map<string, TaskMark>();
   for (const task of event.snapshot.tasks) marks.set(task.id, markOf(task));
 
-  if (log === null) return { entries: [], marks, seq: event.seq, ticks: 0 };
+  if (log === null) return { entries: [], marks, seq: event.seq, ticks: 0, epoch: 0 };
 
   const ticks = log.ticks + 1;
+  const epoch = event.seq < log.seq ? log.epoch + 1 : log.epoch;
   const fresh: ActivityEntry[] = [];
   const monograms = monogramsOf(event);
 
   for (const task of event.snapshot.tasks) {
     const before = log.marks.get(task.id);
-    const dispatched = task.dispatch !== null && task.dispatch.id !== before?.dispatchId;
+    const attempt = task.dispatch;
+    const dispatched = attempt !== null && attempt.id !== before?.dispatchId;
 
     if (dispatched) {
       // A retry is a dispatch whose task was already attempted — a genuinely separate thing the
       // orchestrator did, to a fresh worktree with a fresh handle (SPEC §4.7, rule 1).
       const retried = before !== undefined && task.attemptCount > before.attemptCount && before.attemptCount > 0;
-      const agent = monograms.get(task.dispatch!.assigneeHandle) ?? shortHandle(task.dispatch!.assigneeHandle);
+      const agent = monograms.get(attempt.assigneeHandle) ?? shortHandle(attempt.assigneeHandle);
 
       fresh.push({
-        id: `${retried ? 'retry' : 'dispatch'}:${task.dispatch!.id}`,
+        id: `${retried ? 'retry' : 'dispatch'}:${attempt.id}`,
         kind: retried ? 'retry' : 'dispatch',
         at: observedAt,
         text: retried
           ? `${task.title} · retry, attempt ${task.attemptCount} → ${agent}`
           : `${task.title} · dispatched → ${agent}`,
         taskId: task.id,
-        runId: task.runId,
       });
     }
 
@@ -123,7 +131,6 @@ export function observeActivity(log: ActivityLog | null, event: StreamEvent, obs
       at: observedAt,
       text: `${task.title} · ${before.status} → ${task.status}`,
       taskId: task.id,
-      runId: task.runId,
       status: task.status,
     });
   }
@@ -134,15 +141,17 @@ export function observeActivity(log: ActivityLog | null, event: StreamEvent, obs
     // trustworthy: the delta's sequences are derived from the same rows as its snapshot, so a
     // real message cannot hide behind the cursor.
     if (message.sequence <= log.seq) continue;
+    // The three deltas the ticket names, and only those. An unknown message type is not dropped
+    // from the *page* — the conversation renders it verbatim (SPEC §5) — it is simply not one of
+    // the ticker's narrations.
     if (message.type !== 'decision_gate' && message.type !== 'escalation' && message.type !== 'worker_done') continue;
 
     fresh.push({
-      id: `msg:${message.sequence}`,
+      id: epoch === 0 ? `msg:${message.sequence}` : `msg:r${epoch}:${message.sequence}`,
       kind: message.type,
       at: message.createdAt,
       text: message.subject !== '' ? message.subject : message.body.slice(0, 120),
       taskId: message.taskId,
-      runId: message.runId,
     });
   }
 
@@ -159,6 +168,7 @@ export function observeActivity(log: ActivityLog | null, event: StreamEvent, obs
     // future message as a duplicate — a ticker that never speaks again.
     seq: event.seq,
     ticks,
+    epoch,
   };
 }
 

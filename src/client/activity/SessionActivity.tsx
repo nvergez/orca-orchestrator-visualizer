@@ -92,28 +92,33 @@ export function SessionActivity({ event, tasks, onSelectTask }: SessionActivityP
         {entries
           .slice()
           .reverse()
-          .map((entry) => (
-            <Entry
-              key={entry.id}
-              entry={entry}
-              now={now}
-              onSelect={
-                entry.taskId !== null && tasks.some((task) => task.id === entry.taskId)
-                  ? onSelectTask
-                  : null
-              }
-            />
-          ))}
+          .map((entry) => {
+            const taskId = entry.taskId;
+            const onSelect =
+              taskId !== null && tasks.some((task) => task.id === taskId) ? () => onSelectTask(taskId) : null;
+            return <Entry key={entry.id} entry={entry} now={now} onSelect={onSelect} />;
+          })}
       </ul>
     </motion.section>
   );
 }
 
-/** What arriving message kinds are called on the strip; synthesized kinds narrate themselves. */
-const KIND_LABELS: Partial<Record<ActivityEntry['kind'], string>> = {
-  worker_done: 'done',
-  escalation: 'escalation',
-  decision_gate: 'gate',
+/**
+ * What each kind looks like on the strip — one table, so "which dot" and "which label" cannot
+ * be edited apart (the same reason `conversation/theme.ts` keeps `TURN_STYLES` whole).
+ *
+ * The dot is the canvas's palette, not a new one: a status entry wears its **destination**
+ * status (the table's null — only the entry knows which), a dispatch the amber of work in
+ * flight, and the message kinds the same colours their pulses flash — green done, red
+ * escalation, gate orange. Synthesized kinds narrate themselves and carry no label chip.
+ */
+const KIND_STYLES: Record<ActivityEntry['kind'], { label: string | null; dot: string | null }> = {
+  status: { label: null, dot: null },
+  dispatch: { label: null, dot: STATUS_THEME.dispatched.dot },
+  retry: { label: null, dot: STATUS_THEME.dispatched.dot },
+  worker_done: { label: 'done', dot: STATUS_THEME.completed.dot },
+  escalation: { label: 'escalation', dot: STATUS_THEME.failed.dot },
+  decision_gate: { label: 'gate', dot: GATE_THEME.dot },
 };
 
 function Entry({
@@ -124,15 +129,18 @@ function Entry({
   entry: ActivityEntry;
   now: number;
   /** Null ⇒ the entry names no task that still exists, and the row is a fact, not a button. */
-  onSelect: ((taskId: string) => void) | null;
+  onSelect: (() => void) | null;
 }) {
   const age = ageOf(entry.at, now);
-  const label = KIND_LABELS[entry.kind];
+  const { label, dot } = KIND_STYLES[entry.kind];
 
   const row = (
     <>
-      <span aria-hidden className={cn('size-1.5 shrink-0 translate-y-1 rounded-full', dotOf(entry))} />
-      {label !== undefined && (
+      <span
+        aria-hidden
+        className={cn('size-1.5 shrink-0 translate-y-1 rounded-full', dot ?? themeOf(entry.status ?? '').dot)}
+      />
+      {label !== null && (
         <span className="border-panel-border bg-background/60 shrink-0 rounded-full border px-1.5 text-[10px] font-medium">
           {label}
         </span>
@@ -153,7 +161,7 @@ function Entry({
       ) : (
         <button
           type="button"
-          onClick={() => onSelect(entry.taskId!)}
+          onClick={onSelect}
           className="hover:bg-accent/50 focus-visible:ring-selection/50 flex w-full cursor-pointer items-start gap-2 rounded-md px-1 py-0.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
         >
           {row}
@@ -161,25 +169,4 @@ function Entry({
       )}
     </li>
   );
-}
-
-/**
- * The dot is the canvas's palette, not a new one: a status entry wears its **destination**
- * status, a dispatch the amber of work in flight, and the message kinds the same colours their
- * pulses flash (`conversation/theme.ts`) — green done, red escalation, gate orange.
- */
-function dotOf(entry: ActivityEntry): string {
-  switch (entry.kind) {
-    case 'status':
-      return themeOf(entry.status ?? '').dot;
-    case 'dispatch':
-    case 'retry':
-      return STATUS_THEME.dispatched.dot;
-    case 'worker_done':
-      return STATUS_THEME.completed.dot;
-    case 'escalation':
-      return STATUS_THEME.failed.dot;
-    case 'decision_gate':
-      return GATE_THEME.dot;
-  }
 }
