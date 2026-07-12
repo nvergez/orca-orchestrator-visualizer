@@ -1,36 +1,61 @@
-# Issue tracker
+# Issue tracker: GitHub
 
-This project tracks work in **GitHub Issues** on `nvergez/orca-viz`.
+Issues and PRDs for this repository live in GitHub Issues on `nvergez/orca-viz`. Use the `gh` CLI for all operations.
 
-## Fetching an issue
+## Conventions
 
-Use the `gh` CLI (authenticated in agent worktrees):
+- **Create an issue:** `gh issue create --title "..." --body "..."`
+- **Read an issue:** `gh issue view <number> --comments`
+- **Read structured fields:** `gh issue view <number> --json number,title,body,labels,state`
+- **List issues:** `gh issue list --state open --json number,title,body,labels,comments`
+- **Comment:** `gh issue comment <number> --body "..."`
+- **Apply or remove labels:** `gh issue edit <number> --add-label "..."` or `--remove-label "..."`
+- **Close:** `gh issue close <number> --comment "..."`
+- **Cross-reference:** use `#<number>` in commits, issue bodies, comments, and PRs.
 
-```bash
-gh issue view <number>                              # title + body
-gh issue view <number> --comments                   # + resolution comments
-gh issue view <number> --json number,title,body,labels,state
-```
+Infer the repository from `git remote -v`; `gh` does this automatically inside the clone.
 
-Cross-references in commit messages and PR bodies use `#<number>`.
+## Pull requests as a triage surface
 
-## The issue hierarchy
+**PRs as a request surface: no.**
 
-- **#12 — orca-viz MVP** is the parent. It carries the problem statement, the user stories, and the **locked contracts** — `StreamEvent`, `Task`, `FeedMessage`, the status colour table, the run-inference algorithm. Every implementation ticket refers back to it, so read it before implementing or reviewing any child ticket.
-- **#13 – #22** are the implementation tickets. Each is a vertical slice with its own acceptance criteria and a `Blocked by` list.
+## When a skill says “publish to the issue tracker”
 
-## Reading order for an implementer or a reviewer
+Create a GitHub issue.
 
-`HANDOFF.md` → `SPEC.md` → the parent issue **#12** → the ticket itself.
+## When a skill says “fetch the relevant ticket”
 
-`HANDOFF.md` holds verified facts about Orca's database; do not re-derive them. `SPEC.md` is **locked** and is the spec of record. Where a ticket and `SPEC.md` disagree, that is a finding to report — not a licence to choose between them. The research docs under `docs/research/` are the evidence behind the rulings; consult them for `file:line` citations, not to reopen decisions.
+Run `gh issue view <number> --comments`.
 
-## Labels
+## Current issue hierarchy
 
-- `ready-for-agent` — specified well enough to be picked up and implemented.
+- **#12 — orca-viz MVP** is the parent. It contains the problem statement, user stories, and locked contracts: `StreamEvent`, `Task`, `FeedMessage`, the status colour table, and the run-inference algorithm.
+- **#13–#22** are implementation tickets. Each is a vertical slice with acceptance criteria and a `Blocked by` list.
 
-## Branch and PR conventions for this build
+Read the parent issue before implementing or reviewing a child ticket.
 
-- Each ticket is implemented on its own branch and opened as a **sub-PR against the integration branch `feat/orca-viz-mvp`** — never against `main`.
-- A sub-PR body closes its ticket (`Closes #<n>`).
-- `feat/orca-viz-mvp` is the single **main PR** into `main`; it accumulates the sub-PRs.
+## Reading order for implementation and review
+
+`HANDOFF.md` → `SPEC.md` → parent issue **#12** → the ticket itself.
+
+`HANDOFF.md` contains verified facts about Orca’s database; do not re-derive them. `SPEC.md` is locked and is the specification of record. If a ticket conflicts with `SPEC.md`, report the conflict rather than choosing between them.
+
+The research documents under `docs/research/` provide evidence behind the rulings. Consult them for citations, not to reopen settled decisions.
+
+## Branch and PR conventions for the MVP build
+
+- Implement each ticket on its own branch.
+- Open each sub-PR against `feat/orca-viz-mvp`, never directly against `main`.
+- A sub-PR body closes its ticket with `Closes #<number>`.
+- `feat/orca-viz-mvp` is the single main PR into `main`.
+
+## Wayfinding operations
+
+The `wayfinder` skill represents a map as one issue with child issues as tickets.
+
+- **Map:** label it `wayfinder:map`; store Notes, Decisions-so-far, and Fog in its body.
+- **Child:** link it using GitHub sub-issues where available. Otherwise, add it to a task list in the map and place `Part of #<map>` at the top of the child.
+- **Child labels:** use `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, or `wayfinder:task`.
+- **Blocking:** prefer GitHub’s native issue dependencies. Where unavailable, place `Blocked by: #<number>` at the top of the child body.
+- **Claim:** `gh issue edit <number> --add-assignee @me`
+- **Resolve:** comment with the answer, close the child, and add a context pointer to the map’s Decisions-so-far.
