@@ -1,8 +1,10 @@
+import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { FeedMessage } from '../../shared/types.ts';
-import { DOCK_CLASS } from '../dock.ts';
+import { DOCK_IN, EASE, enter, ROW_IN, SPRING, SPRING_FAST } from '../motion.ts';
+import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import { HeartbeatToggle } from './HeartbeatToggle.tsx';
 import { MessageRow } from './MessageRow.tsx';
 import { viewOf } from './select.ts';
@@ -29,6 +31,12 @@ import { viewOf } from './select.ts';
  * A row is a `MessageRow` — the same component the inspector renders its messages with. Here a
  * subject is a **button** into the task it names (the feed's half of the bidirectional link,
  * SPEC §7.6); there, you are already standing on that task.
+ *
+ * **A new message lands at the top and pushes the rest down** (SPEC §7.9) — `layout`, so the push
+ * is the browser's and not a repaint. It is the one place in the tool where you can watch the
+ * orchestration *happen*, and a list that simply blinked one row longer would waste it. Rows that
+ * *leave* — the heartbeat toggle, a change of scope — leave instantly: they are a filter, not an
+ * event, and animating a filter is animating the user's own click back at them.
  */
 
 export type FeedProps = {
@@ -52,17 +60,26 @@ export function Feed({ messages, runId, onSelectMessage }: FeedProps) {
   );
 
   return (
-    <aside data-testid="feed" aria-label="Message feed" className={DOCK_CLASS}>
-      <header className="flex shrink-0 flex-col gap-2.5 border-b px-4 py-3">
+    <motion.aside
+      data-testid="feed"
+      aria-label="Message feed"
+      variants={DOCK_IN}
+      initial={enter('hidden')}
+      animate="shown"
+      transition={SPRING}
+      className={DOCK_CLASS}
+    >
+      <header className={PANEL_HEADER_CLASS}>
         <div className="flex items-center gap-2">
-          <h2 className="text-muted-foreground text-[11px] font-semibold tracking-widest uppercase">Feed</h2>
+          <h2 className={PANEL_TITLE_CLASS}>Feed</h2>
           <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">
             {shown.length} {shown.length === 1 ? 'message' : 'messages'}
           </span>
         </div>
 
-        {/* A segmented control, not two buttons in a row: the scope is one choice with two sides. */}
-        <div role="group" aria-label="Feed scope" className="bg-muted flex gap-0.5 rounded-lg p-0.5">
+        {/* A segmented control, not two buttons in a row: the scope is one choice with two sides —
+            so the *thumb* is one element that slides between them, and not two that light up. */}
+        <div role="group" aria-label="Feed scope" className="bg-muted/70 flex gap-0.5 rounded-lg p-0.5">
           <ScopeButton label="This run" active={scope === 'run'} onClick={() => setScope('run')} />
           <ScopeButton label="All" active={scope === 'all'} onClick={() => setScope('all')} />
         </div>
@@ -84,14 +101,21 @@ export function Feed({ messages, runId, onSelectMessage }: FeedProps) {
               messages are a story, and a story starts at the beginning.)
             */}
             {[...shown].reverse().map((message) => (
-              <li key={message.sequence}>
+              <motion.li
+                key={message.sequence}
+                layout="position"
+                variants={ROW_IN}
+                initial={enter('hidden')}
+                animate="shown"
+                transition={SPRING_FAST}
+              >
                 <MessageRow message={message} now={now} onSelect={onSelectMessage} />
-              </li>
+              </motion.li>
             ))}
           </ol>
         </ScrollArea>
       )}
-    </aside>
+    </motion.aside>
   );
 }
 
@@ -106,12 +130,19 @@ function ScopeButton({ label, active, onClick }: { label: string; active: boolea
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        'flex-1 cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
-        'text-muted-foreground hover:text-foreground',
-        active && 'bg-card text-foreground shadow-sm'
+        'relative flex-1 cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+        active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
       )}
     >
-      {label}
+      {active && (
+        <motion.span
+          aria-hidden
+          layoutId="feed-scope"
+          transition={EASE}
+          className="bg-panel-solid shadow-lift-1 absolute inset-0 rounded-md"
+        />
+      )}
+      <span className="relative">{label}</span>
     </button>
   );
 }

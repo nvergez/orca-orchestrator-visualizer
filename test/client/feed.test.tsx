@@ -478,6 +478,24 @@ describe('the node pulse', () => {
     rerender(<App loadTask={NO_DETAIL} event={next} />);
   }
 
+  /**
+   * The flash is a 3px ring in the message's colour, and it is asserted as the **leading** layer
+   * of the node's box-shadow rather than the whole of it.
+   *
+   * A node's shadow is a stack (`TaskNode.shadowOf`): the ring, then the sheen and the lift that
+   * every card carries, then a status glow if it has one. Pinning the entire string would be
+   * pinning the card's *depth* — which is not what this describe block is about, and which would
+   * break the day a node learns to cast a shadow slightly differently. What the spec promises is
+   * that a `worker_done` puts green around the node it names, and that is exactly what is checked.
+   */
+  function flashesIn(taskId: string, accent: string): void {
+    expect(node(taskId).style.boxShadow).toMatch(new RegExp(`^0 0 0 3px ${escapeForRegExp(accent)}(,|$)`));
+  }
+
+  function escapeForRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   it('flashes the node a message just arrived about, in its type\'s colour', async () => {
     await push(
       event({ messages: [] }),
@@ -485,7 +503,7 @@ describe('the node pulse', () => {
     );
 
     await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'worker_done'));
-    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.completed.accent}` });
+    flashesIn('task_aaaaaaaa', STATUS_THEME.completed.accent);
   });
 
   it('flashes an escalation red', async () => {
@@ -494,9 +512,8 @@ describe('the node pulse', () => {
       event({ messages: [message({ type: 'escalation', subject: 'Blocked', taskId: 'task_aaaaaaaa' })] })
     );
 
-    await waitFor(() =>
-      expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.failed.accent}` })
-    );
+    await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'escalation'));
+    flashesIn('task_aaaaaaaa', STATUS_THEME.failed.accent);
   });
 
   it('flashes a decision gate amber', async () => {
@@ -508,7 +525,7 @@ describe('the node pulse', () => {
     );
 
     await waitFor(() => expect(node('task_aaaaaaaa')).toHaveAttribute('data-pulse', 'decision_gate'));
-    expect(node('task_aaaaaaaa')).toHaveStyle({ boxShadow: `0 0 0 3px ${STATUS_THEME.dispatched.accent}` });
+    flashesIn('task_aaaaaaaa', STATUS_THEME.dispatched.accent);
   });
 
   it('does not flash a plain status message — three colours were agreed, and only three', async () => {

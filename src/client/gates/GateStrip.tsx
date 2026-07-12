@@ -1,7 +1,11 @@
 import { OctagonAlert } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Aurora } from '@/components/fx/aurora';
+import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { cn } from '@/lib/utils';
 import type { Gate, Task } from '../../shared/types.ts';
 import { GATE_THEME } from '../canvas/theme.ts';
+import { enter, SPRING } from '../motion.ts';
 
 /**
  * The decision blocking your orchestration, above the canvas, in your way.
@@ -21,6 +25,12 @@ import { GATE_THEME } from '../canvas/theme.ts';
  * - **It never offers to answer.** This tool does not write to the database — not a gate
  *   resolution, not anything (SPEC §1.2). It shows you the question; you go and answer it in
  *   Orca.
+ *
+ * And it is the **one surface in the tool with an aurora behind it** (SPEC §7.9). Everything else
+ * on this page is a fact you read and it holds still. This is a fact that is *waiting* — and a
+ * light that will not sit still is what a thing that will not go away looks like. It is slow (a
+ * 19-to-25-second cycle) because it has to stay bearable for as long as the gate stays open, which
+ * on a real database is hours.
  *
  * The gates arrive already derived, already scoped to the run and already open: the server owns
  * all of that (`server/gates.ts`), because a client that re-derived which questions were still
@@ -42,21 +52,31 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
   const titleOf = (taskId: string): string => tasks.find((task) => task.id === taskId)?.title ?? taskId;
 
   return (
-    <section
+    <motion.section
       data-testid="gate-strip"
       // A status, not an alert: it is important, and it is not an emergency. An assertive live
       // region would interrupt a screen reader mid-sentence every time a run got blocked.
       role="status"
       aria-label={`${gates.length} open decision ${gates.length === 1 ? 'gate' : 'gates'}`}
+      initial={enter({ opacity: 0, y: -10 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
       className={cn(
-        'shrink-0 overflow-y-auto border-b px-4 py-2.5',
+        'relative shrink-0 overflow-hidden rounded-xl border px-4 py-2.5',
         // Several open gates in one run is a real shape (13 open across the live database), and
         // an unbounded strip would eat the canvas it is supposed to be pointing at.
-        'max-h-40',
+        'max-h-40 overflow-y-auto',
         GATE_THEME.surface
       )}
+      // A rim of its own orange, and no more. The strip is already the brightest surface on the
+      // page by virtue of being the only *coloured* one; a halo on top of that read as a strip
+      // that was on fire, which is a louder claim than the data makes. The run is stopped, not
+      // burning — and a warning that overstates itself is a warning that gets turned off.
+      style={{ boxShadow: '0 0 0 1px color-mix(in oklch, var(--gate) 35%, transparent), var(--lift-2)' }}
     >
-      <ul className="flex flex-col gap-1.5">
+      <Aurora colour="var(--gate)" />
+
+      <ul className="relative flex flex-col gap-1">
         {gates.map((gate) => {
           // Bound once, so the narrowing survives into the callback — and so the two branches
           // are visibly the same question asked of the same value: is there a node to go to?
@@ -65,21 +85,37 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
           return (
             <li key={gate.id} data-testid="gate">
               {taskId === null ? (
-                <GateEntry gate={gate} blocks={null} />
+                <div className="px-1.5 py-1">
+                  <GateEntry gate={gate} blocks={null} />
+                </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => onSelectTask(taskId)}
-                  className="hover:bg-gate/10 focus-visible:ring-gate/50 block w-full cursor-pointer rounded-md px-1.5 py-0.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  <GateEntry gate={gate} blocks={titleOf(taskId)} />
-                </button>
+                <GateButton gate={gate} blocks={titleOf(taskId)} onSelect={() => onSelectTask(taskId)} />
               )}
             </li>
           );
         })}
       </ul>
-    </section>
+    </motion.section>
+  );
+}
+
+/** A gate with a node at the other end of it: the whole row is the way there. */
+function GateButton({ gate, blocks, onSelect }: { gate: Gate; blocks: string; onSelect: () => void }) {
+  const spotlight = useSpotlight();
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        'group relative block w-full cursor-pointer rounded-lg px-1.5 py-1 text-left',
+        'hover:bg-gate/10 focus-visible:ring-gate/50 transition-colors focus-visible:ring-2 focus-visible:outline-none'
+      )}
+      {...spotlight}
+    >
+      <Spotlight colour="var(--gate)" />
+      <GateEntry gate={gate} blocks={blocks} />
+    </button>
   );
 }
 
@@ -89,7 +125,7 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
  */
 function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
   return (
-    <span className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[13px]">
+    <span className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[13px]">
       <OctagonAlert aria-hidden className="size-4 shrink-0 translate-y-0.5" />
 
       {/*
@@ -105,7 +141,12 @@ function GateEntry({ gate, blocks }: { gate: Gate; blocks: string | null }) {
       {gate.options.map((option) => (
         <span
           key={option}
-          className="border-gate/60 bg-background/70 rounded-full border px-2 py-px text-[11px] font-medium"
+          className={cn(
+            'border-gate/60 bg-background/70 rounded-full border px-2 py-px text-[11px] font-medium',
+            // The options are the shape of the answer, and the shape is the fastest thing on this
+            // strip to read — so they brighten under the pointer with the row that holds them.
+            'transition-colors group-hover:border-gate group-hover:bg-background'
+          )}
         >
           {option}
         </span>
