@@ -1,6 +1,6 @@
 # Issue tracker
 
-This project tracks work in **GitHub Issues** on `nvergez/orca-orchestrator-visualizer`.
+This project tracks work in **GitHub Issues** on `nvergez/orca-viz`.
 
 ## Fetching an issue
 

@@ -13,13 +13,13 @@
     "sqlite",
     "cli"
   ],
-  "homepage": "https://github.com/nvergez/orca-orchestrator-visualizer#readme",
+  "homepage": "https://github.com/nvergez/orca-viz#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nvergez/orca-orchestrator-visualizer.git"
+    "url": "git+https://github.com/nvergez/orca-viz.git"
   },
   "bugs": {
-    "url": "https://github.com/nvergez/orca-orchestrator-visualizer/issues"
+    "url": "https://github.com/nvergez/orca-viz/issues"
   },
   "publishConfig": {
     "access": "public"

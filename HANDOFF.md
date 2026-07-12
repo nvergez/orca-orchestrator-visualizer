@@ -1,6 +1,6 @@
 # Handoff: Orca Orchestration Visualizer
 
-Context transferred from a prior Claude Code conversation inside the Orca codebase (`/home/dev/projects/orca`, github.com/stablyai/orca). That conversation established feasibility; this repo (`nvergez/orca-orchestrator-visualizer`) is where the MVP gets built.
+Context transferred from a prior Claude Code conversation inside the Orca codebase (`/home/dev/projects/orca`, github.com/stablyai/orca). That conversation established feasibility; this repo (`nvergez/orca-viz`) is where the MVP gets built.
 
 ## The idea
 
@@ -44,4 +44,4 @@ Enums:
 
 ## Repo state
 
-Fresh repo: only the agent-skills setup is committed (`.claude/skills/`, `.agents/`, `skills-lock.json`). No app code yet. Remote: `github.com/nvergez/orca-orchestrator-visualizer` — usable as the wayfinder issue tracker.
+Fresh repo: only the agent-skills setup is committed (`.claude/skills/`, `.agents/`, `skills-lock.json`). No app code yet. Remote: `github.com/nvergez/orca-viz` — usable as the wayfinder issue tracker.
