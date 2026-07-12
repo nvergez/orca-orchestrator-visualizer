@@ -1,6 +1,7 @@
 import { Handle, type NodeProps, Position, type Node } from '@xyflow/react';
+import { shortHandle } from '../../shared/handles.ts';
 import type { Task } from '../../shared/types.ts';
-import { colorOf, NODE_HEIGHT, NODE_WIDTH, shortHandle, STALE_HEARTBEAT_MS } from './theme.ts';
+import { colorOf, NODE_HEIGHT, NODE_WIDTH, STALE_HEARTBEAT_MS } from './theme.ts';
 
 /**
  * A task, as it appears on the canvas — the node component the dev approved on screen

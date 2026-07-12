@@ -1,17 +1,39 @@
-import type { Meta, StreamEvent } from '../shared/types.ts';
+import { useMemo } from 'react';
+import type { Meta, Run, StreamEvent, Task } from '../shared/types.ts';
 import { livenessSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
+import { RunRail } from './rail/RunRail.tsx';
+import { useRunSelection } from './rail/selection.ts';
 
 /**
- * The shell the MVP panels get hung off — the run rail, gate strip, feed and inspector
- * arrive with their own tickets (#16–#20).
+ * The shell — the run rail on the left, the canvas in the middle, and above both of them the
+ * truth about what is being read.
  *
- * The canvas lands here (#15) under the `meta` header #14 built: the truth about *what is
- * being read* stays on screen above the graph, because a visualizer that cannot tell you
- * whether it is showing a live orchestration or last Tuesday's is worse than no visualizer,
- * and the graph below it would be worth nothing.
+ * The rail is what makes the canvas mean anything (#16). Before it, every task in the
+ * database rendered as one graph: 76 nodes, 13 unrelated orchestrations, four days of
+ * history in a single unreadable soup. Now the canvas renders **exactly one run**, and
+ * because the database is never pruned, yesterday's run renders through that same code
+ * path as today's — there is no history mode, there is a list, and one of them happens to
+ * be live.
+ *
+ * The gate strip, feed and inspector arrive with their own tickets (#18–#20).
  */
+
+/** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
+const NO_RUNS: Run[] = [];
+const NO_TASKS: Task[] = [];
+
 export function App({ event }: { event: StreamEvent | null }) {
+  const runs = event?.snapshot.runs ?? NO_RUNS;
+  const { selected, select, newRunId } = useRunSelection(runs);
+
+  // The scoping, in one line. Every task carries the run the server inferred for it, so the
+  // client never re-derives the grouping — it only picks which one to draw.
+  const tasks = useMemo(
+    () => (event && selected ? event.snapshot.tasks.filter((task) => task.runId === selected.id) : NO_TASKS),
+    [event, selected]
+  );
+
   if (!event) {
     return (
       <main>
@@ -30,8 +52,18 @@ export function App({ event }: { event: StreamEvent | null }) {
         <Source meta={event.meta} />
       </header>
 
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <Canvas tasks={event.snapshot.tasks} />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        <RunRail
+          runs={runs}
+          coordinatorRuns={event.snapshot.coordinatorRuns}
+          selectedId={selected?.id ?? null}
+          onSelect={select}
+          newRunId={newRunId}
+        />
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Canvas tasks={tasks} />
+        </div>
       </div>
     </main>
   );

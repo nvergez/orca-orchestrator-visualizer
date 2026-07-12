@@ -45,17 +45,17 @@ describe('GET /api/snapshot', () => {
     expect(meta.degraded).toEqual([]);
   });
 
-  it('carries the tasks, and the arrays the tickets after this one still owe', async () => {
+  it('carries the tasks, the runs they were inferred into, and the array #17 still owes', async () => {
     const dbPath = new FixtureBuilder().task({ createdAt: AT }).write(tempDbPath());
     harness = await serve(dbPath);
 
     const snapshot = await harness.snapshot();
 
-    // #15 fills `tasks` (see tasks.test.ts). Runs are inferred in #16, coordinator runs
-    // land with them, and the feed is #17 — an empty array is the honest thing to send
-    // until each arrives.
+    // #15 fills `tasks` (tasks.test.ts) and #16 the runs (runs.test.ts). `coordinatorRuns`
+    // is empty because the *table* is — in practice it always is (SPEC §4.2, trap 3) — and
+    // the feed is #17, where an empty array is still the honest thing to send.
     expect(snapshot.snapshot.tasks).toHaveLength(1);
-    expect(snapshot.snapshot.runs).toEqual([]);
+    expect(snapshot.snapshot.runs).toHaveLength(1);
     expect(snapshot.snapshot.coordinatorRuns).toEqual([]);
     expect(snapshot.messages).toEqual([]);
   });

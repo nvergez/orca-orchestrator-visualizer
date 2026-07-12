@@ -10,7 +10,16 @@
  */
 
 /** Orca's own enums (HANDOFF.md). Unknown values pass through verbatim — never dropped. */
-export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'completed' | 'failed' | 'blocked';
+
+/**
+ * The six task statuses, as a value, because two of them have to be *enumerated* and not just
+ * type-checked: the per-status tally seeds a zero for each, and the node colours key off each.
+ * Deriving the type from the list keeps one source of truth — an Orca that adds a seventh is
+ * then a compile error in the colour table rather than a status that silently renders nowhere.
+ */
+export const TASK_STATUSES = ['pending', 'ready', 'dispatched', 'completed', 'failed', 'blocked'] as const;
+
+export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type DispatchStatus = 'pending' | 'dispatched' | 'completed' | 'failed' | 'circuit_broken';
 export type MessageType =
   | 'status'
@@ -52,12 +61,19 @@ export type Meta = {
 export type Run = {
   /** `run_<handle8>_<epoch>`, or `run_unattributed`. Stable across restarts. */
   id: string;
+  /** The full `created_by_terminal_handle`, for the rail's tooltip. Null on the synthetic run. */
   handle: string | null;
   label: string;
   startedAt: string;
   endedAt: string;
   taskCount: number;
-  statusCounts: Record<TaskStatus, number>;
+  /**
+   * The six known statuses are always present, at 0 when the run has none of them. An
+   * unknown status counts under its own raw name rather than being dropped — the same
+   * verbatim rule `Task.status` follows (SPEC §5), because a task missing from the tally is
+   * a task the rail lies about.
+   */
+  statusCounts: Record<TaskStatus | string, number>;
   live: boolean;
   hasOpenGates: boolean;
   /** 0 ⇒ the edgeless empty state (SPEC §7.5). */

@@ -1,12 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Dispatch, Task } from '../shared/types.ts';
-import type { SchemaReport } from './schema.ts';
-import { isoInstant } from './time.ts';
+import type { Dispatch } from '../shared/types.ts';
+import { type Columns, isTrue, type Row, selectPresent, text } from './rows.ts';
+import type { TaskWithHandle } from './runs.ts';
+import { byInstant, isoInstant } from './time.ts';
 
 /**
  * The DAG, read out of `tasks` and `dispatch_contexts`.
  *
- * Three things this owes the client, none of which it can work out for itself:
+ * Four things this owes the rest of the server, none of which they can work out for themselves:
  *
  * 1. **The bodies are omitted.** `spec` and `result` become `hasSpec` / `hasResult` — a live
  *    71-task dump was 172 KB, almost entirely spec text (SPEC §6.3). `GET /api/task/:id`
@@ -16,18 +17,20 @@ import { isoInstant } from './time.ts';
  *    them all, and it is the *only* visible sign anywhere in this schema that a task was
  *    retried (SPEC §7.5).
  * 3. **Every timestamp is an ISO-8601 UTC instant** (`time.ts`).
+ * 4. **The run key travels beside the task, not on it.** `created_by_terminal_handle` is what
+ *    runs are inferred from (`runs.ts`) and it is not part of the wire contract — a run's
+ *    handle belongs to the *run*. So the reader hands it over rather than smuggling it onto
+ *    the task or making the inference re-open the database to find it.
  *
  * Every query is built from the columns the database really has (`schema.ts`), so an older
  * Orca costs exactly the badge whose column is missing — never the graph.
  */
 
-type Row = Record<string, unknown>;
-type Columns = SchemaReport['columns'];
-
 /** Read if present. `tasks.id` / `status` / `deps` are the DAG core and always are. */
 const TASK_COLUMNS = [
   'id',
   'parent_id',
+  'created_by_terminal_handle',
   'task_title',
   'display_name',
   'spec',
@@ -64,33 +67,47 @@ const DISPATCH_COLUMNS = [
   'last_heartbeat_at',
 ] as const;
 
-export function readTasks(db: DatabaseSync, columns: Columns): Task[] {
+/**
+ * Every task in the database, in creation order, each with the handle that created it.
+ *
+ * `runId` is left empty here: it is not a column, it is a *guess*, and the guess is made in
+ * one place (`runs.ts`) over the whole task set at once.
+ */
+export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] {
   const attempts = readAttempts(db, columns);
 
   return selectPresent(db, 'tasks', columns.tasks, TASK_COLUMNS, BODY_PRESENCE)
-    .map((row): Task => {
+    .map((row): TaskWithHandle => {
       const id = text(row.id) ?? '';
       const attempt = attempts.get(id);
+      // Pre-v5 Orca named neither. A *task* then falls back to its short id; a *run* falls
+      // back to its handle — so the name is passed on unresolved, and each falls back its own way.
+      const name = text(row.task_title) ?? text(row.display_name);
 
       return {
-        id,
-        // Runs are inferred in #16 and gates derived in #19. Until they are, saying "no run"
-        // is the honest answer — every task in the database renders as one graph, which is
-        // the unusable soup that motivates run scoping in the first place.
-        runId: '',
-        gate: null,
-        parentId: text(row.parent_id),
-        title: text(row.task_title) ?? text(row.display_name) ?? shortId(id),
-        // Verbatim: a status this tool has never heard of still names a real state, and a
-        // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
-        status: text(row.status) ?? '',
-        deps: parseDeps(row.deps),
-        createdAt: isoInstant(row.created_at) ?? '',
-        completedAt: isoInstant(row.completed_at),
-        hasSpec: isTrue(row.spec),
-        hasResult: isTrue(row.result),
-        dispatch: attempt ? toDispatch(attempt.latest) : null,
-        attemptCount: attempt?.count ?? 0,
+        // Absent before schema v4, and null on 4 of 76 live tasks even now: both land the
+        // task in the one synthetic `run_unattributed` rather than losing it (SPEC §4.3).
+        handle: text(row.created_by_terminal_handle),
+        name,
+        task: {
+          id,
+          // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
+          runId: '',
+          // #19 derives gates from `decision_gate` messages, never the empty gates table.
+          gate: null,
+          parentId: text(row.parent_id),
+          title: name ?? shortId(id),
+          // Verbatim: a status this tool has never heard of still names a real state, and a
+          // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
+          status: text(row.status) ?? '',
+          deps: parseDeps(row.deps),
+          createdAt: isoInstant(row.created_at) ?? '',
+          completedAt: isoInstant(row.completed_at),
+          hasSpec: isTrue(row.spec),
+          hasResult: isTrue(row.result),
+          dispatch: attempt ? toDispatch(attempt.latest) : null,
+          attemptCount: attempt?.count ?? 0,
+        },
       };
     })
     .sort(byCreation);
@@ -136,26 +153,6 @@ function toDispatch(row: Row): Dispatch {
 }
 
 /**
- * SELECT only what the file really has: never name a column this Orca never added.
- *
- * Always in `rowid` order, which is insertion order — the order the dispatch fold depends on
- * for `MAX(rowid)`, and a stable base order for everything else.
- */
-function selectPresent(
-  db: DatabaseSync,
-  table: string,
-  present: ReadonlySet<string>,
-  wanted: readonly string[],
-  projected: Record<string, string> = {}
-): Row[] {
-  const columns = wanted.filter((column) => present.has(column));
-  if (columns.length === 0) return [];
-
-  const selected = columns.map((column) => projected[column] ?? column);
-  return db.prepare(`SELECT ${selected.join(', ')} FROM ${table} ORDER BY rowid`).all() as Row[];
-}
-
-/**
  * The DAG edges. The column is a JSON string with nothing enforcing that it parses, and a
  * task with an unreadable `deps` still has a status worth seeing — so a broken column costs
  * its edges, never its node.
@@ -180,21 +177,7 @@ function shortId(id: string): string {
   return separator === -1 ? id.slice(0, 8) : id.slice(0, separator + 9);
 }
 
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value !== '' ? value : null;
-}
-
-/** SQLite has no boolean type: a comparison comes back as the integer 1 or 0. */
-function isTrue(value: unknown): boolean {
-  return value === 1;
-}
-
 /** Creation order — for a task set with no edges at all, the only structure it has. */
-function byCreation(a: Task, b: Task): number {
-  return instant(a.createdAt) - instant(b.createdAt);
-}
-
-function instant(iso: string): number {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? 0 : at;
+function byCreation(a: TaskWithHandle, b: TaskWithHandle): number {
+  return byInstant(a.task.createdAt, b.task.createdAt);
 }
