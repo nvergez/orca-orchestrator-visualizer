@@ -33,3 +33,28 @@ export function isoInstant(value: unknown): string | null {
 
   return Number.isNaN(parsed.getTime()) ? raw : parsed.toISOString();
 }
+
+/**
+ * The instant a normalized timestamp names — or **null when it names none**.
+ *
+ * `isoInstant` passes an unreadable value through verbatim rather than dropping the row, so
+ * every timestamp downstream is ISO *or* whatever nonsense the column actually held. Null is
+ * how that nonsense stays honest: an unknown instant is not the epoch, and quietly calling it
+ * `0` is what would sort a garbage-stamped task to the head of its run and mint a ghost.
+ */
+export function instantOf(iso: string | null): number | null {
+  if (!iso) return null;
+
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
+}
+
+/** Chronological order, with the timestamps nobody can read sorted last rather than first. */
+export function byInstant(a: string, b: string): number {
+  const left = instantOf(a);
+  const right = instantOf(b);
+
+  if (left === null) return right === null ? 0 : 1;
+  if (right === null) return -1;
+  return left - right;
+}

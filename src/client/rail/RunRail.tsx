@@ -52,9 +52,9 @@ export function RunRail({ runs, coordinatorRuns, selectedId, onSelect, newRunId 
       )}
 
       {runs.length === 0 ? (
-        <p style={{ margin: '0 12px', fontSize: 12, color: '#71717a' }}>
-          No runs yet — nothing has been dispatched.
-        </p>
+        // The canvas beside it already says what an empty database means; the rail only has to
+        // say that it has nothing to list.
+        <p style={{ margin: '0 12px', fontSize: 12, color: '#71717a' }}>No runs yet.</p>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {runs.map((run) => (
@@ -78,6 +78,8 @@ export function RunRail({ runs, coordinatorRuns, selectedId, onSelect, newRunId 
  * and it is the only identity the orchestration has anywhere in the schema.
  */
 function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSelect: () => void }) {
+  const breakdown = statusBreakdown(run.statusCounts);
+
   return (
     <button
       type="button"
@@ -107,7 +109,7 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
 
       <span style={{ display: 'block', paddingLeft: 14, fontSize: 11, color: '#71717a' }}>
         {formatRunDate(run.startedAt)} · {run.taskCount} {run.taskCount === 1 ? 'task' : 'tasks'}
-        {statusBreakdown(run.statusCounts) && <> · {statusBreakdown(run.statusCounts)}</>}
+        {breakdown && <> · {breakdown}</>}
       </span>
     </button>
   );

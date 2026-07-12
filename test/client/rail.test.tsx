@@ -227,11 +227,15 @@ describe('a new run arriving while you read an old one', () => {
   });
 
   it('says nothing when the runs are the ones you already knew about', async () => {
-    const { rerender } = render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    const { rerender } = render(<App event={event([...BOTH_RUNS], BOTH_RUNS_TASKS)} />);
     await nodeTitles(2);
 
     // A tick that changed a task's status, not the run list. A chip here would be furniture.
-    rerender(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    //
+    // The arrays are rebuilt rather than re-passed: the server sends a *fresh* snapshot every
+    // tick, and an implementation that re-announced every run it was handed would sail through
+    // a test that quietly gave it the same array object twice.
+    rerender(<App event={event([...BOTH_RUNS], [...BOTH_RUNS_TASKS])} />);
 
     expect(screen.queryByRole('button', { name: /new run started/i })).toBeNull();
   });

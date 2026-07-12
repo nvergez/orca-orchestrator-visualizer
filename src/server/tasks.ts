@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Dispatch } from '../shared/types.ts';
 import { type Columns, isTrue, type Row, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
-import { isoInstant } from './time.ts';
+import { byInstant, isoInstant } from './time.ts';
 
 /**
  * The DAG, read out of `tasks` and `dispatch_contexts`.
@@ -179,10 +179,5 @@ function shortId(id: string): string {
 
 /** Creation order — for a task set with no edges at all, the only structure it has. */
 function byCreation(a: TaskWithHandle, b: TaskWithHandle): number {
-  return instant(a.task.createdAt) - instant(b.task.createdAt);
-}
-
-function instant(iso: string): number {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? 0 : at;
+  return byInstant(a.task.createdAt, b.task.createdAt);
 }

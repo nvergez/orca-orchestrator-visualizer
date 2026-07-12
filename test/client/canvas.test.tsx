@@ -75,6 +75,8 @@ function task(over: Partial<Task> = {}): Task {
  * be testing an event the server cannot send.
  */
 function runOf(tasks: Task[]): Run {
+  const inRun = new Set(tasks.map((task) => task.id));
+
   return {
     id: RUN_ID,
     handle: HANDLE,
@@ -85,7 +87,9 @@ function runOf(tasks: Task[]): Run {
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 0, failed: 0, blocked: 0 },
     live: false,
     hasOpenGates: false,
-    edgeCount: tasks.reduce((total, task) => total + task.deps.length, 0),
+    // As the server counts it: only deps whose other end is in the run, so a dep left dangling
+    // by a reset is not an edge here either.
+    edgeCount: tasks.reduce((total, task) => total + task.deps.filter((dep) => inRun.has(dep)).length, 0),
   };
 }
 

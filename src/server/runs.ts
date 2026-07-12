@@ -1,5 +1,6 @@
 import { shortHandle } from '../shared/handles.ts';
-import type { Run, Task, TaskStatus } from '../shared/types.ts';
+import { type Run, type Task, TASK_STATUSES, type TaskStatus } from '../shared/types.ts';
+import { byInstant, instantOf } from './time.ts';
 
 /**
  * Run inference — the thing the schema does not have.
@@ -34,8 +35,6 @@ export const UNATTRIBUTED_RUN_ID = 'run_unattributed';
 
 /** …and the rail says exactly that, rather than dressing the orphans up as an orchestration. */
 export const UNATTRIBUTED_LABEL = 'Unattributed';
-
-const KNOWN_STATUSES: TaskStatus[] = ['pending', 'ready', 'dispatched', 'completed', 'failed', 'blocked'];
 
 /** A run is live only while it still has work that could move. */
 const IN_FLIGHT: ReadonlySet<string> = new Set<TaskStatus>(['ready', 'dispatched']);
@@ -89,7 +88,12 @@ export function inferRuns(entries: TaskWithHandle[], { orcaIsLive }: RunOptions)
     runs,
     // Mapped over the entries as they were read, so the creation order the canvas depends on
     // for its isolated-task grid survives the trip through the buckets.
-    tasks: entries.map((entry) => ({ ...entry.task, runId: runIdOfTask.get(entry.task.id) ?? UNATTRIBUTED_RUN_ID })),
+    //
+    // The lookup is total by construction: every entry went into exactly one bucket, every
+    // bucket into exactly one segment, and every segment became a run. A fallback here would
+    // not be caution — it would hand a task a run id that names no row in the rail, which is
+    // a task nothing can ever render.
+    tasks: entries.map((entry) => ({ ...entry.task, runId: runIdOfTask.get(entry.task.id)! })),
   };
 }
 
@@ -117,7 +121,7 @@ function bucketByHandle(entries: TaskWithHandle[]): Map<string | null, TaskWithH
  * nothing but the absence of a handle; a gap between them means nothing.
  */
 function segmentsOf(handle: string | null, members: TaskWithHandle[]): TaskWithHandle[][] {
-  const ordered = [...members].sort((a, b) => instant(a.task.createdAt) - instant(b.task.createdAt));
+  const ordered = [...members].sort((a, b) => byInstant(a.task.createdAt, b.task.createdAt));
   if (handle === null) return [ordered];
 
   const segments: TaskWithHandle[][] = [];
@@ -125,14 +129,21 @@ function segmentsOf(handle: string | null, members: TaskWithHandle[]): TaskWithH
   let previous: number | null = null;
 
   for (const entry of ordered) {
-    const createdAt = instant(entry.task.createdAt);
+    const createdAt = instantOf(entry.task.createdAt);
+
     // Strictly *more* than six hours: a run that idled exactly six is still that run.
-    if (previous !== null && createdAt - previous > IDLE_GAP_MS) {
+    //
+    // And a gap is only a gap between two instants we can actually read. A task whose
+    // `created_at` holds something unparseable sorts to the back of its bucket and joins the
+    // run it belongs to — measuring a "gap" against it would split a healthy run over a bad
+    // column, and mint a ghost run dated 1970 to hold the one task.
+    if (previous !== null && createdAt !== null && createdAt - previous > IDLE_GAP_MS) {
       segments.push(current);
       current = [];
     }
+
     current.push(entry);
-    previous = createdAt;
+    if (createdAt !== null) previous = createdAt;
   }
 
   if (current.length > 0) segments.push(current);
@@ -168,7 +179,7 @@ function describeRun(handle: string | null, segment: TaskWithHandle[], orcaIsLiv
  */
 function runIdFor(handle: string | null, first: Task): string {
   if (handle === null) return UNATTRIBUTED_RUN_ID;
-  return `run_${shortHandle(handle)}_${Math.floor(instant(first.createdAt) / 1000)}`;
+  return `run_${shortHandle(handle)}_${Math.floor((instantOf(first.createdAt) ?? 0) / 1000)}`;
 }
 
 /**
@@ -189,7 +200,7 @@ function lastActivity(tasks: Task[]): string {
 
   for (const task of tasks) {
     for (const at of [task.createdAt, task.completedAt]) {
-      if (at && instant(at) > instant(latest)) latest = at;
+      if (at !== null && byInstant(at, latest) > 0) latest = at;
     }
   }
 
@@ -203,7 +214,11 @@ function lastActivity(tasks: Task[]): string {
  * task the rail lies about (SPEC §5).
  */
 function countStatuses(tasks: Task[]): Record<string, number> {
-  const counts: Record<string, number> = Object.fromEntries(KNOWN_STATUSES.map((status) => [status, 0]));
+  // A bare object, not an object literal: a status Orca invents is a *key* here, and on an
+  // ordinary object a key like `__proto__` would be swallowed by the prototype setter rather
+  // than counted — dropping the very task this function promises never to drop.
+  const counts: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const status of TASK_STATUSES) counts[status] = 0;
 
   for (const task of tasks) {
     counts[task.status] = (counts[task.status] ?? 0) + 1;
@@ -223,20 +238,16 @@ function countStatuses(tasks: Task[]): Record<string, number> {
 function countEdges(tasks: Task[]): number {
   const inRun = new Set(tasks.map((task) => task.id));
 
-  return tasks.reduce((total, task) => total + task.deps.filter((dep) => inRun.has(dep)).length, 0);
+  // Distinct deps: the column is an unvalidated JSON array, and a task listing the same
+  // dependency twice is still one line on the canvas. Counting it twice would keep a run out
+  // of the edgeless state over an edge nobody can see.
+  return tasks.reduce(
+    (total, task) => total + [...new Set(task.deps)].filter((dep) => inRun.has(dep)).length,
+    0
+  );
 }
 
 /** The rail sorts by most-recent activity, so the run worth opening is the one on top. */
 function byMostRecentActivity(a: Run, b: Run): number {
-  return instant(b.endedAt) - instant(a.endedAt) || instant(b.startedAt) - instant(a.startedAt);
-}
-
-/**
- * Timestamps arrive ISO-normalized from the read path (`time.ts`) — but the column is TEXT
- * and nothing enforces that it parses. An unreadable instant sorts to the epoch rather than
- * poisoning every comparison it touches with NaN.
- */
-function instant(iso: string): number {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? 0 : at;
+  return byInstant(b.endedAt, a.endedAt) || byInstant(b.startedAt, a.startedAt);
 }

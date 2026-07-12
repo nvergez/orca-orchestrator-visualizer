@@ -1,3 +1,5 @@
+import type { TaskStatus } from '../../shared/types.ts';
+
 /**
  * How a run reads on one line of the rail: `Jul 11, 20:54 · 8 tasks · 6 done / 1 failed`.
  *
@@ -7,18 +9,32 @@
  * from a tally the user is trusting to be complete.
  */
 
-/** Done and failed first: on a four-day-old rail, those are what you are scanning for. */
-const BREAKDOWN_ORDER = ['completed', 'failed', 'dispatched', 'ready', 'pending', 'blocked'];
+/**
+ * Done and failed first: on a four-day-old rail, those are what you are scanning for. Typed
+ * against the status list, so a status renamed in `types.ts` cannot silently fall out of the
+ * row and leave a run's tasks unaccounted for.
+ */
+const BREAKDOWN_ORDER: readonly TaskStatus[] = [
+  'completed',
+  'failed',
+  'dispatched',
+  'ready',
+  'pending',
+  'blocked',
+];
 
 /** The one status whose row word is not its schema name — "6 done" is what SPEC §7.2 writes. */
 const WORDS: Record<string, string> = { completed: 'done' };
 
 export function statusBreakdown(counts: Record<string, number>): string {
-  const known = BREAKDOWN_ORDER.filter((status) => (counts[status] ?? 0) > 0);
+  const known: string[] = BREAKDOWN_ORDER.filter((status) => (counts[status] ?? 0) > 0);
   // An unknown status from a newer Orca still names real work (SPEC §5), so it is counted —
   // after the ones we understand, and in a stable order so the row does not shuffle on a tick.
+  // A status with no name at all is the one thing that cannot be printed: it would render as
+  // a bare count against nothing.
   const unknown = Object.keys(counts)
-    .filter((status) => !BREAKDOWN_ORDER.includes(status) && (counts[status] ?? 0) > 0)
+    .filter((status) => status !== '' && !known.includes(status) && !BREAKDOWN_ORDER.includes(status as TaskStatus))
+    .filter((status) => (counts[status] ?? 0) > 0)
     .sort();
 
   return [...known, ...unknown].map((status) => `${counts[status]} ${WORDS[status] ?? status}`).join(' / ');

@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Run, Task } from '../../src/shared/types.ts';
 import { shortHandle } from '../../src/shared/handles.ts';
@@ -128,7 +129,10 @@ describe('splitting: an idle gap of more than six hours', () => {
     expect(new Set(runs.map((run) => run.id)).size).toBe(2);
     // Same terminal, two orchestrations — the handle survives on both rows.
     expect(runs.every((run) => run.handle === ALPHA)).toBe(true);
-    expect(tasksOf(tasks, byId(runs, runs[0]!.id))).toHaveLength(1);
+    // …and the tasks go one to each, most-recent run first: this morning's work is not
+    // filed under yesterday's orchestration.
+    expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toEqual(['task_today']);
+    expect(tasksOf(tasks, runs[1]!).map((task) => task.id)).toEqual(['task_yesterday']);
   });
 
   it('splits on *more* than six hours, so a gap of exactly six does not shred a run', async () => {
@@ -148,7 +152,36 @@ describe('splitting: an idle gap of more than six hours', () => {
 
     expect(await runsOf(builder)).toHaveLength(1);
   });
+
+  it('does not split a run over a task whose created_at is unreadable', async () => {
+    // Nothing in this schema validates a TEXT column. An unparseable instant read as `0` would
+    // sort to the head of the bucket, sit 56 years before the next task, and split off as a
+    // ghost run dated 1970 — so the run is dated by the tasks that *have* a readable time, and
+    // the odd one joins them.
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_readable', handle: ALPHA, createdAt: AT })
+      .task({ id: 'task_broken', handle: ALPHA, createdAt: at(60_000) })
+      .write(tempDbPath());
+    corruptCreatedAt(dbPath, 'task_broken', 'whenever');
+    harness = await serve(dbPath);
+
+    const { runs, tasks } = (await harness.snapshot()).snapshot;
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.startedAt).toBe(AT.toISOString());
+    expect(tasksOf(tasks, runs[0]!).map((task) => task.id)).toContain('task_broken');
+  });
 });
+
+/** The fixture builder always writes a real timestamp, so a corrupt column has to be forged. */
+function corruptCreatedAt(dbPath: string, taskId: string, createdAt: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?').run(createdAt, taskId);
+  } finally {
+    db.close();
+  }
+}
 
 describe('the tasks Orca never attributed to a terminal', () => {
   it('collects every null-handle task into exactly one run, however far apart they are', async () => {
