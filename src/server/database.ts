@@ -1,15 +1,16 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Liveness, StreamEvent } from '../shared/types.ts';
-import { buildAttribution } from './attribution.ts';
+import type { Liveness, Run, StreamEvent, Task, TaskDetail } from '../shared/types.ts';
+import { type Attribution, buildAttribution } from './attribution.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
-import { type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
+import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns } from './runs.ts';
 import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
+import { readTaskDetail } from './task-detail.ts';
 import { readTasks } from './tasks.ts';
 
 /**
@@ -66,25 +67,16 @@ export class OrcaDatabase {
    * `curl` of `/api/snapshot` — means the whole feed.
    */
   snapshot(since = 0): StreamEvent {
-    const liveness = readLiveness(this.path, this.probe);
-    const entries = readTasks(this.db, this.schema.columns);
-    const { runs, tasks } = inferRuns(entries, {
-      orcaIsLive: liveness.liveness === 'live',
-    });
-
-    // Where each message belongs (SPEC §4.4), built from what the run inference has just
-    // worked out — the run each task landed in, and every terminal that ever held one. The
-    // messages are then read against it, so nothing downstream re-derives the grouping.
-    const attribution = buildAttribution(
-      runs,
-      tasks,
-      new Map(entries.map((entry) => [entry.task.id, entry.assignees]))
-    );
+    const { liveness, runs, tasks, attribution } = this.derive();
 
     // The gates, from the `decision_gate` *messages* that raise them and never from the empty
     // table they nominally belong to (SPEC §4.2, trap 1). They are placed by the same
-    // attribution the feed uses — a gate is a message, and it is placed like one — and then
-    // hung back on the runs they block (`hasOpenGates`) and the nodes they mark.
+    // attribution the feed uses — a gate is a message, and it is placed like one — and then hung
+    // back on the runs they block (`hasOpenGates`) and the nodes they mark.
+    //
+    // They are read *here* rather than in `derive()` because they are the snapshot's alone: a
+    // task detail already has its gates (they were in the snapshot the client is holding), and
+    // making a node click scan `messages` twice over for them would be work done to be discarded.
     const gates = readGates(this.db, this.schema.columns, attribution);
     const gated = attachGates(runs, tasks, gates);
 
@@ -110,6 +102,55 @@ export class OrcaDatabase {
       },
       messages: readMessages(this.db, this.schema.columns, { since, attribution }),
     };
+  }
+
+  /**
+   * **What a node click fetches** (#20): the bodies the snapshot leaves in the file, and every
+   * dispatch attempt the snapshot folded down to one. Null when no such task exists — a 404,
+   * because an id that names nothing is not a task with nothing to say (`task-detail.ts`).
+   *
+   * It runs the same derivation a snapshot does, and that is the point rather than the cost: a
+   * message in the inspector is placed by the very rules that placed it in the feed, so the two
+   * panels cannot disagree about which task was being talked about. The derivation is a read of
+   * 76 tasks and no bodies at all; the fetch it serves happens on a click.
+   */
+  taskDetail(id: string): TaskDetail | null {
+    return readTaskDetail(this.db, this.schema.columns, id, this.derive().attribution);
+  }
+
+  /**
+   * The runs, the tasks, and where a message belongs — everything both routes need, and nothing
+   * either of them would throw away.
+   *
+   * The one thing worth reading twice is that **liveness is decided before the runs are**. A run
+   * is live only if Orca itself is (SPEC §7.3): the task rows still read `dispatched` for an
+   * orchestration that was killed mid-flight, and nothing will ever rewrite them, so a green dot
+   * derived from the rows alone would be this tool's worst lie.
+   *
+   * Then the attribution (SPEC §4.4), built from what the run inference has just worked out — the
+   * run each task landed in, and every terminal that ever held one. It is the piece the detail
+   * route comes here for: a message in the inspector is placed by the very rules that placed it
+   * in the feed, so the two panels cannot disagree about which task was being talked about.
+   */
+  private derive(): {
+    liveness: LivenessReport;
+    runs: Run[];
+    tasks: Task[];
+    attribution: Attribution;
+  } {
+    const liveness = readLiveness(this.path, this.probe);
+    const entries = readTasks(this.db, this.schema.columns);
+    const { runs, tasks } = inferRuns(entries, {
+      orcaIsLive: liveness.liveness === 'live',
+    });
+
+    const attribution = buildAttribution(
+      runs,
+      tasks,
+      new Map(entries.map((entry) => [entry.task.id, entry.assignees]))
+    );
+
+    return { liveness, runs, tasks, attribution };
   }
 
   /**

@@ -54,7 +54,13 @@ const BODY_PRESENCE: Record<string, string> = {
   result: "(result IS NOT NULL AND result <> '') AS result",
 };
 
-const DISPATCH_COLUMNS = [
+/**
+ * Exported for `task-detail.ts`, which reads the same rows for one task and keeps **all** of
+ * them (#20). One column list and one row → `Dispatch` mapping, because the snapshot's latest
+ * attempt and the inspector's attempt history are the same row read twice — and two readings
+ * of it would drift into two different stories about the same retry.
+ */
+export const DISPATCH_COLUMNS = [
   'id',
   'task_id',
   'assignee_handle',
@@ -154,7 +160,7 @@ function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Attempts>
   return attempts;
 }
 
-function toDispatch(row: Row): Dispatch {
+export function toDispatch(row: Row): Dispatch {
   return {
     id: text(row.id) ?? '',
     assigneeHandle: text(row.assignee_handle) ?? '',

@@ -65,6 +65,16 @@ describe('the read-only invariant', () => {
     await (await harness.stream()).next();
     await (await harness.stream(400)).next();
 
+    // The detail route (#20) — the only one that reads `spec` and `result`, and the only one
+    // that takes a value from the URL into a SQL parameter. Driven against a task that is
+    // really there, one that is not, and an id built to be hostile: a bound parameter is not
+    // string interpolation, and the difference between those two claims is a `DROP TABLE`.
+    const task = (await harness.snapshot()).snapshot.tasks[0]!;
+    await harness.task(task.id);
+    await harness.task('task_not_in_this_database');
+    await harness.task("task_x'; DROP TABLE tasks; --");
+    await harness.task('');
+
     await fetch(`${harness.origin}/`);
     await fetch(`${harness.origin}/assets/index.js`);
     await fetch(`${harness.origin}/nothing-here.js`);

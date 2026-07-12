@@ -3,7 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../src/client/App.tsx';
 import { STATUS_COLORS } from '../../src/client/canvas/theme.ts';
+import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type { FeedMessage, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+
+/**
+ * Selecting a task swaps the dock to the inspector (#20), and the inspector fetches. These tests
+ * are about the *feed*, and none of them reads that panel — but a canned loader is still handed
+ * in, because a test that quietly reaches for a network is a test that fails on the machine that
+ * happens to have something listening.
+ */
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], messages: [] });
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input.
@@ -133,7 +142,7 @@ async function drawn(count: number): Promise<void> {
 
 describe('the message feed', () => {
   it('is what the right dock shows by default', () => {
-    render(<App event={event({ messages: [message({ subject: 'Done' })] })} />);
+    render(<App loadTask={NO_DETAIL} event={event({ messages: [message({ subject: 'Done' })] })} />);
 
     expect(screen.getByRole('complementary', { name: /message feed/i })).toBeVisible();
     expect(screen.getByText('Done')).toBeVisible();
@@ -142,6 +151,7 @@ describe('the message feed', () => {
   it('shows the type, who said it to whom, the subject and how long ago', () => {
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [
             message({
@@ -167,6 +177,7 @@ describe('the message feed', () => {
   it('colours the chip the way the canvas colours the node it means', () => {
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [
             message({ type: 'worker_done', subject: 'done' }),
@@ -190,6 +201,7 @@ describe('the message feed', () => {
     const user = userEvent.setup();
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [
             message({
@@ -239,7 +251,7 @@ describe('heartbeats', () => {
   }
 
   it('are absent from the feed by default — all 302 of them', () => {
-    render(<App event={heartbeatHeavy()} />);
+    render(<App loadTask={NO_DETAIL} event={heartbeatHeavy()} />);
 
     // 466 messages in, 164 rows out: the four types that are actually events.
     expect(rows()).toHaveLength(164);
@@ -249,7 +261,7 @@ describe('heartbeats', () => {
 
   it('come back when the toggle asks for them', async () => {
     const user = userEvent.setup();
-    render(<App event={heartbeatHeavy()} />);
+    render(<App loadTask={NO_DETAIL} event={heartbeatHeavy()} />);
 
     await user.click(screen.getByRole('checkbox', { name: /show heartbeats/i }));
 
@@ -258,18 +270,19 @@ describe('heartbeats', () => {
   });
 
   it('never pulse a node — 65% of the traffic would be a strobe, not a signal', async () => {
-    const { rerender } = render(<App event={event({ messages: [] })} />);
+    const { rerender } = render(<App loadTask={NO_DETAIL} event={event({ messages: [] })} />);
     await drawn(1);
 
     rerender(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [message({ type: 'heartbeat', subject: 'alive', taskId: 'task_aaaaaaaa' })],
         })}
       />
     );
 
-    await waitFor(() => expect(screen.getByText(/1 heartbeats hidden|1 message/)).toBeVisible());
+    await waitFor(() => expect(screen.getByText(/1 heartbeat hidden/)).toBeVisible());
     expect(node('task_aaaaaaaa')).not.toHaveAttribute('data-pulse');
   });
 });
@@ -288,7 +301,7 @@ describe('scope', () => {
   });
 
   it('is the selected run by default', () => {
-    render(<App event={SCOPED} />);
+    render(<App loadTask={NO_DETAIL} event={SCOPED} />);
 
     expect(rows()).toHaveLength(1);
     expect(screen.getByText('in this run')).toBeVisible();
@@ -296,14 +309,14 @@ describe('scope', () => {
   });
 
   it('never shows an unattributed message inside a run — it is not guessed into one', () => {
-    render(<App event={SCOPED} />);
+    render(<App loadTask={NO_DETAIL} event={SCOPED} />);
 
     expect(screen.queryByText('in no run at all')).toBeNull();
   });
 
   it('shows the whole database, unattributed messages included, under "All"', async () => {
     const user = userEvent.setup();
-    render(<App event={SCOPED} />);
+    render(<App loadTask={NO_DETAIL} event={SCOPED} />);
 
     await user.click(screen.getByRole('button', { name: 'All' }));
 
@@ -322,6 +335,7 @@ describe('a message about a task that no longer exists', () => {
   it('still renders, unlinked rather than dropped', () => {
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [
             message({
@@ -352,6 +366,7 @@ describe('the link between the feed and the canvas', () => {
     const user = userEvent.setup();
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           snapshot: {
             runs: [run()],
@@ -373,9 +388,13 @@ describe('the link between the feed and the canvas', () => {
     expect(node('task_one')).toHaveAttribute('data-selected', 'false');
   });
 
-  it('filters the feed to a task when its node is clicked, and lets go on a second click', async () => {
+  it('gives the dock up to the inspector when a node is selected, and takes it back when it is let go', async () => {
+    // The other direction of the link, as of #20: a selected task's story is the *inspector's*
+    // to tell — the dock holds one panel and it swaps (SPEC §7.1), so the feed's job here is to
+    // get out of the way, and to come back whole when the selection ends.
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           snapshot: {
             runs: [run()],
@@ -393,39 +412,18 @@ describe('the link between the feed and the canvas', () => {
     );
     await drawn(2);
 
-    clickNode('task_one');
-
-    // One task's story, end to end — and nothing else's.
-    expect(rows()).toHaveLength(1);
-    expect(screen.getByText('about one')).toBeVisible();
-    expect(screen.getByTestId('task-filter')).toHaveTextContent('One');
-
-    clickNode('task_one');
-
     expect(rows()).toHaveLength(3);
-    expect(screen.queryByTestId('task-filter')).toBeNull();
-  });
 
-  it('clears the task filter when the ✕ on the chip is clicked', async () => {
-    const user = userEvent.setup();
-    render(
-      <App
-        event={event({
-          messages: [
-            message({ type: 'worker_done', subject: 'about the task', taskId: 'task_aaaaaaaa' }),
-            message({ subject: 'about nothing' }),
-          ],
-        })}
-      />
-    );
-    await drawn(1);
+    clickNode('task_one');
 
-    clickNode('task_aaaaaaaa');
-    expect(rows()).toHaveLength(1);
+    expect(screen.queryByTestId('feed')).toBeNull();
+    expect(screen.getByTestId('inspector')).toBeVisible();
 
-    await user.click(screen.getByTestId('task-filter'));
+    clickNode('task_one');
 
-    expect(rows()).toHaveLength(2);
+    // Back where it was: same rows, same scope, nothing to restore by hand.
+    expect(screen.getByTestId('feed')).toBeVisible();
+    expect(rows()).toHaveLength(3);
   });
 
   it('follows a row into another run rather than pointing at a task that is not on the canvas', async () => {
@@ -435,6 +433,7 @@ describe('the link between the feed and the canvas', () => {
     const user = userEvent.setup();
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           snapshot: {
             runs: [run(), run({ id: OTHER_RUN_ID, label: 'The other run', startedAt: '2026-07-07T12:00:00.000Z' })],
@@ -473,9 +472,9 @@ describe('the link between the feed and the canvas', () => {
  */
 describe('the node pulse', () => {
   async function push(first: StreamEvent, next: StreamEvent): Promise<void> {
-    const { rerender } = render(<App event={first} />);
+    const { rerender } = render(<App loadTask={NO_DETAIL} event={first} />);
     await drawn(1);
-    rerender(<App event={next} />);
+    rerender(<App loadTask={NO_DETAIL} event={next} />);
   }
 
   it('flashes the node a message just arrived about, in its type\'s colour', async () => {
@@ -536,6 +535,7 @@ describe('the node pulse', () => {
     // announcing nothing.
     render(
       <App
+        loadTask={NO_DETAIL}
         event={event({
           messages: [message({ type: 'worker_done', subject: 'Done last Tuesday', taskId: 'task_aaaaaaaa' })],
         })}
@@ -555,7 +555,7 @@ describe('the node pulse', () => {
 describe('a new run arriving while you are reading', () => {
   it('announces itself without changing the selection or the feed', async () => {
     const first = event({ messages: [message({ subject: 'this run' })] });
-    const { rerender } = render(<App event={first} />);
+    const { rerender } = render(<App loadTask={NO_DETAIL} event={first} />);
     await drawn(1);
 
     const withNewRun = event({
@@ -571,7 +571,7 @@ describe('a new run arriving while you are reading', () => {
       messages: [message({ subject: 'the new run says hello', runId: OTHER_RUN_ID })],
     });
 
-    rerender(<App event={withNewRun} />);
+    rerender(<App loadTask={NO_DETAIL} event={withNewRun} />);
 
     expect(await screen.findByRole('button', { name: /new run started/i })).toBeVisible();
     // The canvas is still the run you were reading…
@@ -591,9 +591,9 @@ describe('a new run arriving while you are reading', () => {
  */
 describe('the feed accumulates', () => {
   it('keeps what it has already been sent when a push carries only the new rows', async () => {
-    const { rerender } = render(<App event={event({ messages: [message({ subject: 'the first thing' })] })} />);
+    const { rerender } = render(<App loadTask={NO_DETAIL} event={event({ messages: [message({ subject: 'the first thing' })] })} />);
 
-    rerender(<App event={event({ messages: [message({ subject: 'the second thing' })] })} />);
+    rerender(<App loadTask={NO_DETAIL} event={event({ messages: [message({ subject: 'the second thing' })] })} />);
 
     await waitFor(() => expect(rows()).toHaveLength(2));
     // Newest first: the feed answers "what just happened".

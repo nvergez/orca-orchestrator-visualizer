@@ -315,7 +315,7 @@ describe('heartbeats', () => {
     expect(messages).toHaveLength(466);
     expect(heartbeats).toHaveLength(302);
 
-    const { shown, hidden } = selectFeed(messages, { runId: null, taskId: null, showHeartbeats: false });
+    const { shown, hidden } = selectFeed(messages, { runId: null, showHeartbeats: false });
 
     expect(shown).toHaveLength(164);
     expect(hidden).toBe(302);
@@ -329,7 +329,7 @@ describe('heartbeats', () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const { messages } = await harness.snapshot();
-    const { shown, hidden } = selectFeed(messages, { runId: null, taskId: null, showHeartbeats: true });
+    const { shown, hidden } = selectFeed(messages, { runId: null, showHeartbeats: true });
 
     expect(shown).toHaveLength(466);
     expect(hidden).toBe(0);

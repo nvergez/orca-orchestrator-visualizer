@@ -42,12 +42,20 @@ export const MESSAGE_SEQUENCE = 'messages.sequence';
  * **`payload` is deliberately not on this list.** It costs a gate its options and the node it
  * marks, and half the live database's gate messages have no question in it anyway — the
  * question is in the `subject`. Requiring it would disable more than its absence really costs,
- * which is exactly the over-degradation #21 exists to prevent (`GATE_PAYLOAD` below).
+ * which is exactly the over-degradation #21 exists to prevent (`MESSAGE_PAYLOAD` below).
  */
 export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.id', 'messages.thread_id'] as const;
 
-/** What a gate loses when there is no payload to read: its options, and the task it blocks. */
-export const GATE_PAYLOAD = 'messages.payload';
+/**
+ * `payload.taskId` is the only thing in this schema that links a message to a task — it carries
+ * 83% of attribution (SPEC §4.4). Without the column, a gate loses its options and the task it
+ * blocks, *and* the inspector loses the messages that referenced a task: one absent column, two
+ * features, and `FEATURES` names them separately because a user is owed both.
+ */
+export const MESSAGE_PAYLOAD = 'messages.payload';
+
+/** What ties a dispatch attempt to the task it was made for — the whole retry history hangs on it. */
+export const DISPATCH_TASK_ID = 'dispatch_contexts.task_id';
 
 /**
  * A feature the visualizer offers, the column it cannot live without, and what the user is
@@ -113,9 +121,37 @@ const FEATURES: Feature[] = [
       'Decision gates — this Orca is missing one of messages.type/id/thread_id, so a gate cannot be read from the messages that raise it, or told apart from one that was already answered.',
   },
   {
-    anyOf: [GATE_PAYLOAD],
+    anyOf: [MESSAGE_PAYLOAD],
     degraded:
       'Gate options, and the task a gate blocks — this Orca has no messages.payload column, so a gate shows the question in its subject line and marks no node.',
+  },
+  {
+    // The same missing column, a different feature (#20). `payload.taskId` is the only link a
+    // message has to a task, so without it the inspector's message list is empty — which the
+    // gate entry above does not say and a user reading a blank panel is owed.
+    anyOf: [MESSAGE_PAYLOAD],
+    degraded:
+      'The messages in the node inspector — this Orca has no messages.payload column, so nothing says which task a message referenced.',
+  },
+  {
+    // The task's own two body columns. Each costs exactly its own section of the inspector: an
+    // Orca with no `result` still has a spec to show, and vice versa.
+    anyOf: ['tasks.spec'],
+    degraded:
+      'The dispatched spec — this Orca has no tasks.spec column, so the inspector cannot show the prompt an agent was given.',
+  },
+  {
+    anyOf: ['tasks.result'],
+    degraded:
+      'The result receipt — this Orca has no tasks.result column, so the inspector cannot show what a worker reported back.',
+  },
+  {
+    // Everything a dispatch row is *for* hangs on this one column: with no `task_id`, no attempt
+    // can be tied to a task, so the assignee badge, the retry count and the inspector's attempt
+    // history all go at once. They go together because they are all the same read.
+    anyOf: [DISPATCH_TASK_ID],
+    degraded:
+      'Dispatch attempts — this Orca has no dispatch_contexts.task_id column, so no attempt can be tied to the task it was made for: no assignee badge, no retry count, and no attempt history.',
   },
 ];
 

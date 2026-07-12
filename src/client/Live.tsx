@@ -6,8 +6,11 @@ import { App } from './App.tsx';
  * The transport — an `EventSource` on `/api/stream`, feeding `<App>` (#17).
  *
  * It is kept out of `<App>` on purpose, and that is the whole architecture of the client:
- * `StreamEvent` is the component's only input, so `<App>` is testable against a canned event
- * (seam 2, #12) and this file is the only one that knows a network exists.
+ * everything the shell renders arrives through its props, so `<App>` is testable against a canned
+ * event (seam 2, #12) and the network lives at the edges. There are exactly two of those, and the
+ * other is the inspector's one-shot `GET /api/task/:id` (`inspector/detail.ts`, #20) — which is a
+ * *loader value* the shell is handed, defaulting to the real fetch, precisely so that the click
+ * that asks for a 172 KB body is a thing a test can watch happen.
  *
  * **Why there is so little code here.** `EventSource` reconnects on its own, and replays the
  * `Last-Event-ID` of the last event it saw. That id *is* `MAX(messages.sequence)` — the

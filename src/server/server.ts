@@ -20,6 +20,9 @@ const CONTENT_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
+/** `GET /api/task/:id` — everything after this prefix is the id (#20). */
+const TASK_ROUTE = '/api/task/';
+
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
   // The two things a long-lived push response has to say for itself. There is no proxy on
@@ -68,8 +71,8 @@ export type Viz = { server: Server; close(): Promise<void> };
  * Two routes return a `StreamEvent`, and they are deliberately the same event from the same
  * call: `GET /api/stream` pushes one whenever the database changes (#17), and
  * `GET /api/snapshot` returns one and hangs up — which makes the whole tool `curl`-debuggable
- * and is the seam the server tests drive (#12). `GET /api/task/:id` (#20) will be the only
- * route that returns something else, because it is the only one that reads the bodies.
+ * and is the seam the server tests drive (#12). `GET /api/task/:id` (#20) is the only route
+ * that returns something else, because it is the only one that reads the bodies.
  */
 export function createServer({
   database,
@@ -88,6 +91,11 @@ export function createServer({
 
     if (urlPath === '/api/snapshot') {
       sendSnapshot(database, res);
+      return;
+    }
+
+    if (urlPath.startsWith(TASK_ROUTE)) {
+      sendTaskDetail(database, urlPath.slice(TASK_ROUTE.length), res);
       return;
     }
 
@@ -176,6 +184,43 @@ function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
     const body = JSON.stringify(database.snapshot());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(body);
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/**
+ * `GET /api/task/:id` (#20) — the one route that is not a `StreamEvent`, because it is the one
+ * route that reads the bodies.
+ *
+ * Three answers, and each of them is a different thing to have happened:
+ *
+ * - **200** — the task, its spec and result, **every** dispatch attempt in `rowid` order, and
+ *   the messages that referenced it (SPEC §7.8).
+ * - **404** — no such task. Ids are pasted by hand and an `orchestration reset` deletes tasks
+ *   that the rest of the file still names, so this is a case rather than a bug — and an empty
+ *   200 would dress an id that means nothing up as a task with nothing to say.
+ * - **500** — the read itself failed, exactly as a snapshot's would.
+ */
+function sendTaskDetail(database: OrcaDatabase, rawId: string, res: ServerResponse): void {
+  let id: string;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    id = rawId; // A malformed escape is not a task id either — it falls through to the 404.
+  }
+
+  try {
+    const detail = id === '' ? null : database.taskDetail(id);
+
+    if (detail === null) {
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: `No task ${id} in this database.` }));
+      return;
+    }
+
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(detail));
   } catch (error) {
     sendError(res, error);
   }
