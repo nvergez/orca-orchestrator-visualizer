@@ -212,10 +212,13 @@ describe('the task DAG on the canvas', () => {
  * an edge is *worth* is that you can see the work moving, and that is a DOM fact.
  */
 describe('the dependency edges', () => {
-  function edge(id: string): Element {
-    const found = document.querySelector(`.react-flow__edge[data-id="${id}"]`);
-    if (!found) throw new Error(`no edge ${id} on the canvas`);
-    return found;
+  /** An edge is drawn only once both its nodes have been measured — a tick after they appear. */
+  function edge(id: string): Promise<Element> {
+    return waitFor(() => {
+      const found = document.querySelector(`.react-flow__edge[data-id="${id}"]`);
+      if (!found) throw new Error(`no edge ${id} on the canvas`);
+      return found;
+    });
   }
 
   it('animates an edge into work that is in flight, and leaves the settled ones still', async () => {
@@ -225,10 +228,10 @@ describe('the dependency edges', () => {
       task({ id: 'task_next', status: 'pending', deps: ['task_running'] }),
     ]);
 
-    expect(edge('task_done->task_running')).toHaveClass('animated');
+    expect(await edge('task_done->task_running')).toHaveClass('animated');
     // Nothing is in flight into a pending task, and a canvas that animated everything would
     // be telling you nothing.
-    expect(edge('task_running->task_next')).not.toHaveClass('animated');
+    expect(await edge('task_running->task_next')).not.toHaveClass('animated');
   });
 });
 
