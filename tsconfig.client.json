@@ -1,0 +1,14 @@
+{
+  // Browser side: the React app and its jsdom tests. Vite does the transpiling, so
+  // this config only typechecks.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    "noEmit": true
+  },
+  "include": ["src/client", "test/client"]
+}
