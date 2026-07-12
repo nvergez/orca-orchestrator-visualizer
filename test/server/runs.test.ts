@@ -208,7 +208,7 @@ describe('waves: an idle gap of more than six hours', () => {
       .task({ id: 'task_readable', handle: ALPHA, createdAt: AT })
       .task({ id: 'task_broken', handle: ALPHA, createdAt: at(60_000) })
       .write(tempDbPath());
-    corruptCreatedAt(dbPath, 'task_broken', 'whenever');
+    corruptColumn(dbPath, 'tasks', 'created_at', 'whenever', 'id', 'task_broken');
     harness = await serve(dbPath);
 
     const { runs, tasks } = (await harness.snapshot()).snapshot;
@@ -233,10 +233,17 @@ describe('waves: an idle gap of more than six hours', () => {
 });
 
 /** The fixture builder always writes a real timestamp, so a corrupt column has to be forged. */
-function corruptCreatedAt(dbPath: string, taskId: string, createdAt: string): void {
+function corruptColumn(
+  dbPath: string,
+  table: 'tasks' | 'dispatch_contexts',
+  column: string,
+  value: string,
+  keyColumn: string,
+  key: string
+): void {
   const db = new DatabaseSync(dbPath);
   try {
-    db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?').run(createdAt, taskId);
+    db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${keyColumn} = ?`).run(value, key);
   } finally {
     db.close();
   }
@@ -529,6 +536,39 @@ describe('last activity: every task and every dispatch attempt gets a vote', () 
     expect(runs[0]!.lastActivityAt).toBe(at(90 * 60_000).toISOString());
   });
 
+  it('ignores an unreadable timestamp — it is not the epoch, and it must not win either', async () => {
+    // Nothing in this schema validates a TEXT column. Read as `0` the garbage would date the
+    // run in 1970; and the unreadable-sorts-last convention (`time.ts`) means that taken at
+    // face value it would *out-sort* every real instant. Neither: it simply does not vote
+    // (SPEC §12.2), and the readable dispatch beside it does.
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: AT })
+      .dispatch({ taskId: 'task_a', assigneeHandle: BETA, dispatchedAt: at(10 * 60_000) })
+      .write(tempDbPath());
+    corruptColumn(dbPath, 'dispatch_contexts', 'last_heartbeat_at', 'whenever', 'task_id', 'task_a');
+    harness = await serve(dbPath);
+
+    const runs = (await harness.snapshot()).snapshot.runs;
+
+    expect(runs[0]!.lastActivityAt).toBe(at(10 * 60_000).toISOString());
+  });
+
+  it('preserves the existing unreadable instant when nothing on the run parses at all', async () => {
+    // A run always has a first task, and `startedAt` already reports its unreadable column
+    // verbatim. When no candidate parses, `lastActivityAt` says the same thing rather than
+    // inventing a time the database cannot support (SPEC §12.2).
+    const dbPath = new FixtureBuilder()
+      .task({ id: 'task_a', handle: ALPHA, status: 'dispatched', createdAt: AT })
+      .write(tempDbPath());
+    corruptColumn(dbPath, 'tasks', 'created_at', 'whenever', 'id', 'task_a');
+    harness = await serve(dbPath);
+
+    const runs = (await harness.snapshot()).snapshot.runs;
+
+    expect(runs[0]!.lastActivityAt).toBe('whenever');
+    expect(runs[0]!.lastActivityAt).toBe(runs[0]!.startedAt);
+  });
+
   it('keeps the deprecated endedAt as an exact alias of lastActivityAt', async () => {
     // Byte-for-byte (SPEC §12.4): old consumers keep reading the field they know, and it now
     // tells them the truth the new field tells everyone else.
@@ -626,9 +666,25 @@ describe('the deprecated live projection', () => {
       now: () => at(5 * 60_000).getTime(),
     });
 
-    const { runs } = (await harness.snapshot()).snapshot;
+    const { meta, snapshot } = await harness.snapshot();
 
-    expect(runs.every((run) => run.live === false)).toBe(true);
+    // No runtime file: Orca isn't running — `stale`, the last-known-state wording.
+    expect(meta.liveness).toBe('stale');
+    expect(snapshot.runs.every((run) => run.live === false)).toBe(true);
+  });
+
+  it('projects false when liveness is unknown — not-live means exactly `live`, nothing looser', async () => {
+    // A malformed runtime file is the one state where the tool genuinely does not know. The
+    // projection takes `liveness === 'live'` verbatim (SPEC §12.4), so `unknown` lands with
+    // `stale`, however active the run's evidence is.
+    const dbPath = builder().write(tempDbPath());
+    writeFileSync(join(dirname(dbPath), 'orca-runtime.json'), 'not json at all');
+    harness = await serve(dbPath, { probe: () => false, now: () => at(5 * 60_000).getTime() });
+
+    const { meta, snapshot } = await harness.snapshot();
+
+    expect(meta.liveness).toBe('unknown');
+    expect(snapshot.runs.every((run) => run.live === false)).toBe(true);
   });
 });
 

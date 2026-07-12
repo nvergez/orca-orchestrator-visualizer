@@ -18,10 +18,13 @@ export const WALL_CLOCK_TICK_MS = 30_000;
  * in their own render: a value that changes *every time React happens to re-render*, so two rows
  * measured a frame apart would be measured against two different "now"s.
  *
- * This reads the clock at two well-defined moments and no others: **once per push** — the
- * dependency is the data the panel is showing, and a new one means the stream just delivered
- * (`Live.tsx`) — and **every 30 seconds while mounted**, because run health has to cross the
- * ten-minute boundary on wall-clock time alone, without any SSE event (SPEC §12.3).
+ * This seeds the clock once at mount (a lazy initializer — read once, not on every render) and
+ * then re-reads it at two well-defined moments: **on every push** — the dependency is the data
+ * the panel is showing, and a new one means the stream just delivered (`Live.tsx`) — and **every
+ * 30 seconds while mounted**, because run health has to cross the ten-minute boundary on
+ * wall-clock time alone, without any SSE event (SPEC §12.3). The mount seed matters to health
+ * too: a first render measured against `now = 0` would clamp every age to zero and flash every
+ * unfinished run `active` for a frame.
  */
 export function useNow(pushed: unknown): number {
   const [now, setNow] = useState(() => Date.now());

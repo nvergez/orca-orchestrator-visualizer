@@ -393,34 +393,36 @@ function Dot() {
 }
 
 /**
- * The words each state says out loud — the glossary's (CONTEXT.md), and nobody else's. A silent
- * run is *not* "ended", "dead" or "stuck": the model reports retained evidence, and those three
- * are diagnoses the database cannot support (SPEC §12.3).
+ * The three looks of run health, in one table so a state cannot pulse one thing, wear another
+ * and say a third. Only `active` moves — the page's one "this is not finished" gesture
+ * (SPEC §7.9). `silent` holds still in amber over work that has not converged; `finished` holds
+ * still in the muted grey of a story that is over. The words are the glossary's (CONTEXT.md),
+ * and nobody else's: a silent run is *not* "ended", "dead" or "stuck" — the model reports
+ * retained evidence, and those three are diagnoses the database cannot support (SPEC §12.3).
  */
-const HEALTH_WORDS: Record<RunHealth, string> = {
-  active: 'active — recent activity',
-  silent: 'silent — unfinished, no recent activity',
-  finished: 'finished',
+const HEALTH_LOOK: Record<RunHealth, { pulses: boolean; dot: string | false; words: string }> = {
+  active: { pulses: true, dot: false, words: 'active — recent activity' },
+  silent: { pulses: false, dot: 'bg-run-silent/70', words: 'silent — unfinished, no recent activity' },
+  finished: { pulses: false, dot: false, words: 'finished' },
 };
 
 /**
- * A run's health, worn as the row's dot. Three looks for three states, and only one of them
- * moves: `active` radars green — the page's one "this is not finished" gesture (SPEC §7.9) —
- * `silent` holds still in amber over work that has not converged, and `finished` holds still in
- * the muted grey of a story that is over. The sr-only twin says it in the glossary's words,
- * because a colour a screen reader cannot reach was never said at all.
+ * A run's health, worn as the row's dot — with an sr-only twin saying it in words, because a
+ * colour a screen reader cannot reach was never said at all.
  */
 function HealthDot({ health, className }: { health: RunHealth; className?: string }) {
+  const look = HEALTH_LOOK[health];
+
   return (
     <>
       <RadarDot
-        live={health === 'active'}
-        className={cn(className, health === 'silent' && 'bg-status-dispatched/70')}
+        live={look.pulses}
+        className={cn(className, look.dot)}
         // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "how
         // does this run stand", and the sr-only twin below is how it reaches everyone.
       />
       <span data-testid="health-dot" data-health={health} className="sr-only">
-        {HEALTH_WORDS[health]}
+        {look.words}
       </span>
     </>
   );

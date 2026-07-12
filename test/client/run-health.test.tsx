@@ -6,6 +6,10 @@ import { runHealth, STALE_HEARTBEAT_MS } from '../../src/shared/run-health.ts';
  * contract, not a component: the server projects the deprecated `live` through it at snapshot
  * time, and the rail derives the dot from it against the shared wall clock — so its boundaries
  * are asserted here once, where both consumers can be held to the same answer.
+ *
+ * It lives in the client suite — health is the *client's* derivation (SPEC §12.3), the server
+ * only borrows it — and it is a `.tsx` with no JSX because that is the client project's include
+ * pattern (`vitest.config.ts`).
  */
 
 const NOW = Date.parse('2026-07-08T12:00:00.000Z');
