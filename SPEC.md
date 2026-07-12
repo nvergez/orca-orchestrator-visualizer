@@ -4,6 +4,8 @@
 
 Status: **locked.** This is the implementation-ready specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). Every decision below traces to a resolved ticket, cited inline as (#n). An implementation session should be able to build the MVP from this document plus [`HANDOFF.md`](./HANDOFF.md) without further deliberation.
 
+Post-MVP amendments are normative where they explicitly supersede the locked MVP contract. [Section 12](#12-post-mvp-amendment-run-health-48) replaces the `Run.live` and `endedAt` semantics with an additive, compatibility-preserving run-health model.
+
 **Reading order for the implementer:** `HANDOFF.md` (verified ground truth about Orca's DB — do not re-derive it) → this document. The three research docs under [`docs/research/`](./docs/research/) are the evidence behind the rulings; consult them when you need the `file:line` citations, not to make decisions.
 
 | Source | What it settles |
@@ -16,6 +18,7 @@ Status: **locked.** This is the implementation-ready specification produced by t
 | [#6](https://github.com/nvergez/orca-viz/issues/6) · [`prototype/`](./prototype/) | Rendering: React Flow + elkjs, proven at real scale |
 | [#7](https://github.com/nvergez/orca-viz/issues/7) | UI composition: run scoping, panels, history, message flow |
 | [#8](https://github.com/nvergez/orca-viz/issues/8) | Server architecture, config surface, install story, OSS extras |
+| [#48](https://github.com/nvergez/orca-viz/issues/48) | Post-MVP run convergence, activity evidence, health states, and wire migration (§12) |
 
 ---
 
@@ -218,10 +221,9 @@ Algorithm — recompute per tick from the tasks table:
      impossible.
 5. Label = the earliest task's `task_title`, falling back to `display_name`,
    then the short handle (#7 §3). In practice a run's first task names the work.
-6. Derived per run: startedAt (min created_at), endedAt (max of completed_at /
-   created_at), task count, per-status counts, the CAST (§4.3a), the WAVES,
-   `live` = (meta.liveness === 'live') AND (any task is `ready` or
-   `dispatched`), `hasOpenGates` (§4.5).
+6. Derived per run: startedAt, `lastActivityAt`, convergence, task count,
+   per-status counts, the CAST (§4.3a), the WAVES, and `hasOpenGates` (§4.5).
+   Run health and the deprecated compatibility fields are defined in §12.
 ```
 
 The **server owns this** — the client never re-derives it (#7 "Consequences for #9").
@@ -440,11 +442,15 @@ type Run = {                                 // AN ORCHESTRATOR, and everything 
   id: string                                 // run_<handle> | run_unattributed. The handle ALONE.
   handle: string | null                      // the orchestrator itself; null on the synthetic row
   label: string                              // earliest task's title
-  startedAt: string; endedAt: string         // ISO
+  startedAt: string; lastActivityAt: string  // ISO; exact evidence set in §12
+  converged: boolean                         // terminal task outcomes only; §12
+  /** @deprecated Exact alias of lastActivityAt during migration. */
+  endedAt: string
   taskCount: number
   cast: CastMember[]                         // the agents it spawned — §4.3a
   waves: Wave[]                              // its bursts of work. Always ≥ 1 — §4.3
   statusCounts: Record<TaskStatus, number>
+  /** @deprecated Snapshot-time compatibility projection; new clients derive RunHealth (§12). */
   live: boolean
   hasOpenGates: boolean
   edgeCount: number                          // 0 ⇒ the edgeless empty state (§7.5)
@@ -614,9 +620,9 @@ THE CAST
 
 **On open, the most recently active orchestrator is auto-selected** (#7 §1). **Not an all-tasks view** — dumping all 76 tasks at once is exactly what produced the unusable ~50-wide singleton ribbon in #6.
 
-### 7.3 History: the rail *is* the browser — a badge, not a mode (#7 §5)
+### 7.3 History: the rail *is* the browser — health, not a mode (#7 §5, #48)
 
-The DB never prunes; 13 runs across 4 days sit in it right now. There is **no "history mode"**: a past run renders through the **exact same code path** as the live one, because to us it is the same rows. Live-ness is a **badge** — a green dot when `meta.liveness === 'live'` and the run has `dispatched`/`ready` tasks; otherwise "ended".
+The DB never prunes; 13 runs across 4 days sit in it right now. There is **no "history mode"**: a past run renders through the **exact same code path** as the live one, because to us it is the same rows. The rail shows the run's `active | silent | finished` health from §12 and shows Orca process liveness separately; it never labels an unfinished silent run "ended" or treats a running Orca process as evidence that a particular run is active.
 
 - **No auto-jump.** A new run appearing while you read an old one shows a **"new run started ↑"** chip on the rail. The canvas is never yanked out from under you.
 - **Feed scope toggle: "This run" (default) / "All."** The global `sequence` timeline is the only true total-order history in the schema and costs nothing extra to expose — one click away, never the default.
@@ -807,3 +813,100 @@ The MVP ships when, against a real `orchestration.db`:
 - The two graduated fog items — **history browsing** and **message-flow animation** — were both resolved in #7 (§5, §6).
 
 Three places in this document fill a mechanical gap the tickets did not need to reach, each marked **spec-level** inline and none of them re-litigating a ruling: the message-attribution tie rule (§4.4), the additive merge of `decision_gates` rows when they exist (§4.5), and the concrete numbers for the heartbeat-stale threshold and pulse duration (§7.5, §7.6). An implementer may change these without reopening a ticket. **Everything else is locked.**
+
+---
+
+## 12. Post-MVP amendment: run health (#48)
+
+This section supersedes the MVP's boolean `Run.live`, its misleading `endedAt` name, the `ready | dispatched`-only in-flight set, and every UI rule that labels `live === false` as "ended." It does not change run identity, waves, task health (#47), Orca process detection, or the six-hour attribution grace.
+
+### 12.1 Three independent facts
+
+The implementation must keep these concepts separate:
+
+1. **Convergence** is a property of task state. A run is converged only when every task has a known terminal status: `completed` or `failed`. `pending`, `ready`, `dispatched`, and `blocked` are not converged. An unknown status is conservatively not converged because render-what-parses cannot prove it terminal. Dispatch-attempt status does not override task status.
+2. **Last activity** is retained evidence about the run. It says when recorded work last happened; it does not say that a terminal or process is currently alive.
+3. **Orca process liveness** remains `Meta.liveness: 'live' | 'stale' | 'unknown'`, derived from the runtime file and process probe. It never changes convergence or run health.
+
+The combinations are intentional. A run can be `active` while Orca process liveness is `stale` if the process just exited, or `silent` while Orca is `live` if an old dispatch remains in the database. The UI renders both facts rather than collapsing one into the other.
+
+### 12.2 Exact last-activity evidence
+
+`Run.lastActivityAt` is the maximum readable normalized timestamp across:
+
+- every task's `createdAt` and `completedAt`;
+- every dispatch attempt's `dispatchedAt`, `completedAt`, `lastHeartbeatAt`, and `lastFailure`.
+
+Use every attempt, not only `Task.dispatch`/`MAX(rowid)`: an earlier attempt can contain the newest retained completion or failure evidence. Ignore null or unreadable timestamps rather than treating them as the epoch. A run always contains at least one task; if none of its candidate timestamps parses, preserve the existing unreadable empty instant rather than inventing a time.
+
+Messages are deliberately not activity inputs. Task-id-less messages require the activity window for attribution, so feeding attributed messages back into `lastActivityAt` would be recursive and could allow a chain of weak handle matches to keep extending its own window. Heartbeat activity is still represented by `lastHeartbeatAt`, and completion/failure activity by the task and dispatch-attempt columns above.
+
+Rows and default selection sort by `lastActivityAt`, then `startedAt`, using the existing unreadable-instant ordering. Every wave's `endedAt` uses the same evidence restricted to that wave's tasks and attempts.
+
+### 12.3 Exact run-health states and threshold
+
+```ts
+type RunHealth = 'active' | 'silent' | 'finished'
+```
+
+Health is derived from `converged`, `lastActivityAt`, and a client wall-clock `now`:
+
+| State | Exact condition | Meaning shown to the user |
+|---|---|---|
+| `finished` | `converged === true` | Every task has a terminal outcome. Recency and Orca process liveness do not change this. |
+| `active` | not converged, readable `lastActivityAt`, and `max(0, now - lastActivityAt) < 10 minutes` | The run has recent activity evidence. This does not claim that a terminal is alive. |
+| `silent` | not converged and activity is unreadable or at least 10 minutes old | The run is unfinished with no recent activity evidence. This does not diagnose it as dead or stuck. |
+
+The boundary is exact: at ten minutes the state is `silent`. Clamp future evidence to age zero so modest clock skew does not create a fourth state. The ten-minute constant is the same canonical recency threshold used by task/worker health in #47; do not introduce a second run-only threshold.
+
+The client derives health through one pure helper and a shared wall clock that advances at least every 30 seconds while relevant UI is mounted. A quiet database must visibly cross `active -> silent` without an SSE event. Do not serialize `health`: a server-computed value would freeze behind the `data_version` no-push gate and repeat #47 at run scope.
+
+### 12.4 Wire migration from `Run.live`
+
+The first implementation is additive:
+
+```ts
+type Run = {
+  // existing fields...
+  lastActivityAt: string
+  converged: boolean
+
+  /** @deprecated exact alias of lastActivityAt */
+  endedAt: string
+
+  /** @deprecated compatibility only; new clients must ignore it */
+  live: boolean
+}
+```
+
+For old consumers, `endedAt === lastActivityAt` byte-for-byte. At snapshot construction time, `live` is projected as `meta.liveness === 'live' && runHealth(run, snapshotNow) === 'active'`. This deliberately fixes false-positive green dots but cannot express `silent` versus `finished`; that limitation is why new consumers use the additive facts and derive `RunHealth` themselves.
+
+The in-repo client migrates in the same change that adds the fields. The deprecated fields remain until a separately approved, versioned breaking wire contract; #48 does not remove them or repurpose them with a different type. Fixtures and canned `StreamEvent`s carry both old and new fields during the compatibility period.
+
+### 12.5 Attribution-window effect
+
+The existing attribution priority remains:
+
+1. a valid `payload.taskId` attributes directly, regardless of the clock;
+2. otherwise, handle membership is constrained by a run window;
+3. zero or multiple matching runs produce `runId: null`.
+
+The window becomes `[startedAt, lastActivityAt + 6 hours]`. The six-hour value remains the existing `IDLE_GAP_MS`; #48 changes the evidence anchoring the tail, not the grace period or ambiguity policy. Consequently a later dispatch, heartbeat, attempt completion, attempt failure, or task completion extends handle attribution, while old abandoned task statuses alone do not. Do not iteratively extend the window from messages attributed through that same window.
+
+### 12.6 Acceptance criteria
+
+- [ ] `pending`-only and `blocked`-only runs are not converged; all-`completed`/`failed` runs are converged; an unknown task status is not converged.
+- [ ] `lastActivityAt` selects the newest task or dispatch-attempt evidence across all attempts, including dispatch, heartbeat, completion, and failure timestamps.
+- [ ] A recent blocked or pending run is `active`; the same unfinished run becomes `silent` at the ten-minute boundary without an SSE push; a newly finished run is immediately `finished` even though its activity is recent.
+- [ ] A stale dispatched row is `silent` even while `Meta.liveness === 'live'`; recent activity remains `active` even when `Meta.liveness !== 'live'`, with process state displayed separately.
+- [ ] Rail ordering and initial selection use `lastActivityAt`.
+- [ ] A task-id-less message after the old task-only bound but within six hours of later dispatch/heartbeat evidence attributes to the run; direct task-id attribution and ambiguous-to-null behavior remain unchanged.
+- [ ] `endedAt` exactly aliases `lastActivityAt`, and `live` follows the deprecated compatibility projection for every combination of health and process liveness.
+- [ ] Server/API fixture tests cover convergence, every activity timestamp source, rail ordering, and attribution; client tests cover all three states and a wall-clock-only `active -> silent` transition.
+
+### 12.7 Out of scope
+
+- Per-task/worker health presentation and its never-heartbeat wording (#47).
+- Declaring a terminal dead, stuck, or hung; the model reports only retained activity evidence.
+- Changing the ten-minute recency threshold, the six-hour wave/attribution threshold, run identity, or the `Meta.liveness` probe.
+- Gate triage tiers, alerts, notifications, stream-freshness UI, or the global attention queue (#51).
