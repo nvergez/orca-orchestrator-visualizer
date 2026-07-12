@@ -13,6 +13,7 @@ import { CHIP_CLASS } from '../chip.ts';
 import { selectTurns } from '../conversation/select.ts';
 import { TurnRow } from '../conversation/TurnRow.tsx';
 import { COPY_ON_HOVER, CopyButton, CopyId } from '../copy.tsx';
+import { Duration } from '../duration.tsx';
 import { BAND_IN, DOCK_IN, enter, SECTION_IN, SPRING } from '../motion.ts';
 import { ageOf, useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -298,6 +299,16 @@ function Header({ task, hoppedFrom, onClose }: { task: Task; hoppedFrom: string 
             ↻{task.attemptCount} attempts
           </span>
         )}
+        {/* How long the work took, on the strongest clock the task retains (#66). The wording is
+            the provenance: a bare number is the dispatch clock, the fallback says "task span",
+            and an open interval says "so far" and ages on its own. */}
+        {task.duration && (
+          <Duration
+            observation={task.duration}
+            testId="task-duration"
+            className="text-muted-foreground text-[11px] tabular-nums"
+          />
+        )}
         <CopyId id={task.id} label="task id" />
       </div>
     </header>
@@ -447,6 +458,16 @@ function Attempt({
         <dl className="text-muted-foreground relative mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
           <Fact label="Dispatched" at={dispatch.dispatchedAt} now={now} />
           <Fact label="Completed" at={dispatch.completedAt} now={now} />
+          {/* This attempt's own clock (#66) — both endpoints from this row, absent when they
+              cannot carry one. A retry is *compared* here, which is what the ticket is for. */}
+          {dispatch.duration && (
+            <>
+              <dt className="opacity-70">Duration</dt>
+              <dd className="text-foreground/80 m-0 tabular-nums">
+                <Duration observation={dispatch.duration} testId="attempt-duration" />
+              </dd>
+            </>
+          )}
           <Fact label="Last failure" at={dispatch.lastFailure} now={now} />
           <Fact label="Last seen" at={dispatch.lastHeartbeatAt} now={now} />
         </dl>

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Dispatch } from '../shared/types.ts';
+import type { Dispatch, Task } from '../shared/types.ts';
+import { dispatchDuration, taskDuration } from './durations.ts';
 import { type Columns, type Row, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
 import { byInstant, isoInstant } from './time.ts';
@@ -111,6 +112,32 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
       const spec = text(row.spec);
       const result = text(row.result);
 
+      const task: Task = {
+        id,
+        // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
+        runId: '',
+        // Filled by `attachGates` — from the `decision_gate` *messages* that raise a gate,
+        // never from the `decision_gates` table, which is empty on every real database
+        // (SPEC §4.2, trap 1). Nothing about a task row says it is blocked.
+        gate: null,
+        parentId: text(row.parent_id),
+        title: name ?? shortId(id),
+        // Verbatim: a status this tool has never heard of still names a real state, and a
+        // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
+        status: text(row.status) ?? '',
+        deps: parseDeps(row.deps),
+        createdAt: isoInstant(row.created_at) ?? '',
+        completedAt: isoInstant(row.completed_at),
+        hasSpec: spec !== null,
+        hasResult: result !== null,
+        dispatch: latest,
+        attemptCount: held.length,
+      };
+
+      // Absent when the retained endpoints support no number — never zero, never the epoch (#66).
+      const duration = taskDuration(task);
+      if (duration !== undefined) task.duration = duration;
+
       return {
         // Absent before schema v4, and null on 4 of 76 live tasks even now: both land the
         // task in the one synthetic `run_unattributed` rather than losing it (SPEC §4.3).
@@ -119,27 +146,7 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
         attempts: held,
         spec: preview(spec),
         result: preview(result),
-        task: {
-          id,
-          // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
-          runId: '',
-          // Filled by `attachGates` — from the `decision_gate` *messages* that raise a gate,
-          // never from the `decision_gates` table, which is empty on every real database
-          // (SPEC §4.2, trap 1). Nothing about a task row says it is blocked.
-          gate: null,
-          parentId: text(row.parent_id),
-          title: name ?? shortId(id),
-          // Verbatim: a status this tool has never heard of still names a real state, and a
-          // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
-          status: text(row.status) ?? '',
-          deps: parseDeps(row.deps),
-          createdAt: isoInstant(row.created_at) ?? '',
-          completedAt: isoInstant(row.completed_at),
-          hasSpec: spec !== null,
-          hasResult: result !== null,
-          dispatch: latest,
-          attemptCount: held.length,
-        },
+        task,
       };
     })
     .sort(byCreation);
@@ -189,7 +196,7 @@ function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Dispatch[
 }
 
 export function toDispatch(row: Row): Dispatch {
-  return {
+  const dispatch: Dispatch = {
     id: text(row.id) ?? '',
     assigneeHandle: text(row.assignee_handle) ?? '',
     status: text(row.status) ?? '',
@@ -203,6 +210,12 @@ export function toDispatch(row: Row): Dispatch {
     // `meta.degraded` says so on screen.
     lastHeartbeatAt: isoInstant(row.last_heartbeat_at),
   };
+
+  // The attempt's own clock, both endpoints from this row (#66). Absent when they cannot carry it.
+  const duration = dispatchDuration(dispatch);
+  if (duration !== undefined) dispatch.duration = duration;
+
+  return dispatch;
 }
 
 /**

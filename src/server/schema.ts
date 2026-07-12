@@ -197,6 +197,38 @@ const FEATURES: Feature[] = [
     degraded:
       'Waves — this Orca has no tasks.created_at column, so the idle gaps that separate one burst of an orchestrator’s work from the next cannot be measured, and every task is drawn in a single wave.',
   },
+  {
+    // The durations (#66), clock by clock. The dispatch clock closes on `completed_at`; without
+    // it no attempt can say when it finished, and the honest observation is none. The tasks that
+    // *do* retain a completion fall back to the labelled task span — the sentence says so, because
+    // a user watching every duration change wording at once is owed the mechanism.
+    anyOf: ['dispatch_contexts.completed_at'],
+    degraded:
+      'Dispatch durations — this Orca has no dispatch_contexts.completed_at column, so no attempt can say when it finished: attempts show no duration, and a completed task falls back to its created → completed task span.',
+  },
+  {
+    // The same clock, the other endpoint. `dispatched_at` falls back to the row's `created_at`
+    // (`toDispatch` — the row is written when the attempt is made), so only losing *both* leaves
+    // an attempt's clock with no start.
+    anyOf: ['dispatch_contexts.dispatched_at', 'dispatch_contexts.created_at'],
+    degraded:
+      'Dispatch durations — this Orca records no instant an attempt was dispatched at (neither dispatch_contexts.dispatched_at nor created_at), so an attempt’s clock has no start: attempts show no duration, and a completed task falls back to its task span.',
+  },
+  {
+    // The fallback clock. Both endpoints or neither: a span with one end is not a lesser span,
+    // it is no interval at all.
+    allOf: ['tasks.created_at', 'tasks.completed_at'],
+    degraded:
+      'Task spans — this Orca is missing tasks.created_at or tasks.completed_at, so a completed task whose dispatch clock never closed shows no duration at all.',
+  },
+  {
+    // The run's wall-clock span opens on the earliest readable task creation; with no creation
+    // instants anywhere there is nothing to open it on. The same column costs the waves, and
+    // each loss gets its own sentence — they are different absences on screen.
+    anyOf: ['tasks.created_at'],
+    degraded:
+      'Run spans — this Orca has no tasks.created_at column, so how long a run occupied the clock cannot be measured.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */

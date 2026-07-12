@@ -95,7 +95,11 @@ describe('the tasks in a snapshot', () => {
     const event = await harness.snapshot();
 
     // **A budget on the half of the payload that is re-sent on every push**, and a feature that
-    // grows it has to come here and say so. Two have.
+    // grows it has to come here and say so. Three have.
+    //
+    // The third is the duration observations (#66): one small object per run, per task and per
+    // latest attempt, absent whenever the endpoints cannot support one. Like the turns, they are
+    // bounded by the *row count*, never by what anybody typed — a duration cannot grow.
     //
     // The graph is ~74 KB of tasks, runs and the 53 gates. The conversation (SPEC §4.7) is the rest:
     // ~360 turns, and it is what this whole screen exists to show. It is bounded by the *row count*

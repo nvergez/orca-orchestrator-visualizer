@@ -58,6 +58,40 @@ export type Meta = {
 };
 
 /**
+ * Which retained columns a duration observation read — its provenance, on the wire and on the
+ * screen (SPEC §12.4, #66).
+ *
+ * - `dispatch` — one attempt's own `dispatch_contexts.dispatched_at → completed_at`. The
+ *   preferred clock: it measures the worker's attempt, not task setup time.
+ * - `task-span` — `tasks.created_at → completed_at`. A visibly labelled fallback for a completed
+ *   task with no completed dispatch clock; never presented as dispatch time.
+ * - `run-span` — earliest readable task creation to latest readable completion/creation. It is
+ *   wall-clock occupancy, not summed agent time.
+ */
+export type DurationClock = 'dispatch' | 'task-span' | 'run-span';
+
+/**
+ * A wall-clock span this tool can actually stand behind — and **absence is the honest value**:
+ * a missing, unreadable, negative or contradictory endpoint produces no observation at all,
+ * never a zero, an epoch date or a negative interval (SPEC §12.4).
+ *
+ * An *open* interval (`complete: false`) carries a start and no end. The client ages it against
+ * its own wall clock as "so far" — advancing without waiting for an SSE push, and stopping the
+ * moment a push carries the completion evidence — because a server-derived number for a still-
+ * running attempt would be stale the second after it was computed.
+ */
+export type DurationObservation = {
+  clock: DurationClock;
+  /** ISO — readable by construction, or there is no observation. */
+  startAt: string;
+  /** ISO. Absent ⇒ the interval is still open per retained evidence. */
+  endAt?: string;
+  complete: boolean;
+  /** `endAt − startAt`, present only when complete — it must agree with the endpoints it rides with. */
+  ms?: number;
+};
+
+/**
  * One agent an orchestrator spawned — a terminal that was dispatched at least one of its tasks
  * (SPEC §4.3a). Derived from the `assignee_handle`s of that orchestrator's dispatch contexts,
  * which is the only place in the schema that records who did the work.
@@ -143,6 +177,11 @@ export type Run = {
   hasOpenGates: boolean;
   /** 0 ⇒ the edgeless empty state (SPEC §7.5). */
   edgeCount: number;
+  /**
+   * The run's wall-clock span (`run-span`): earliest readable task creation to latest readable
+   * completion/creation — open while the run is live. Absent when no task creation is readable.
+   */
+  duration?: DurationObservation;
 };
 
 /** The latest dispatch attempt — `MAX(rowid)` for the task, as Orca's own queries do. */
@@ -155,6 +194,8 @@ export type Dispatch = {
   dispatchedAt: string;
   completedAt: string | null;
   lastHeartbeatAt: string | null;
+  /** This attempt's own clock (`dispatch`). Absent when its endpoints cannot support one. */
+  duration?: DurationObservation;
 };
 
 /**
@@ -214,6 +255,12 @@ export type Task = {
   dispatch: Dispatch | null;
   /** > 1 ⇒ this task was retried. */
   attemptCount: number;
+  /**
+   * How long the work took, on the strongest complete clock the task retains: the latest
+   * attempt's `dispatch` clock, else a visibly labelled `task-span`, else the open interval
+   * still running. Absent ⇒ the evidence supports no number at all (#66).
+   */
+  duration?: DurationObservation;
   /**
    * The gate this node wears: the open one it is blocked on, or — when nothing is blocking —
    * the last one it answered. A task can raise several, and `snapshot.gates` has them all; a
