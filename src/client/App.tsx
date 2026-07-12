@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
-import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -616,7 +616,7 @@ function ThemeToggle() {
  */
 function Notices({ meta }: { meta: Meta }) {
   const schema = schemaSentence(meta);
-  if (schema === null && !meta.resetDetected) return null;
+  if (schema === null && meta.historyLoss.length === 0) return null;
 
   return (
     <motion.div
@@ -654,12 +654,18 @@ function Notices({ meta }: { meta: Meta }) {
         </section>
       )}
 
-      {meta.resetDetected && (
-        <p role="status" data-state="reset" className="px-4 py-2">
-          Some history is gone: an <code className="font-mono font-semibold">orchestration reset</code> wiped messages
-          this database once held.
+      {/*
+       * One notice per lost history surface, in the stable order `meta.historyLoss` carries
+       * (SPEC §5.1). The sentence is the spec's, down to the word (`wording.ts`), and it is
+       * rendered verbatim — backticks included, exactly as the degraded list above renders
+       * its entries — so the page and the terminal cannot drift into different claims about
+       * what the evidence proves.
+       */}
+      {meta.historyLoss.map((surface) => (
+        <p key={surface} role="status" data-state={surface} className="px-4 py-2">
+          {HISTORY_LOSS_SENTENCES[surface]}
         </p>
-      )}
+      ))}
     </motion.div>
   );
 }

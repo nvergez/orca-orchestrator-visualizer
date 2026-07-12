@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { GRAPH_OWNED_TABLES } from '../../src/server/schema.ts';
 import { columnsOf, schemaSql, type SchemaOptions, TABLES, type TableName } from './schema.ts';
 
 /**
@@ -95,6 +96,13 @@ export type MessageInput = {
   threadId?: string | null;
   /** Serialized to the `payload` TEXT column. `payload.taskId` carries 83% of attribution. */
   payload?: unknown;
+  /**
+   * Written to the `payload` column verbatim, bypassing serialization. The column is TEXT
+   * with nothing anywhere enforcing JSON, so a malformed blob is a shape the real database
+   * can hold — and a shape every payload reader has to answer "no" to rather than throw on
+   * (SPEC §5.1). Wins over `payload` when both are given, because raw is the point of it.
+   */
+  rawPayload?: string;
   read?: boolean;
   /**
    * `sequence` is AUTOINCREMENT and normally left to SQLite. Set it explicitly to open the
@@ -138,6 +146,9 @@ export class FixtureBuilder {
   };
 
   private readonly schema: SchemaOptions;
+
+  /** Set by `tasksOnlyReset`: delete the graph-owned tables after the inserts, before COMMIT. */
+  private resetTasksOnly = false;
 
   constructor(schema: SchemaOptions = {}) {
     this.schema = schema;
@@ -191,7 +202,7 @@ export class FixtureBuilder {
       type: input.type ?? 'status',
       priority: input.priority ?? 'normal',
       thread_id: input.threadId ?? null,
-      payload: input.payload === undefined ? null : JSON.stringify(input.payload),
+      payload: input.rawPayload ?? (input.payload === undefined ? null : JSON.stringify(input.payload)),
       read: input.read ? 1 : 0,
       created_at: sqlTime(input.createdAt),
       delivered_at: input.deliveredAt ? sqlTime(input.deliveredAt) : null,
@@ -213,6 +224,56 @@ export class FixtureBuilder {
       created_at: sqlTime(input.createdAt),
       resolved_at: input.resolvedAt ? sqlTime(input.resolvedAt) : null,
     });
+    return this;
+  }
+
+  /**
+   * The semantic tasks-only reset (SPEC §5.1, #50): what `orchestration reset --tasks` leaves.
+   *
+   * It writes a complete synthetic orchestration — two tasks joined by an edge, a dispatch
+   * attempt, a gate row, a coordinator run, and task-bearing messages — and then `write()`
+   * deletes the four graph-owned tables in the same fixture transaction, leaving `messages`
+   * untouched. Modelled as insert-then-delete rather than asserted into place, because the
+   * evidence has to be *coherent*: the retained payloads reference the very task ids the
+   * reset removes, and the AUTOINCREMENT counter ends level with the surviving maximum —
+   * sequences from 1, no gap — so a detector wrongly coupled to message loss cannot hide
+   * behind this fixture.
+   */
+  tasksOnlyReset(at: Date): this {
+    const coordinator = handleFor('tasks-only-reset:coordinator');
+    const worker = handleFor('tasks-only-reset:worker');
+    const charted = syntheticId('task', 'tasks-only-reset:charted');
+    const built = syntheticId('task', 'tasks-only-reset:built');
+
+    this.task({
+      id: charted,
+      handle: coordinator,
+      title: 'Chart the map',
+      status: 'completed',
+      createdAt: at,
+      completedAt: at,
+    });
+    this.task({ id: built, handle: coordinator, title: 'Build the thing', status: 'dispatched', deps: [charted], createdAt: at });
+    this.dispatch({ taskId: built, assigneeHandle: worker, status: 'dispatched', dispatchedAt: at });
+    this.gate({ taskId: built, question: 'Which database driver?', options: ['node:sqlite', 'better-sqlite3'], createdAt: at });
+    this.coordinatorRun({ spec: 'synthetic coordinator run', coordinatorHandle: coordinator, createdAt: at });
+    this.message({
+      type: 'worker_done',
+      fromHandle: worker,
+      toHandle: coordinator,
+      subject: 'Charted the map',
+      payload: { taskId: charted },
+      createdAt: at,
+    });
+    this.message({
+      fromHandle: worker,
+      toHandle: coordinator,
+      subject: 'Progress on the build',
+      payload: { taskId: built },
+      createdAt: at,
+    });
+
+    this.resetTasksOnly = true;
     return this;
   }
 
@@ -250,6 +311,12 @@ export class FixtureBuilder {
           );
           statement.run(...columns.map((column) => row[column] ?? null));
         }
+      }
+      // The tasks-only reset, in the same fixture transaction (SPEC §5.1): the graph rows
+      // were really inserted above and are really deleted here, so the surviving messages
+      // and their sequence state are exactly what a real reset would have left behind.
+      if (this.resetTasksOnly) {
+        for (const table of GRAPH_OWNED_TABLES) db.exec(`DELETE FROM ${table}`);
       }
       db.exec('COMMIT');
     } finally {

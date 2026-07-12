@@ -189,7 +189,7 @@ export class EventStream {
     // everything the file holds — a database restored from a backup, replaced, or reset. Keeping
     // the higher cursor there (`Math.max`) would filter every future message out for the life of
     // that connection, and the stream would simply never speak again. So the cursor follows the
-    // file down, and the client picks up from the real high-water mark. `meta.resetDetected` is
+    // file down, and the client picks up from the real high-water mark. `meta.historyLoss` is
     // how the user is told that the history behind it is gone.
     subscriber.cursor = event.seq;
   }

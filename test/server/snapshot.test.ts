@@ -75,26 +75,104 @@ describe('GET /api/snapshot', () => {
 // version and each missing column is shown to cost exactly one feature.
 
 /**
- * A suddenly-empty history has to be explained rather than mysterious (#14). `sequence` is
- * AUTOINCREMENT, so the counter outlives the rows an `orchestration reset` deleted.
+ * A suddenly-empty history has to be explained rather than mysterious (#14, #50). The
+ * history-loss signals name what is observably missing (SPEC §5.1): `message-history` when
+ * the AUTOINCREMENT counter outlives the rows an `orchestration reset` deleted.
  */
-describe('reset detection', () => {
-  it('stays quiet on a database nobody has reset', async () => {
+describe('history-loss signals', () => {
+  it('makes no history-loss claim about a database nobody has reset', async () => {
     const builder = new FixtureBuilder().task({ createdAt: AT });
     builder.message({ fromHandle: 'a', toHandle: 'b', subject: 'first', createdAt: AT });
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).meta.resetDetected).toBe(false);
+    expect((await harness.snapshot()).meta.historyLoss).toEqual([]);
   });
 
-  it('spots the sequence gap an `orchestration reset` leaves behind', async () => {
+  it('reports message history lost on the sequence gap an `orchestration reset` leaves behind', async () => {
     const builder = new FixtureBuilder().task({ createdAt: AT });
     // The survivors of a reset: the counter handed out 400 ids, and the rows that remain
-    // start at 401.
+    // start at 401. The graph is not empty, so message history is the only honest claim.
     builder.message({ fromHandle: 'a', toHandle: 'b', subject: 'after the reset', sequence: 401, createdAt: AT });
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).meta.resetDetected).toBe(true);
+    expect((await harness.snapshot()).meta.historyLoss).toEqual(['message-history']);
+  });
+
+  it('reports task graph history lost on the shape a tasks-only reset leaves behind', async () => {
+    // The shape `orchestration reset --tasks` leaves (#50): every graph-owned table empty,
+    // task-bearing messages retained, and — because the fixture's sequences start at 1 —
+    // no message-sequence gap for a wrongly-coupled detector to lean on.
+    harness = await serve(new FixtureBuilder().tasksOnlyReset(AT).write(tempDbPath()));
+
+    expect((await harness.snapshot()).meta.historyLoss).toEqual(['task-graph-history']);
+  });
+
+  it('reports both losses, in the stable order, when both shapes are present', async () => {
+    // A message reset survived by this row (the counter is at 400, nothing below it), and
+    // then a tasks-only reset on top: two reset shapes at different times (SPEC §5.1).
+    const builder = new FixtureBuilder().message({
+      fromHandle: 'a',
+      toHandle: 'b',
+      subject: 'survivor of an earlier message reset',
+      sequence: 400,
+      createdAt: AT,
+    });
+    harness = await serve(builder.tasksOnlyReset(AT).write(tempDbPath()));
+
+    expect((await harness.snapshot()).meta.historyLoss).toEqual(['message-history', 'task-graph-history']);
+  });
+
+  // The conservative boundary (SPEC §5.1): orphaned task references are a normal, supported
+  // shape after an earlier reset, and any surviving graph row means new work exists — so the
+  // signal stays quiet, accepting the false negative to avoid a warning that never leaves.
+  it.each(['tasks', 'dispatch_contexts', 'decision_gates', 'coordinator_runs'] as const)(
+    'stays quiet about the task graph while a row survives in %s, however orphaned the references',
+    async (table) => {
+      const builder = new FixtureBuilder().message({
+        fromHandle: 'a',
+        toHandle: 'b',
+        subject: 'progress on a task that no longer exists',
+        payload: { taskId: 'task_wiped_by_a_reset' },
+        createdAt: AT,
+      });
+      const survivor = {
+        tasks: () => builder.task({ createdAt: AT }),
+        dispatch_contexts: () => builder.dispatch({ taskId: 'task_wiped_by_a_reset', createdAt: AT }),
+        decision_gates: () => builder.gate({ taskId: 'task_wiped_by_a_reset', question: 'still open?', createdAt: AT }),
+        coordinator_runs: () => builder.coordinatorRun({ spec: 'still here', coordinatorHandle: 'a', createdAt: AT }),
+      };
+      harness = await serve(survivor[table]().write(tempDbPath()));
+
+      expect((await harness.snapshot()).meta.historyLoss).toEqual([]);
+    }
+  );
+
+  it('stays quiet about an empty graph when no retained message actually names a task', async () => {
+    // Empty graph, retained messages — but not one payload holds a readable, non-empty
+    // string taskId, so half the evidence is missing and no claim is safe (SPEC §5.1).
+    const builder = new FixtureBuilder()
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'no payload at all', createdAt: AT })
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'no taskId in it', payload: { note: 'hi' }, createdAt: AT })
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'empty taskId', payload: { taskId: '' }, createdAt: AT })
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'numeric taskId', payload: { taskId: 42 }, createdAt: AT });
+    harness = await serve(builder.write(tempDbPath()));
+
+    expect((await harness.snapshot()).meta.historyLoss).toEqual([]);
+  });
+
+  it('treats a malformed payload as unreadable, never as evidence, and never throws on it', async () => {
+    // The column is TEXT with nothing enforcing JSON. A blob that does not parse answers
+    // "no task reference here" — quietly (SPEC §5.1).
+    const builder = new FixtureBuilder().message({
+      fromHandle: 'a',
+      toHandle: 'b',
+      subject: 'a payload that never parsed',
+      rawPayload: '{ not json at all',
+      createdAt: AT,
+    });
+    harness = await serve(builder.write(tempDbPath()));
+
+    expect((await harness.snapshot()).meta.historyLoss).toEqual([]);
   });
 });
 
