@@ -68,6 +68,15 @@ const GATE_MESSAGE_TOTAL = 53;
 const GATES_WITH_A_TASK = 21;
 const OPEN_GATES = 13;
 const ORPHANED_MESSAGES = 3;
+/**
+ * Escalations — few and loud, which is the whole of what an escalation is.
+ *
+ * They are one of the four types the feed shows by default (SPEC §7.7) and the one it paints
+ * red, so a corpus without them would leave that path asserted nowhere. They come out of the
+ * plain-status filler below rather than being added on top: the message total is the live
+ * database's and it does not move.
+ */
+const ESCALATIONS = 6;
 
 type PlannedTask = {
   id: string;
@@ -282,6 +291,21 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
         createdAt: new Date(askedAt.getTime() + 3 * MINUTE),
       });
     }
+  }
+
+  // A worker that cannot proceed says so, and names the task it is stuck on.
+  for (let i = 0; i < ESCALATIONS; i++) {
+    const host = dispatchedTasks[(i * 13) % dispatchedTasks.length]!;
+    messages.push({
+      type: 'escalation',
+      priority: 'high',
+      fromHandle: host.assignee!,
+      toHandle: host.handle ?? coordinatorOf(host.runIndex),
+      subject: `Blocked on ${host.id}`,
+      body: 'Synthetic escalation: the worker cannot proceed without a decision.',
+      payload: { taskId: host.id },
+      createdAt: new Date(host.createdAt.getTime() + 5 * MINUTE),
+    });
   }
 
   // Messages whose payload.taskId points at a task an `orchestration reset` deleted. No

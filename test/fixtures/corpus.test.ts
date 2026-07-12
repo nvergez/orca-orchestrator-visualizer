@@ -116,6 +116,16 @@ describe('the live-shape corpus', () => {
     ).toBe(13);
   });
 
+  it('holds escalations — the loudest rows in the feed, and the ones it paints red', () => {
+    // Few, and every one of them naming the task its worker got stuck on. Without them the
+    // feed's default content would be three types, not the four the ruling names (SPEC §7.7).
+    expect(count(`SELECT COUNT(*) AS n FROM messages WHERE type = 'escalation'`)).toBe(6);
+    expect(
+      count(`SELECT COUNT(*) AS n FROM messages
+             WHERE type = 'escalation' AND json_extract(payload, '$.taskId') IS NOT NULL`)
+    ).toBe(6);
+  });
+
   it('leaves coordinator_runs empty, as it is in practice', () => {
     expect(count('SELECT COUNT(*) AS n FROM coordinator_runs')).toBe(0);
   });

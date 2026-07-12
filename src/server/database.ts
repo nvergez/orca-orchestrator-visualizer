@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Liveness, StreamEvent } from '../shared/types.ts';
+import { buildAttribution } from './attribution.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
@@ -65,9 +66,19 @@ export class OrcaDatabase {
    */
   snapshot(since = 0): StreamEvent {
     const liveness = readLiveness(this.path, this.probe);
-    const { runs, tasks } = inferRuns(readTasks(this.db, this.schema.columns), {
+    const entries = readTasks(this.db, this.schema.columns);
+    const { runs, tasks } = inferRuns(entries, {
       orcaIsLive: liveness.liveness === 'live',
     });
+
+    // Where each message belongs (SPEC §4.4), built from what the run inference has just
+    // worked out — the run each task landed in, and every terminal that ever held one. The
+    // messages are then read against it, so nothing downstream re-derives the grouping.
+    const attribution = buildAttribution(
+      runs,
+      tasks,
+      new Map(entries.map((entry) => [entry.task.id, entry.assignees]))
+    );
 
     return {
       seq: this.highWaterMark(),
@@ -88,12 +99,7 @@ export class OrcaDatabase {
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },
-      // The run each task was inferred into travels with the messages, so a message can
-      // inherit its task's run without anyone re-deriving the grouping (SPEC §4.4).
-      messages: readMessages(this.db, this.schema.columns, {
-        since,
-        runOfTask: new Map(tasks.map((task) => [task.id, task.runId])),
-      }),
+      messages: readMessages(this.db, this.schema.columns, { since, attribution }),
     };
   }
 

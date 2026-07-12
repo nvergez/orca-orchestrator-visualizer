@@ -40,8 +40,8 @@ export const UNATTRIBUTED_LABEL = 'Unattributed';
 const IN_FLIGHT: ReadonlySet<string> = new Set<TaskStatus>(['ready', 'dispatched']);
 
 /**
- * A task as the database has it, plus the two things the wire contract deliberately does not
- * carry on a task — and that run inference cannot work without.
+ * A task as the database has it, plus the three things the wire contract deliberately does not
+ * carry on a task — and that the derivations built on it cannot work without.
  */
 export type TaskWithHandle = {
   /** The task itself. Its `runId` is empty until this module fills it in. */
@@ -56,6 +56,15 @@ export type TaskWithHandle = {
    * reusing `Task.title` here would silently label a run with a task id.
    */
   name: string | null;
+  /**
+   * Every terminal ever dispatched this task — one per attempt, deduplicated, oldest first.
+   *
+   * Not `dispatch.assigneeHandle`, which is only the *latest* attempt's: a retry goes to a
+   * fresh worktree with a fresh handle, so the first worker's handle exists nowhere else on
+   * the wire. Message attribution (`attribution.ts`) builds a run's handle set out of these,
+   * and a handle it never saw is a message it cannot place.
+   */
+  assignees: string[];
 };
 
 export type InferredRuns = {

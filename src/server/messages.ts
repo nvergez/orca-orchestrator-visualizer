@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { FeedMessage } from '../shared/types.ts';
+import type { Attribution } from './attribution.ts';
 import { type Columns, type Row, text } from './rows.ts';
 import { hasColumn, MESSAGE_SEQUENCE } from './schema.ts';
 import { isoInstant } from './time.ts';
@@ -17,8 +18,14 @@ import { isoInstant } from './time.ts';
  * otherwise-immutable row. They are **not selected and not rendered** (internal mailbox
  * bookkeeping, not orchestration semantics — SPEC §6.3), so their mutability never bites.
  *
- * Attribution here is only its first, load-bearing half: `payload.taskId`, which carries 83%
- * of it. The handle-and-time-window fallback for the rest is #18's, with the feed itself.
+ * **Heartbeats are read and sent like everything else.** They are 65% of the traffic and the
+ * feed hides them by default (SPEC §7.7) — but the hiding is the *client's*, because the
+ * toggle is. Filtering them out of the payload would put rows the user can ask for behind a
+ * cursor that has already passed them, and the whole promise of an append-only feed is that
+ * what has been sent never has to be sent again.
+ *
+ * Where each message *belongs* is `attribution.ts`'s: two rules of unequal strength, and the
+ * discipline to answer null when neither settles it.
  */
 
 /** Read if present. `sequence` is the cursor — without it there is no feed to serve. */
@@ -39,11 +46,11 @@ const MESSAGE_COLUMNS = [
 export type MessageOptions = {
   /** Send what is newer than this. 0 — a first connect — means the whole feed. */
   since: number;
-  /** Which run each task was inferred into, so a message can inherit its task's run. */
-  runOfTask: ReadonlyMap<string, string>;
+  /** Where a message belongs: the task it names, and the run that task (or its handles) puts it in. */
+  attribution: Attribution;
 };
 
-export function readMessages(db: DatabaseSync, columns: Columns, { since, runOfTask }: MessageOptions): FeedMessage[] {
+export function readMessages(db: DatabaseSync, columns: Columns, { since, attribution }: MessageOptions): FeedMessage[] {
   // No `sequence` column is no cursor, and a feed with no order is not a feed. An Orca that
   // old degrades to the graph, which is the whole of "render what parses" (SPEC §5) — and it
   // degrades in step with `highWaterMark`, which is guarded on this very same column, so the
@@ -61,31 +68,39 @@ export function readMessages(db: DatabaseSync, columns: Columns, { since, runOfT
     .prepare(`SELECT ${present.join(', ')} FROM messages WHERE sequence > ? ORDER BY sequence`)
     .all(since) as Row[];
 
-  return rows.map((row) => feedMessage(row, runOfTask));
+  return rows.map((row) => feedMessage(row, attribution));
 }
 
-function feedMessage(row: Row, runOfTask: ReadonlyMap<string, string>): FeedMessage {
+function feedMessage(row: Row, attribution: Attribution): FeedMessage {
   const payload = parsePayload(row.payload);
+
+  const fromHandle = text(row.from_handle);
+  const toHandle = text(row.to_handle);
+  const createdAt = isoInstant(row.created_at) ?? '';
 
   // A message points at a task that no longer exists whenever a reset has been through here —
   // there are no foreign keys in this schema. That costs the row its link, never the row.
-  const referenced = taskIdOf(payload);
-  const taskId = referenced !== null && runOfTask.has(referenced) ? referenced : null;
+  const { taskId, runId } = attribution.attribute({
+    taskId: taskIdOf(payload),
+    fromHandle,
+    toHandle,
+    createdAt,
+  });
 
   return {
     id: text(row.id) ?? '',
     sequence: Number(row.sequence),
     type: text(row.type) ?? '',
-    fromHandle: text(row.from_handle) ?? '',
-    toHandle: text(row.to_handle) ?? '',
+    fromHandle: fromHandle ?? '',
+    toHandle: toHandle ?? '',
     subject: text(row.subject) ?? '',
     body: text(row.body) ?? '',
     priority: text(row.priority) ?? '',
     threadId: text(row.thread_id),
     payload,
-    createdAt: isoInstant(row.created_at) ?? '',
+    createdAt,
     taskId,
-    runId: taskId === null ? null : (runOfTask.get(taskId) ?? null),
+    runId,
   };
 }
 
