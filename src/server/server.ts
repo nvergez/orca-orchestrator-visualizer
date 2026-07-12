@@ -4,6 +4,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
+import { CursorError } from './history.ts';
 import { EventStream, type StreamClient } from './stream.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
@@ -22,6 +23,9 @@ const CONTENT_TYPES: Record<string, string> = {
 
 /** `GET /api/task/:id` — everything after this prefix is the id (#20). */
 const TASK_ROUTE = '/api/task/';
+
+/** `GET /api/run/:id` — the selected-run snapshot (#69). Everything after the prefix is the id. */
+const RUN_ROUTE = '/api/run/';
 
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
@@ -82,7 +86,8 @@ export function createServer({
   const stream = new EventStream(database, pollIntervalMs);
 
   const server = createHttpServer((req, res) => {
-    const urlPath = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`).pathname;
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`);
+    const urlPath = url.pathname;
 
     if (urlPath === '/api/stream') {
       openStream(stream, req, res);
@@ -91,6 +96,16 @@ export function createServer({
 
     if (urlPath === '/api/snapshot') {
       sendSnapshot(database, res);
+      return;
+    }
+
+    if (urlPath === '/api/runs') {
+      sendRunIndex(database, url.searchParams.get('cursor'), res);
+      return;
+    }
+
+    if (urlPath.startsWith(RUN_ROUTE)) {
+      sendRunSnapshot(database, urlPath.slice(RUN_ROUTE.length), res);
       return;
     }
 
@@ -184,6 +199,61 @@ function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
     const body = JSON.stringify(database.snapshot());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(body);
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/**
+ * `GET /api/runs` (#69) — one page of the run index: the 50 most recently active summaries, or
+ * the page after `?cursor=`.
+ *
+ * A cursor this server never minted is a **400**, its own case: the flag-that-does-not-work
+ * rule (SPEC §3) in miniature — silently answering a nonsense cursor with the first page would
+ * show the user a different slice of history than the one they asked for.
+ */
+function sendRunIndex(database: OrcaDatabase, cursor: string | null, res: ServerResponse): void {
+  try {
+    const body = JSON.stringify(database.runIndex(cursor));
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(body);
+  } catch (error) {
+    if (error instanceof CursorError) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: error.message }));
+      return;
+    }
+    sendError(res, error);
+  }
+}
+
+/**
+ * `GET /api/run/:id` (#69) — the selected-run snapshot: one run's complete retained evidence,
+ * never windowed, never truncated (ADR 0002).
+ *
+ * The same three answers as a task detail, for the same reasons: **200** with the whole of it,
+ * **404** when no run has this id (runs vanish with an `orchestration reset`, and a stale rail
+ * row can still click), **500** when the read itself failed.
+ */
+function sendRunSnapshot(database: OrcaDatabase, rawId: string, res: ServerResponse): void {
+  let id: string;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    id = rawId; // A malformed escape is not a run id either — it falls through to the 404.
+  }
+
+  try {
+    const snapshot = id === '' ? null : database.runSnapshot(id);
+
+    if (snapshot === null) {
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: `No run ${id} in this database.` }));
+      return;
+    }
+
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(snapshot));
   } catch (error) {
     sendError(res, error);
   }

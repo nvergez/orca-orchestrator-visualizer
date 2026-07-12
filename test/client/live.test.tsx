@@ -68,6 +68,7 @@ const TASK: Task = {
 function event(over: { meta?: Partial<Meta>; runs?: Run[]; tasks?: Task[]; seq?: number } = {}): StreamEvent {
   return {
     seq: over.seq ?? 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: { ...META, ...over.meta },
     snapshot: { runs: over.runs ?? [RUN], tasks: over.tasks ?? [TASK], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],

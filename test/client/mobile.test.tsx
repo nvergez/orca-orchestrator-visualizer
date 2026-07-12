@@ -145,6 +145,7 @@ function gate(over: Partial<Gate> = {}): Gate {
 function event(over: Partial<StreamEvent> = {}): StreamEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: {
       runs: [run(), otherRun()],

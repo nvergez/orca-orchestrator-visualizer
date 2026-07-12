@@ -73,7 +73,7 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): StreamEvent {
-  return { seq: 0, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
+  return { seq: 0, affected: { all: true, runIds: [], unplaced: false }, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
 }
 
 /** The rail row for a run — a button, because picking a run is the rail's whole job. */

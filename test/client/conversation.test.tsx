@@ -131,6 +131,7 @@ function message(over: Partial<FeedMessage> = {}): FeedMessage {
 function event(over: Partial<StreamEvent> = {}): StreamEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: {
       runs: [run()],

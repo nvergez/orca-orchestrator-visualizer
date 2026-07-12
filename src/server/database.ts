@@ -1,11 +1,22 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Liveness, Run, StreamEvent, Task, TaskDetail } from '../shared/types.ts';
+import type {
+  FeedMessage,
+  Liveness,
+  Meta,
+  Run,
+  RunIndexPage,
+  RunSnapshot,
+  StreamEvent,
+  Task,
+  TaskDetail,
+} from '../shared/types.ts';
 import { type Attribution, buildAttribution } from './attribution.ts';
 import { conversationOf } from './conversation.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
+import { digestRuns, pageRuns, type RunEvidence, snapshotRun } from './history.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
@@ -68,16 +79,82 @@ export class OrcaDatabase {
    * `curl` of `/api/snapshot` — means the whole feed.
    */
   snapshot(since = 0): StreamEvent {
+    return this.push(since).event;
+  }
+
+  /**
+   * One event, plus one fingerprint per run over the evidence its selected-run snapshot serves
+   * (`history.ts`). The stream diffs two of those maps to fill `affected` on a tick — which is
+   * how a push *names* the runs a change touched instead of carrying the whole of history.
+   *
+   * The event's own `affected` says `all`: this method backs the first connect, the reconnect
+   * and `/api/snapshot`, and for all three the honest claim is "your whole view may be stale".
+   * Only the poll loop knows a client's previous view, so only it narrows the claim (`stream.ts`).
+   */
+  push(since = 0): { event: StreamEvent; digests: Map<string, string> } {
+    const { liveness, evidence, messages } = this.readEvidence();
+
+    const event: StreamEvent = {
+      seq: this.highWaterMark(),
+      meta: this.metaOf(liveness),
+      affected: { all: true, runIds: [], unplaced: false },
+      snapshot: {
+        runs: evidence.runs,
+        tasks: evidence.tasks,
+        gates: evidence.gates,
+        turns: evidence.turns,
+        coordinatorRuns: evidence.coordinatorRuns,
+      },
+      // The delta the client's cursor asked for. What it is still *for*, now that the conversation
+      // is not built out of it, is the one thing a snapshot cannot say — what just arrived — which
+      // is what flashes a node (SPEC §7.6).
+      messages: messages.filter((message) => message.sequence > since),
+    };
+
+    return { event, digests: digestRuns(evidence) };
+  }
+
+  /**
+   * One page of the **run index** — `GET /api/runs` (#69). The 50 most recently active
+   * summaries, or the page an opaque cursor asks for; `CursorError` (a 400, not a 500) when the
+   * cursor is not one this server minted.
+   */
+  runIndex(cursor: string | null): RunIndexPage {
+    const { liveness, evidence } = this.readEvidence();
+    const page = pageRuns(evidence.runs, cursor);
+
+    return {
+      meta: this.metaOf(liveness),
+      runs: page.runs,
+      nextCursor: page.nextCursor,
+      coordinatorRuns: evidence.coordinatorRuns,
+    };
+  }
+
+  /**
+   * The **selected-run snapshot** — `GET /api/run/:id` (#69): one run's complete retained
+   * evidence, never windowed, never truncated (ADR 0002). Null when no run has this id — a
+   * 404, because an id that names nothing is not a run with nothing to say.
+   */
+  runSnapshot(id: string): RunSnapshot | null {
+    const { liveness, evidence } = this.readEvidence();
+    const snapshot = snapshotRun(evidence, id);
+
+    return snapshot === null ? null : { meta: this.metaOf(liveness), ...snapshot };
+  }
+
+  /**
+   * Everything one read of the database derives, exactly once — the projections above
+   * (the stream event, the run index, the selected-run snapshot, the digests) all draw from
+   * this one pass, which is what keeps them incapable of disagreeing about what a run holds.
+   */
+  private readEvidence(): { liveness: LivenessReport; evidence: RunEvidence; messages: FeedMessage[] } {
     const { liveness, entries, runs, tasks, attribution } = this.derive();
 
     // The gates, from the `decision_gate` *messages* that raise them and never from the empty
     // table they nominally belong to (SPEC §4.2, trap 1). They are placed by the same
     // attribution the conversation uses — a gate is a message, and it is placed like one — and
     // then hung back on the runs they block (`hasOpenGates`) and the nodes they mark.
-    //
-    // They are read *here* rather than in `derive()` because they are the snapshot's alone: a
-    // task detail already has its gates (they were in the snapshot the client is holding), and
-    // making a node click scan `messages` twice over for them would be work done to be discarded.
     const gates = readGates(this.db, this.schema.columns, attribution);
     const gated = attachGates(runs, tasks, gates);
 
@@ -89,21 +166,13 @@ export class OrcaDatabase {
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
 
     return {
-      seq: this.highWaterMark(),
-      meta: {
-        dbPath: this.path,
-        schemaVersion: this.schema.version,
-        schemaSupport: this.schema.support,
-        degraded: this.schema.degraded,
-        // Re-derived on every call, never cached: the whole point is that it changes
-        // under us when the user quits Orca (SPEC §6.1).
-        ...liveness,
-        dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
-        resetDetected: detectReset(this.db, this.schema.columns),
-      },
-      snapshot: {
+      liveness,
+      evidence: {
         runs: gated.runs,
         tasks: gated.tasks,
+        // Oldest attempt first, as `tasks.ts` reads them — the selected-run snapshot's
+        // append-only retry record (SPEC §12), and the same rows the cast was built from.
+        attemptsByTask: new Map(entries.map((entry) => [entry.task.id, entry.attempts])),
         gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
@@ -113,10 +182,20 @@ export class OrcaDatabase {
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
       },
-      // The delta the client's cursor asked for. What it is still *for*, now that the conversation
-      // is not built out of it, is the one thing a snapshot cannot say — what just arrived — which
-      // is what flashes a node (SPEC §7.6).
-      messages: messages.filter((message) => message.sequence > since),
+      messages,
+    };
+  }
+
+  /** The header every payload carries. Re-derived on every call, never cached (SPEC §6.1). */
+  private metaOf(liveness: LivenessReport): Meta {
+    return {
+      dbPath: this.path,
+      schemaVersion: this.schema.version,
+      schemaSupport: this.schema.support,
+      degraded: this.schema.degraded,
+      ...liveness,
+      dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
+      resetDetected: detectReset(this.db, this.schema.columns),
     };
   }
 

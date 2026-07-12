@@ -20,6 +20,10 @@ export type Harness = {
    * is the one route with a 404 in it, and a helper that threw on it would hide the case.
    */
   task(id: string): Promise<Response>;
+  /** `GET /api/runs` — one page of the run index (#69). Raw, because a bad cursor is a 400. */
+  runs(cursor?: string): Promise<Response>;
+  /** `GET /api/run/:id` — the selected-run snapshot (#69). Raw, because an unknown id is a 404. */
+  run(id: string): Promise<Response>;
   close(): Promise<void>;
 };
 
@@ -60,6 +64,15 @@ export async function serve(dbPath: string, { pollIntervalMs = 20, ...deps }: Se
 
     async task(id) {
       return fetch(`${origin}/api/task/${encodeURIComponent(id)}`);
+    },
+
+    async runs(cursor) {
+      const query = cursor === undefined ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+      return fetch(`${origin}/api/runs${query}`);
+    },
+
+    async run(id) {
+      return fetch(`${origin}/api/run/${encodeURIComponent(id)}`);
     },
 
     async close() {

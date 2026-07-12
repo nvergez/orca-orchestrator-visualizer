@@ -85,6 +85,7 @@ function run(over: Partial<Run> = {}): Run {
 function event(over: Partial<StreamEvent> = {}): StreamEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: { runs: [run()], tasks: [task()], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],

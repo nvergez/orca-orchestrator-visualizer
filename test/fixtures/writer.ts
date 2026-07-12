@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { type MessageInput, sqlTime, syntheticId } from './builder.ts';
+import { type MessageInput, sqlTime, syntheticId, type TaskInput } from './builder.ts';
 
 /**
  * The test, as the database's writer.
@@ -58,6 +58,37 @@ export class FixtureWriter {
    */
   setTaskStatus(taskId: string, status: string): void {
     this.db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, taskId);
+  }
+
+  /**
+   * A task arriving while the tool is watching — a new handle here is **a new run appearing**,
+   * which is what the run-index growth and "no auto-jump" contracts are about (#69). Returns
+   * the id, so the test can point later writes at it.
+   */
+  task(input: TaskInput): string {
+    const id = input.id ?? syntheticId('task', `written:${input.title ?? ''}:${input.createdAt.toISOString()}`);
+
+    this.db
+      .prepare(
+        `INSERT INTO tasks (id, parent_id, created_by_terminal_handle, task_title, display_name, spec, status, deps, result, created_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        input.parentId ?? null,
+        input.handle ?? null,
+        input.title ?? null,
+        input.displayName ?? null,
+        input.spec ?? `synthetic spec for ${id}`,
+        input.status ?? 'pending',
+        JSON.stringify(input.deps ?? []),
+        input.result ?? null,
+        sqlTime(input.createdAt),
+        // The one ISO column on this table (SPEC §4.2, trap 5) — as `FixtureBuilder` writes it.
+        input.completedAt ? input.completedAt.toISOString() : null
+      );
+
+    return id;
   }
 
   close(): void {

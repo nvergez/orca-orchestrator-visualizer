@@ -101,6 +101,7 @@ function event(gates: Gate[], tasks: Task[] = [task()], runs: Run[] = [run()]): 
 
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: {
       runs: runs.map((each) => ({ ...each, hasOpenGates: open.has(each.id) })),

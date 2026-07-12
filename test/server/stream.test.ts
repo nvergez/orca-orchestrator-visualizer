@@ -293,9 +293,9 @@ class CountingSource implements StreamSource {
 
   /** `since` is not even taken: what this suite counts is *whether* the database was read, never
    *  what came back. The wire tests above own the contents. */
-  snapshot(): StreamEvent {
+  push(): { event: StreamEvent; digests: Map<string, string> } {
     this.snapshots++;
-    return {
+    const event = {
       seq: this.version,
       meta: {
         dbPath: '/fixture.db',
@@ -307,9 +307,11 @@ class CountingSource implements StreamSource {
         dbMtime: AT.toISOString(),
         resetDetected: false,
       },
+      affected: { all: true, runIds: [], unplaced: false },
       snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
       messages: [],
     } satisfies StreamEvent;
+    return { event, digests: new Map() };
   }
 }
 

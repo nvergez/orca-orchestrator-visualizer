@@ -294,7 +294,22 @@ function countEdges(tasks: Task[]): number {
   );
 }
 
-/** The rail sorts by most-recent activity, so the run worth opening is the one on top. */
-function byMostRecentActivity(a: Run, b: Run): number {
-  return byInstant(b.endedAt, a.endedAt) || byInstant(b.startedAt, a.startedAt);
+/** The three keys the run order reads — all a keyset cursor has to remember (`history.ts`). */
+export type RunOrderKeys = Pick<Run, 'endedAt' | 'startedAt' | 'id'>;
+
+/**
+ * Most-recent activity first — the rail's order, the run index's order, and a **total** order.
+ *
+ * The id tie-break is not pedantry: the run index pages this order with a keyset cursor (#69),
+ * and a cursor over an order with ties is a page boundary that falls differently on two reads
+ * of an unchanged database — duplicating a run into two pages or dropping it from both. The id
+ * is compared by code point, never by locale, because a page boundary must not move with the
+ * server's `LANG`.
+ */
+export function byMostRecentActivity(a: RunOrderKeys, b: RunOrderKeys): number {
+  return (
+    byInstant(b.endedAt, a.endedAt) ||
+    byInstant(b.startedAt, a.startedAt) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
 }

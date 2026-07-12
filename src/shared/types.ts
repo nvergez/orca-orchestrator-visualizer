@@ -344,6 +344,99 @@ export function agentOfTurn(turn: Turn): string | null {
 }
 
 /**
+ * **What changed since this client's previous event** — identity to refetch by, never the data
+ * itself (SPEC §12, ADR 0002, #69).
+ *
+ * The stream used to re-send every retained run, task and turn on every push, and the database
+ * is never pruned — so the wire and the browser paid for the whole of history on every tick.
+ * A push now *names* what moved instead: the client holds pages of the run index and one
+ * selected-run snapshot, and this is how it knows which of those to fetch again.
+ *
+ * Over-invalidation is safe (a refetch of something unchanged) and under-invalidation is the
+ * bug (a view that is silently stale forever), so every ambiguity here resolves toward naming
+ * more, never less.
+ */
+export type Affected = {
+  /**
+   * True when the whole view may be out of date: a first connect, an SSE reconnect, and the
+   * one-shot `/api/snapshot`. The server cannot know what a client it was not talking to has
+   * missed — task rows are overwritten in place and leave no cursor — so it says so, and the
+   * client refetches what it displays: its loaded index pages and its selected run. That is
+   * bounded by what is on screen, never by the size of history.
+   */
+  all: boolean;
+  /** Orchestrator runs whose retained evidence — summary, tasks, attempts, gates, turns — changed. */
+  runIds: string[];
+  /**
+   * True when evidence *nothing places* changed: a turn no run could claim (SPEC §4.4, rule 3),
+   * or a coordinator row naming a handle no orchestrator has. A selected-run snapshot carries
+   * the unplaced turns so they stay reachable, so it goes stale when they change too.
+   */
+  unplaced: boolean;
+};
+
+/**
+ * One page of the **run index** — `GET /api/runs` (SPEC §12, ADR 0002, #69).
+ *
+ * The navigation surface for retained history: the summaries the rail lists, most recently
+ * active first, fifty at a time. It is deliberately the same `Run` shape the stream used to
+ * carry — cast, waves and tallies are aggregates, not evidence — while everything that grows
+ * with a run's *size* (tasks, attempts, gates, turns, bodies) lives in the selected-run
+ * snapshot and is fetched for one run at a time.
+ */
+export type RunIndexPage = {
+  meta: Meta;
+  /** Most recently active first; deterministic id tie-break. The first page is the newest 50. */
+  runs: Run[];
+  /**
+   * The opaque cursor "Load older history" follows — the keyset position after this page's last
+   * row, stable under writes: a run that becomes active moves *ahead* of every cursor rather
+   * than duplicating into a later page. Null ⇒ history ends here; there is no silent cutoff.
+   */
+  nextCursor: string | null;
+  /** Every `coordinator_runs` row, rendered if any exist (SPEC §4.2, trap 3). Empty in practice. */
+  coordinatorRuns: CoordinatorRun[];
+};
+
+/**
+ * The **selected-run snapshot** — `GET /api/run/:id` (SPEC §12, ADR 0002, #69).
+ *
+ * The complete retained evidence for one orchestrator run, fetched as a unit: **never
+ * time-windowed, never truncated**, however old or large the run is. Scaling bounded the
+ * *index*; it is not allowed to weaken a post-mortem (the whole point of ADR 0002).
+ */
+export type RunSnapshot = {
+  meta: Meta;
+  run: Run;
+  /** Every retained task of this run — all of them, in creation order. */
+  tasks: Task[];
+  /**
+   * **Every dispatch attempt**, oldest first, by task id — not just the `MAX(rowid)` survivor a
+   * `Task` carries. `dispatch_contexts` is the only genuinely append-only per-task history in
+   * the schema, and a selected run is complete or it is not a selected run.
+   */
+  attempts: Record<string, Dispatch[]>;
+  /** Every gate this run raised, answered ones included. */
+  gates: Gate[];
+  /**
+   * The complete reconstructed conversation (SPEC §4.7) — this run's turns, **plus the turns
+   * nothing places** (`runId: null`), in one chronological order. The unplaced turns ride along
+   * because they must still appear *somewhere*, attached to nobody (SPEC §4.4, rule 3), and a
+   * transport that paged them out of existence would be guessing by omission.
+   */
+  turns: Turn[];
+  /**
+   * Tasks *outside* this run that share a dependency edge with one inside it. `tasks.deps` is a
+   * real edge that knows nothing about which terminal created which task, so an edge can cross
+   * orchestrations — and the inspector's dep chips must be able to name the far end without
+   * fetching the whole of history to find it.
+   */
+  linkedTasks: Task[];
+  /** `coordinator_runs` rows whose handle is this orchestrator's — the evidence that belongs to it. */
+  coordinatorRuns: CoordinatorRun[];
+};
+
+/**
  * What clicking a node fetches — `GET /api/task/:id`, and the only payload in this tool that
  * is not a `StreamEvent` (SPEC §6.4, §7.8).
  *
@@ -382,6 +475,12 @@ export type StreamEvent = {
   /** The message high-water mark — also the SSE event id. */
   seq: number;
   meta: Meta;
+  /**
+   * What this push means the client should fetch again (#69): run ids on a tick, `all` on a
+   * connect or reconnect. The stream stopped being the data and became the *doorbell* — the
+   * data is `GET /api/runs` and `GET /api/run/:id`, fetched for what is actually on screen.
+   */
+  affected: Affected;
   /**
    * `gates` is a derived collection beside the runs and the tasks — not a field of either,
    * because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). `turns` is the

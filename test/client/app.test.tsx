@@ -27,6 +27,7 @@ const META: Meta = {
 function event(meta: Partial<Meta> = {}): StreamEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: { ...META, ...meta },
     snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],

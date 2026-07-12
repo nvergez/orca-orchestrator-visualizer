@@ -125,6 +125,7 @@ function runOf(tasks: Task[], over: Partial<Run> = {}): Run {
 function event(tasks: Task[], over: Partial<Run> = {}): StreamEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     // No tasks means no orchestrator to have created them — the empty database, honestly.
     snapshot: {
