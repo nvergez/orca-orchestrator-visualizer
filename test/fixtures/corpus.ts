@@ -66,6 +66,12 @@ const HEARTBEAT_TOTAL = 302;
 const HEARTBEATS_EACH = 4;
 const GATE_MESSAGE_TOTAL = 53;
 const GATES_WITH_A_TASK = 21;
+/**
+ * Of the gates that name a task, the ones a worker wrote by hand — `payload = {taskId,
+ * dispatchId}`, question in the **subject**. Half the live database's gate messages are this
+ * shape, and a payload-only reader shows every one of them as a blank question.
+ */
+const HAND_WRITTEN_GATES = 15;
 const OPEN_GATES = 13;
 const ORPHANED_MESSAGES = 3;
 /**
@@ -256,24 +262,36 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
   // Gates. 53 gate messages against 0 decision_gates rows — the trap that empties the
   // gate panel of a gates-from-the-table implementation, forever, on real runs.
   //
-  // And they come in the live database's **two shapes**, which is a trap inside that trap:
+  // And a gate message comes in more than one shape, which is a trap inside that trap. Both of
+  // these are `type = 'decision_gate'`, and they put the question in different places:
   //
-  // - `orchestration ask` writes `payload = {question, options}` and **no taskId**.
-  // - a worker escalating by hand with `orchestration send --type decision_gate` writes
-  //   `payload = {taskId, dispatchId}` and puts the **question in the subject** — no
-  //   `payload.question` at all.
+  // - **`orchestration ask`** writes `payload = {question, options}` (`rpc/methods/
+  //   orchestration.ts:574-584`, docs/research/db-history.md §2) — with a `taskId` when the
+  //   asker named one, and without when it did not.
+  // - **A worker escalating by hand** with `orchestration send --type decision_gate` writes
+  //   `payload = {taskId, dispatchId}` and puts the **question in the subject** — there is no
+  //   `payload.question` at all. (In this very project `ask` is broken in the agent runtime, so
+  //   this is what its workers actually produce, and it is not a hypothetical.)
   //
-  // On the live database every gate that names a task is of the second kind, so a reader that
-  // takes the question from the payload alone renders an empty question on *every gate that
-  // marks a node*. The corpus reproduces the correlation, not just the counts.
+  // Measured on the live database — 58 gate messages, `SELECT payload FROM messages WHERE
+  // type='decision_gate'` tallied by shape: **25** `{question, options}`, **4** `{question}`,
+  // **22** `{taskId, dispatchId}` with the question in the subject, and **7** with no payload
+  // at all. So **half of them carry no `payload.question`**, and a reader that takes the
+  // question from the payload alone renders a blank question over half the gates it shows.
+  //
+  // The corpus carries all three shapes, in the proportions the live database has: the ones
+  // that name a task are mostly the hand-written kind, but not all — because a working `ask`
+  // that names a task produces `{question, options, taskId}`, which is the shape SPEC §4.5
+  // describes, and the fixture must not stop exercising it.
   const gateHosts = dispatchedTasks.filter((task) => task.status !== 'failed');
   for (let i = 0; i < GATE_MESSAGE_TOTAL; i++) {
     const host = gateHosts[(i * 7) % gateHosts.length]!;
     const gateId = syntheticId('msg', `gate-message-${i}`);
     const askedAt = new Date(host.createdAt.getTime() + (2 + i) * MINUTE);
-    // Only 21 of 53 gates name a task — and those are exactly the hand-written ones, whose
-    // question lives in the subject. The rest come from `ask`: a question, options, no task.
+    // 21 of 53 name a task. 15 of those are hand-written (the question is in the subject); the
+    // other 6 are `ask` gates that named one. The remaining 32 are `ask` gates that did not.
     const namesATask = i < GATES_WITH_A_TASK;
+    const handWritten = i < HAND_WRITTEN_GATES;
     const question = `Question ${i + 1}: which way should this go?`;
 
     messages.push({
@@ -281,11 +299,16 @@ export function liveShapeCorpus(schema: SchemaOptions = {}): FixtureBuilder {
       type: 'decision_gate',
       fromHandle: host.assignee!,
       toHandle: host.handle ?? coordinatorOf(host.runIndex),
-      subject: namesATask ? question : `Decision needed on ${host.id}`,
-      body: namesATask ? 'The worker cannot proceed without a decision.' : 'Synthetic gate question.',
-      payload: namesATask
+      // The hand-written kind has nowhere else to put the question.
+      subject: handWritten ? question : `Decision needed on ${host.id}`,
+      body: handWritten ? 'The worker cannot proceed without a decision.' : 'Synthetic gate question.',
+      payload: handWritten
         ? { taskId: host.id, dispatchId: syntheticId('ctx', `${host.id}-attempt-0`) }
-        : { question, options: ['option A', 'option B'] },
+        : {
+            question,
+            options: ['option A', 'option B'],
+            ...(namesATask ? { taskId: host.id } : {}),
+          },
       createdAt: askedAt,
     });
 

@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { taskIdOf } from '../shared/payload.ts';
+import { parsePayload, taskIdOf } from '../shared/payload.ts';
 import type { Gate, Run, Task } from '../shared/types.ts';
 import type { Attribution } from './attribution.ts';
-import { type Columns, type Row, selectPresent, text } from './rows.ts';
+import { type Columns, selectPresent, selectWhere, text } from './rows.ts';
 import { GATE_MESSAGE_COLUMNS, hasColumn } from './schema.ts';
 import { byInstant, isoInstant } from './time.ts';
 
@@ -76,9 +76,11 @@ export function readGates(db: DatabaseSync, columns: Columns, attribution: Attri
 function readGateMessages(db: DatabaseSync, columns: Columns, attribution: Attribution): Derived[] {
   const answers = readAnswers(db, columns);
 
-  return select(db, columns, 'messages', GATE_SELECT, "WHERE type = 'decision_gate'").map((row): Derived => {
+  const gates = selectWhere(db, 'messages', columns.messages, GATE_SELECT, "WHERE type = 'decision_gate' ORDER BY rowid");
+
+  return gates.map((row): Derived => {
     const id = text(row.id) ?? '';
-    const payload = parseJson(row.payload);
+    const payload = parsePayload(row.payload);
     const answer = answers.get(id) ?? null;
     const createdAt = isoInstant(row.created_at) ?? '';
 
@@ -92,7 +94,7 @@ function readGateMessages(db: DatabaseSync, columns: Columns, attribution: Attri
       createdAt,
     });
 
-    const question = questionOf(payload) ?? text(row.subject) ?? '';
+    const question = questionOf(payload, text(row.subject));
 
     return {
       key: keyOf(rawTaskId, question),
@@ -102,7 +104,7 @@ function readGateMessages(db: DatabaseSync, columns: Columns, attribution: Attri
         runId,
         taskId,
         question,
-        options: stringsOf(optionsOf(payload)),
+        options: stringsOf(field(payload, 'options')),
         status: answer === null ? 'open' : 'resolved',
         resolution: answer,
         createdAt,
@@ -115,7 +117,9 @@ function readGateMessages(db: DatabaseSync, columns: Columns, attribution: Attri
 function readAnswers(db: DatabaseSync, columns: Columns): Map<string, string> {
   const answers = new Map<string, string>();
 
-  for (const row of select(db, columns, 'messages', REPLY_SELECT, 'WHERE thread_id IS NOT NULL')) {
+  const replies = selectWhere(db, 'messages', columns.messages, REPLY_SELECT, 'WHERE thread_id IS NOT NULL ORDER BY rowid');
+
+  for (const row of replies) {
     const threadId = text(row.thread_id);
     if (threadId === null) continue;
     // A message cannot be its own answer. Orca threads a reply on the *outbound* id, so a row
@@ -160,7 +164,9 @@ function readGateRows(db: DatabaseSync, columns: Columns, attribution: Attributi
         runId,
         taskId,
         question,
-        options: stringsOf(parseJson(row.options)),
+        // The column is TEXT holding a JSON array — read through the same unvalidated-JSON
+        // reader the payload goes through, because nothing enforces either of them.
+        options: stringsOf(parsePayload(row.options)),
         // `GateStatus = 'timeout'` never occurs (SPEC §4.2, trap 9). If an Orca ever wrote one,
         // an unanswered question is still unanswered: it shows as open rather than as a state
         // nothing on screen has a word for.
@@ -212,62 +218,33 @@ function markerGate(gates: Gate[]): Gate {
 }
 
 /**
- * SELECT, from the columns that are really there, with a WHERE over the columns the caller has
- * already guarded (`GATE_MESSAGE_COLUMNS`).
+ * `(task_id, question)` — the pair the additive merge deduplicates on.
  *
- * `selectPresent` reads whole tables and is right for the rows that are overwritten in place.
- * `messages` is 466 rows of which 53 are gates: filtering in SQLite rather than in JS keeps
- * every message body that is not an answer to a gate inside the file, where it belongs.
+ * Separated by NUL, which cannot occur in a task id or in a question. A printable separator
+ * would let a task id ending in it collide with a question beginning with it, and a collision
+ * here *drops* a real gate — which is the one thing an additive merge must never do.
  */
-function select(
-  db: DatabaseSync,
-  columns: Columns,
-  table: 'messages',
-  wanted: readonly string[],
-  where: string
-): Row[] {
-  const present = wanted.filter((column) => columns[table].has(column));
-  if (present.length === 0) return [];
-
-  return db.prepare(`SELECT ${present.join(', ')} FROM ${table} ${where} ORDER BY rowid`).all() as Row[];
-}
-
-/** `(task_id, question)` — the pair the additive merge deduplicates on. NUL cannot occur in either. */
 function keyOf(taskId: string | null, question: string): string {
-  return `${taskId ?? ''} ${question}`;
+  return `${taskId ?? ''}\u0000${question}`;
 }
 
 /**
- * The question, from the `payload` — and from the `subject` when there is none.
+ * The question, from the `payload` — and from the `subject` when the payload has none.
  *
- * The payload is where `orchestration.ask` puts it. But a worker escalating by hand with
- * `orchestration send --type decision_gate` writes a subject and no payload at all, and an
- * empty strip over a real blocker is the failure this whole ticket is about. The subject is
- * `NOT NULL` in the schema, so there is always *something* honest to show.
+ * The payload is where `orchestration.ask` puts it (SPEC §4.5). But **half the gate messages on
+ * the live database carry no `payload.question` at all**: a worker escalating by hand with
+ * `orchestration send --type decision_gate` writes `{taskId, dispatchId}` and puts the question
+ * in the subject. Reading the payload alone would leave a blank question beside the ⛔ on half
+ * of every real gate strip — the same silent-emptiness this whole ticket is about, one level
+ * down. `subject` is NOT NULL in this schema, so there is always something honest to show.
  */
-function questionOf(payload: unknown): string | null {
-  return text(field(payload, 'question'));
-}
-
-function optionsOf(payload: unknown): unknown {
-  return field(payload, 'options');
+function questionOf(payload: unknown, subject: string | null): string {
+  return text(field(payload, 'question')) ?? subject ?? '';
 }
 
 function field(payload: unknown, name: string): unknown {
   if (typeof payload !== 'object' || payload === null) return null;
   return (payload as Record<string, unknown>)[name];
-}
-
-/** A TEXT column holding JSON, or a `payload` this tool has already parsed. Neither is validated. */
-function parseJson(value: unknown): unknown {
-  const raw = text(value);
-  if (raw === null) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 /** The options, however they were written. Nothing enforces that they are strings — or an array. */

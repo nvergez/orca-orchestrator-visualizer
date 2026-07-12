@@ -318,17 +318,18 @@ describe('gates in the live-shape corpus', () => {
     expect(gates.filter((gate) => gate.runId === null)).toHaveLength(0);
   });
 
-  it('reads a question for every one of them, in both of the shapes the real database writes', async () => {
-    // The trap inside the trap. On the live database *every* gate that names a task carries
-    // `{taskId, dispatchId}` and puts its question in the subject — so a reader that takes the
-    // question from `payload.question` alone renders a blank question on every gate that marks
-    // a node, and a strip full of ⛔ with nothing written beside it.
+  it('reads a question for every one of them, in each of the shapes the real database writes', async () => {
+    // The trap inside the trap. Half the live database's gate messages carry no
+    // `payload.question` — they are hand-written escalations that put the question in the
+    // subject (test/fixtures/corpus.test.ts tallies all the shapes). A reader that takes the
+    // question from the payload alone renders a strip full of ⛔ with nothing written beside it.
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
     const { gates } = (await harness.snapshot()).snapshot;
 
     expect(gates.filter((gate) => gate.question === '')).toHaveLength(0);
-    expect(gates.filter((gate) => gate.taskId !== null && gate.question !== '')).toHaveLength(21);
+    // …and the 15 whose question is only in the subject are read as fully as the rest.
+    expect(gates.filter((gate) => /^Question \d+:/.test(gate.question))).toHaveLength(53);
   });
 
   it('flags exactly the runs that are blocked, and marks exactly the nodes that are', async () => {
@@ -361,6 +362,39 @@ describe('an Orca whose schema cannot answer the question', () => {
     expect(snapshot.gates).toEqual([]);
     expect(snapshot.runs[0]!.hasOpenGates).toBe(false);
     expect(meta.degraded.join('\n')).toMatch(/[Dd]ecision gates .*thread_id/s);
+  });
+
+  it('keeps the gates when there is no payload column, and costs them only what it really costs', async () => {
+    // Per-feature degradation (#21): a missing column disables exactly the feature that needs
+    // it and nothing else. Without `payload` a gate loses its options and the node it marks —
+    // it does *not* lose its question, which half the live database keeps in the subject anyway.
+    // Dropping the gate entirely here would degrade more than the column costs.
+    const builder = new FixtureBuilder({ omitColumns: { messages: ['payload'] } });
+    builder.task({ id: 'task_a', handle: COORDINATOR, title: 'Ship the thing', createdAt: AT });
+    builder.dispatch({ taskId: 'task_a', assigneeHandle: WORKER, status: 'dispatched', dispatchedAt: at(1) });
+    builder.message({
+      id: 'msg_gate',
+      type: 'decision_gate',
+      fromHandle: WORKER,
+      toHandle: COORDINATOR,
+      subject: 'Blocked: which base branch?',
+      payload: { taskId: 'task_a', question: 'never read — the column is gone' },
+      createdAt: at(5),
+    });
+
+    harness = await serve(builder.write(tempDbPath()));
+    const { meta, snapshot } = await harness.snapshot();
+
+    expect(snapshot.gates).toHaveLength(1);
+    expect(snapshot.gates[0]).toMatchObject({
+      question: 'Blocked: which base branch?',
+      options: [],
+      taskId: null, // No payload, no `taskId`: it blocks the run, and marks no node.
+      status: 'open',
+    });
+    expect(snapshot.runs[0]!.hasOpenGates).toBe(true);
+    expect(snapshot.tasks[0]!.gate).toBeNull();
+    expect(meta.degraded.join('\n')).toMatch(/Gate options.*messages\.payload/s);
   });
 
   it('still merges the gate table when the messages cannot be read — additive to the last', async () => {

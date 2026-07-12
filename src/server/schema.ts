@@ -34,13 +34,20 @@ export const MESSAGE_SEQUENCE = 'messages.sequence';
  * What it takes to derive a gate from a `decision_gate` message — the primary and required
  * source, and the only one the live database actually has (`gates.ts`, SPEC §4.5).
  *
- * All four, or none. `type` finds the gate, `payload` carries the question, and `id` +
- * `thread_id` are the *only* record anywhere in this schema that a gate was ever answered.
- * Without the last two, every gate in the file reads open forever — and a strip raised over
- * 53 questions that were all settled days ago is worse than no strip at all. So the feature
- * degrades whole rather than degrading into a lie.
+ * All three, or none. `type` is what finds a gate at all, and `id` + `thread_id` are the *only*
+ * record anywhere in this schema that one was ever answered: without them every gate in the
+ * file reads open forever, and a strip raised over 53 questions that were all settled days ago
+ * is worse than no strip at all. So the feature degrades whole rather than degrading into a lie.
+ *
+ * **`payload` is deliberately not on this list.** It costs a gate its options and the node it
+ * marks, and half the live database's gate messages have no question in it anyway — the
+ * question is in the `subject`. Requiring it would disable more than its absence really costs,
+ * which is exactly the over-degradation #21 exists to prevent (`GATE_PAYLOAD` below).
  */
-export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.payload', 'messages.id', 'messages.thread_id'];
+export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.id', 'messages.thread_id'] as const;
+
+/** What a gate loses when there is no payload to read: its options, and the task it blocks. */
+export const GATE_PAYLOAD = 'messages.payload';
 
 /**
  * A feature the visualizer offers, the column it cannot live without, and what the user is
@@ -59,8 +66,17 @@ export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.payload', 'messa
  * - `allOf` — it needs **all** of them. That is a feature whose columns are not alternatives
  *   but parts: lose one and what is left is not a lesser version of the feature, it is a
  *   wrong one (the gate columns, above).
+ *
+ * One or the other, never neither: a feature that named no column would be satisfied by every
+ * database forever, and would degrade silently — which is the one thing this list exists to
+ * make impossible. The type is what enforces that, rather than a rule someone has to remember.
  */
-const FEATURES: { anyOf?: string[]; allOf?: string[]; degraded: string }[] = [
+type Feature = { degraded: string } & (
+  | { anyOf: readonly string[]; allOf?: never }
+  | { allOf: readonly string[]; anyOf?: never }
+);
+
+const FEATURES: Feature[] = [
   {
     // Both are v5. Either one alone still names the task, so only losing both degrades.
     anyOf: ['tasks.task_title', 'tasks.display_name'],
@@ -94,7 +110,12 @@ const FEATURES: { anyOf?: string[]; allOf?: string[]; degraded: string }[] = [
     // The table is still merged in additively when it has rows; it just almost never does.
     allOf: GATE_MESSAGE_COLUMNS,
     degraded:
-      'Decision gates — this Orca is missing one of messages.type/payload/id/thread_id, so a gate cannot be read from the messages that raise it, or told apart from one that was already answered.',
+      'Decision gates — this Orca is missing one of messages.type/id/thread_id, so a gate cannot be read from the messages that raise it, or told apart from one that was already answered.',
+  },
+  {
+    anyOf: [GATE_PAYLOAD],
+    degraded:
+      'Gate options, and the task a gate blocks — this Orca has no messages.payload column, so a gate shows the question in its subject line and marks no node.',
   },
 ];
 
@@ -132,9 +153,9 @@ export function hasColumn(columns: SchemaReport['columns'], qualified: string): 
   return present.has(column);
 }
 
-/** A feature survives when *any* of the columns it can choose between, and *all* of the ones it is made of, are there. */
-function satisfied(feature: { anyOf?: string[]; allOf?: string[] }, has: (column: string) => boolean): boolean {
-  return (feature.anyOf?.some(has) ?? true) && (feature.allOf?.every(has) ?? true);
+/** A feature survives when *any* of the columns it can choose between, or *all* of the ones it is made of, are there. */
+function satisfied(feature: Feature, has: (column: string) => boolean): boolean {
+  return feature.anyOf === undefined ? feature.allOf.every(has) : feature.anyOf.some(has);
 }
 
 function columnsOf(db: DatabaseSync, table: TableName): ReadonlySet<string> {

@@ -119,7 +119,18 @@ function GateMarker({ task }: { task: Task }) {
     <span
       data-testid="gate-marker"
       title={task.gate.question}
-      style={{ color: GATE_COLOR.text, fontWeight: 700, whiteSpace: 'nowrap' }}
+      // A badge, like the assignee chip beside it (SPEC §7.5) — not bare text. It is the one
+      // thing on this node that means *stopped*, and on a canvas you are scanning rather than
+      // reading, a shape catches the eye before a colour does.
+      style={{
+        background: GATE_COLOR.bg,
+        border: `1px solid ${GATE_COLOR.border}`,
+        color: GATE_COLOR.text,
+        borderRadius: 4,
+        padding: '0 4px',
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
     >
       ⛔ gate
     </span>

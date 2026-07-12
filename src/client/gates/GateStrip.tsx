@@ -59,21 +59,27 @@ export function GateStrip({ gates, tasks, onSelectTask }: GateStripProps) {
       }}
     >
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {gates.map((gate) => (
-          <li key={gate.id} data-testid="gate">
-            {gate.taskId === null ? (
-              <GateEntry gate={gate} blocks={null} />
-            ) : (
-              <button
-                type="button"
-                onClick={() => onSelectTask(gate.taskId!)}
-                style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
-              >
-                <GateEntry gate={gate} blocks={titleOf(gate.taskId)} />
-              </button>
-            )}
-          </li>
-        ))}
+        {gates.map((gate) => {
+          // Bound once, so the narrowing survives into the callback — and so the two branches
+          // are visibly the same question asked of the same value: is there a node to go to?
+          const taskId = gate.taskId;
+
+          return (
+            <li key={gate.id} data-testid="gate">
+              {taskId === null ? (
+                <GateEntry gate={gate} blocks={null} />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onSelectTask(taskId)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
+                >
+                  <GateEntry gate={gate} blocks={titleOf(taskId)} />
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
