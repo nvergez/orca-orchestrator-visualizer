@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { CoordinatorRun, Dispatch, Gate, Run, RunSnapshot, Task, Turn } from '../shared/types.ts';
-import { byMostRecentActivity, type RunOrderKeys } from './runs.ts';
+import { byInstant } from './time.ts';
 
 /**
  * **History that pages, and selected runs that never do** (SPEC §12, ADR 0002, #69).
@@ -19,9 +18,32 @@ import { byMostRecentActivity, type RunOrderKeys } from './runs.ts';
  *   snapshot serves, so the stream can *name* the runs a change touched
  *   (`StreamEvent.affected`) instead of re-shipping the machine's whole history.
  *
- * Pure, and free of SQLite: the query layer hands it what one derivation pass already produced
- * (`database.ts`), the same way `runs.ts` is handed tasks.
+ * Pure, and free of SQLite **and of Node**: the query layer hands it what one derivation pass
+ * already produced (`database.ts`), the same way `runs.ts` is handed tasks — and the canned
+ * client suite imports these same functions to build its stub loaders (`test/client/canned.tsx`),
+ * so a canned selected run cannot drift from what the real endpoint serves. The digests, which
+ * want `node:crypto`, live next door in `digests.ts` for exactly that reason.
  */
+
+/** The three keys the run order reads — all a keyset cursor has to remember. */
+export type RunOrderKeys = Pick<Run, 'endedAt' | 'startedAt' | 'id'>;
+
+/**
+ * Most-recent activity first — the rail's order, the run index's order, and a **total** order.
+ *
+ * The id tie-break is not pedantry: the run index pages this order with a keyset cursor (#69),
+ * and a cursor over an order with ties is a page boundary that falls differently on two reads
+ * of an unchanged database — duplicating a run into two pages or dropping it from both. The id
+ * is compared by code point, never by locale, because a page boundary must not move with the
+ * server's `LANG`.
+ */
+export function byMostRecentActivity(a: RunOrderKeys, b: RunOrderKeys): number {
+  return (
+    byInstant(b.endedAt, a.endedAt) ||
+    byInstant(b.startedAt, a.startedAt) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
 
 /** The first page is the 50 most recently active summaries (SPEC §12). */
 export const RUN_PAGE_SIZE = 50;
@@ -83,26 +105,25 @@ export function pageRuns(runs: Run[], cursor: string | null, pageSize = RUN_PAGE
 }
 
 /**
- * The cursor is opaque on the wire and deliberately boring underneath: the three order keys,
- * as JSON, base64url-encoded. Deterministic — the same database yields the same cursor — and
- * carrying nothing a client could not already see on the row it was cut after.
+ * The cursor is opaque on the wire — a contract, not an encryption: the client follows it
+ * verbatim and never interprets it. Underneath it is deliberately boring — the three order
+ * keys, as JSON. Deterministic (the same database yields the same cursor), and carrying
+ * nothing a client could not already see on the row it was cut after.
  */
 function encodeCursor(run: RunOrderKeys): string {
-  return Buffer.from(JSON.stringify({ endedAt: run.endedAt, startedAt: run.startedAt, id: run.id })).toString(
-    'base64url'
-  );
+  return JSON.stringify({ endedAt: run.endedAt, startedAt: run.startedAt, id: run.id });
 }
 
 /** Garbage in is a `CursorError` out — a 400 with its own name, never a silent first page. */
 function decodeCursor(cursor: string): RunOrderKeys {
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const parsed = JSON.parse(cursor) as Record<string, unknown>;
     const { endedAt, startedAt, id } = parsed;
     if (typeof endedAt === 'string' && typeof startedAt === 'string' && typeof id === 'string') {
       return { endedAt, startedAt, id };
     }
   } catch {
-    // Fall through: not base64, not JSON, or not ours — all the same refusal.
+    // Fall through: not JSON, or not ours — the same refusal either way.
   }
   throw new CursorError(cursor);
 }
@@ -130,48 +151,6 @@ export function snapshotRun(evidence: RunEvidence, runId: string): Omit<RunSnaps
     coordinatorRuns: coordinatorRunsOf(evidence.coordinatorRuns, run),
   };
 }
-
-/**
- * One fingerprint per run over exactly what its snapshot serves, plus one for the evidence
- * nothing places (`UNPLACED_KEY`). The stream diffs two of these maps to fill
- * `StreamEvent.affected` — so what invalidates a snapshot is, by construction, what changes it.
- *
- * The unplaced turns are digested **once, under their own key**, and not inside every run's
- * digest — they ride along in every snapshot, so folding them in would make one stray message
- * "affect" every run on the machine, and a doorbell that always rings for everything has
- * stopped being targeted.
- */
-export function digestRuns(evidence: RunEvidence): Map<string, string> {
-  const digests = new Map<string, string>();
-
-  for (const run of evidence.runs) {
-    const snapshot = snapshotRun(evidence, run.id)!;
-    digests.set(
-      run.id,
-      digest({ ...snapshot, turns: snapshot.turns.filter((turn) => turn.runId === run.id) })
-    );
-  }
-
-  digests.set(
-    UNPLACED_KEY,
-    digest({
-      turns: evidence.turns.filter((turn) => turn.runId === null),
-      // A coordinator row no orchestrator claims belongs to nobody's snapshot digest above,
-      // and the index still lists it — so its changes have to ring the bell somewhere.
-      coordinatorRuns: evidence.coordinatorRuns.filter(
-        (row) => !evidence.runs.some((run) => run.handle !== null && run.handle === row.coordinatorHandle)
-      ),
-    })
-  );
-
-  return digests;
-}
-
-/**
- * The digest key for what no run claims. It can never collide with a run id: those are
- * `run_<handle>` or `run_unattributed`, and this deliberately is not.
- */
-export const UNPLACED_KEY = '@unplaced';
 
 /** Every attempt of every task that has any, oldest first, keyed by task id. */
 function attemptsOf(tasks: Task[], attemptsByTask: ReadonlyMap<string, Dispatch[]>): Record<string, Dispatch[]> {
@@ -209,13 +188,4 @@ function linkedTasksOf(allTasks: Task[], runTasks: Task[]): Task[] {
 function coordinatorRunsOf(rows: CoordinatorRun[], run: Run): CoordinatorRun[] {
   if (run.handle === null) return [];
   return rows.filter((row) => row.coordinatorHandle === run.handle);
-}
-
-/**
- * sha256 of the JSON — a fingerprint, not the data: a subscriber remembers 64 hex characters
- * per run instead of the run. Key order is deterministic because the objects are built by the
- * same code on every read; nothing here canonicalizes, and nothing needs to.
- */
-function digest(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }

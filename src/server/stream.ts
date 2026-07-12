@@ -1,5 +1,5 @@
 import type { Affected, Liveness, StreamEvent } from '../shared/types.ts';
-import { UNPLACED_KEY } from './history.ts';
+import { UNPLACED_KEY } from './digests.ts';
 
 /**
  * The poll loop, and the browsers listening to it (SPEC §6.1–6.2).

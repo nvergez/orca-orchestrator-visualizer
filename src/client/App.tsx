@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
+import type { CastMember, Gate, Meta, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
@@ -15,11 +15,11 @@ import { Conversation } from './conversation/Conversation.tsx';
 import { useArrivals, usePulses } from './conversation/pulses.ts';
 import { exchangeCount, selectTurns } from './conversation/select.ts';
 import { GateStrip } from './gates/GateStrip.tsx';
+import { fetchHistory, type HistoryLoaders, useHistory } from './history.ts';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
-import { useRunSelection } from './rail/selection.ts';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { useIsMobile } from './viewport.tsx';
@@ -72,7 +72,6 @@ import { useIsMobile } from './viewport.tsx';
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
-const NO_RUNS: Run[] = [];
 const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
 const NO_TURNS: Turn[] = [];
@@ -87,24 +86,41 @@ export type AppProps = {
    * the network lives at the edges (`Live.tsx`, `inspector/detail.ts`).
    */
   loadTask?: TaskLoader;
+  /**
+   * How the shell fetches history (#69): the run index a page at a time, and the selected run
+   * whole. Defaults to the real GETs; a canned pair drives the whole shell from a test —
+   * `loadTask`'s pattern, grown to the two reads the stream stopped carrying.
+   */
+  loadHistory?: HistoryLoaders;
 };
 
-export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
-  const runs = event?.snapshot.runs ?? NO_RUNS;
-  const { selected, select, newRunId } = useRunSelection(runs);
+export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHistory }: AppProps) {
+  // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
+  // selected run's complete evidence, each refetched when `event.affected` names it (#69).
+  const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, view } = useHistory(
+    event,
+    loadHistory
+  );
 
-  // Every task in the database, which is a different question from the canvas's. The canvas draws
-  // one orchestrator's; a *dependency* is an edge in the schema and knows nothing about which
-  // terminal created which task, so resolving one against the canvas's tasks alone would report a
-  // task in the next orchestration along as deleted (the inspector's dep chips).
-  const allTasks = event?.snapshot.tasks ?? NO_TASKS;
+  // The selected run's complete evidence — tasks, gates and turns already scoped to it by the
+  // server, which owns the derivation (SPEC §4.3). Beside the run's own tasks ride the far ends
+  // of dependency edges that cross into other orchestrations (`linkedTasks`): an edge is real
+  // whichever terminal created its endpoints, and a dep chip that could not see across would
+  // call a task sitting right there in the database deleted.
+  const tasks = view?.tasks ?? NO_TASKS;
+  const allTasks = useMemo(() => (view === null ? NO_TASKS : [...view.tasks, ...view.linkedTasks]), [view]);
 
-  // The conversation is the server's, whole, on every push (SPEC §4.7) — the client picks a scope
-  // and nothing else. What still arrives as a *delta* is the message log, and it is the only thing
-  // that can say **what just happened**, which is what flashes a node (`conversation/pulses.ts`).
+  // The conversation is the server's, whole, per selected run (SPEC §4.7) — the client picks a
+  // scope and nothing else. What still arrives as a *delta* is the message log, and it is the
+  // only thing that can say **what just happened**, which is what flashes a node
+  // (`conversation/pulses.ts`).
   const pulses = usePulses(useArrivals(event));
 
-  const turns = event?.snapshot.turns ?? NO_TURNS;
+  const turns = view?.turns ?? NO_TURNS;
+
+  // The freshest description of the selected run: its snapshot once loaded, the index summary
+  // until then. Both are the same wire shape, and the snapshot is the completer truth (ADR 0002).
+  const activeRun = view?.run ?? selected;
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -144,23 +160,13 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
     [isMobile, turns, selected, selectedAgent]
   );
 
-  // The scoping, in one line. Every task carries the run the server put it in, so the client never
-  // re-derives the grouping — it only picks which one to draw.
-  const tasks = useMemo(
-    () => (selected ? allTasks.filter((task) => task.runId === selected.id) : NO_TASKS),
-    [allTasks, selected]
-  );
-
-  // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
-  // them. Which question is still open, and which run it blocks, are answers the server has
-  // already worked out from the `decision_gate` messages (`server/gates.ts`); re-deriving
-  // either here would be re-implementing the one trap the ticket exists to avoid.
+  // The gates arrive already scoped to the selected run (#19, #69) — which question is still
+  // open is an answer the server worked out from the `decision_gate` messages
+  // (`server/gates.ts`); re-deriving it here would re-implement the one trap #19 exists to
+  // avoid. The strip wants only the open ones.
   const openGates = useMemo(
-    () =>
-      event && selected
-        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.status === 'open')
-        : NO_GATES,
-    [event, selected]
+    () => (view === null ? NO_GATES : view.gates.filter((gate) => gate.status === 'open')),
+    [view]
   );
 
   // Only ever a task on the canvas: a selection is cleared whenever the run changes, and a run
@@ -171,9 +177,8 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   // The node wears one ⛔ marker because it has room for one; the inspector is where the decision
   // that was actually made is legible.
   const taskGates = useMemo(
-    () =>
-      event && selectedTask ? event.snapshot.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES,
-    [event, selectedTask]
+    () => (view !== null && selectedTask ? view.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES),
+    [view, selectedTask]
   );
 
   // The bodies, on the click and not before — the 172 KB the snapshot exists to not send
@@ -270,7 +275,9 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
     setSelectedTaskId(taskId);
   }
 
-  if (!event) return <Connecting />;
+  // Two things have to land before the shell is worth drawing: the stream's first event (the
+  // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
+  if (!event || !ready) return <Connecting />;
 
   return (
     // One switch, at the top, for a reader who has asked their machine to hold still. Every
@@ -288,12 +295,13 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
         <div className="flex min-h-0 flex-1 gap-2 max-lg:flex-col">
           <RunRail
             runs={runs}
-            coordinatorRuns={event.snapshot.coordinatorRuns}
+            coordinatorRuns={coordinatorRuns}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
             selectedAgent={selectedAgent}
             onSelectAgent={selectAgent}
             newRunId={newRunId}
+            older={{ hasOlder, loadOlder }}
             fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
@@ -309,16 +317,23 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
-              <Canvas
-                tasks={tasks}
-                cast={selected?.cast}
-                waves={selected?.waves}
-                selectedAgent={selectedAgent}
-                selectedTaskId={selectedTask?.id ?? null}
-                onSelectTask={selectTask}
-                pulses={pulses}
-                refitSignal={refitSignal}
-              />
+              {selected !== null && view === null ? (
+                // The selected run's evidence is on its way (#69). Milliseconds on loopback —
+                // but an empty canvas would read as "this run has no tasks", which is a claim,
+                // and not one anybody has verified yet.
+                <LoadingRun />
+              ) : (
+                <Canvas
+                  tasks={tasks}
+                  cast={activeRun?.cast}
+                  waves={activeRun?.waves}
+                  selectedAgent={selectedAgent}
+                  selectedTaskId={selectedTask?.id ?? null}
+                  onSelectTask={selectTask}
+                  pulses={pulses}
+                  refitSignal={refitSignal}
+                />
+              )}
             </div>
           </div>
 
@@ -372,7 +387,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
                   detail={detail}
                   error={detailError}
                   turns={turns}
-                  cast={selected?.cast ?? NO_CAST}
+                  cast={activeRun?.cast ?? NO_CAST}
                   onClose={() => {
                     setSelectedTaskId(null);
                     // The dock band stays open — the conversation returns in the same band at the
@@ -388,7 +403,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
               ) : (
                 <Conversation
                   turns={turns}
-                  run={selected}
+                  run={activeRun}
                   selectedAgent={selectedAgent}
                   onClearAgent={() => setSelectedAgent(null)}
                   onSelectTask={showTask}
@@ -661,6 +676,22 @@ function Notices({ meta }: { meta: Meta }) {
         </p>
       )}
     </motion.div>
+  );
+}
+
+/**
+ * Between selecting a run and its complete evidence arriving (#69) — one blink on loopback.
+ * It stands where the canvas will, because that is what it is standing in for; and it says
+ * "loading" rather than showing an empty canvas, because an empty canvas *means something*
+ * ("no tasks in this run") and nothing has verified that yet.
+ */
+function LoadingRun() {
+  return (
+    <section aria-label="Loading run" className={cn(PANEL_CLASS, 'flex h-full items-center justify-center')}>
+      <p data-testid="run-loading" className="text-muted-foreground text-xs">
+        Loading this run’s history…
+      </p>
+    </section>
   );
 }
 

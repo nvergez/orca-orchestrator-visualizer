@@ -46,7 +46,13 @@ import { TurnRow } from './TurnRow.tsx';
  */
 
 export type ConversationProps = {
-  /** Every turn in the database. The panel picks a scope; it never re-derives one. */
+  /**
+   * The selected run's complete conversation, and beside it the turns nothing places
+   * (`runId: null`) — exactly what the selected-run snapshot carries (#69). The panel picks a
+   * scope; it never re-derives one. "All" is where the unplaced turns appear: since the stream
+   * stopped carrying the whole machine's history (ADR 0002), another orchestrator's
+   * conversation is a rail click away rather than a scope away.
+   */
   turns: Turn[];
   /** The orchestrator the rail has open. Null only when the database holds no tasks at all. */
   run: Run | null;

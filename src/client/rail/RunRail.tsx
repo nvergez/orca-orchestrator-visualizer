@@ -62,6 +62,18 @@ export type RailFold = {
   onToggle: () => void;
 };
 
+/**
+ * The explicit way down into older history (#69). The index arrives a page at a time — the 50
+ * most recently active orchestrators first — and this is the reader following the cursor, out
+ * loud. There is no silent date cutoff to fall off: history ends where the button stops
+ * rendering, which is where the server said it ends.
+ */
+export type RailPaging = {
+  /** True while older pages exist beyond what is loaded. */
+  hasOlder: boolean;
+  loadOlder: () => void;
+};
+
 export type RunRailProps = {
   runs: Run[];
   coordinatorRuns: CoordinatorRun[];
@@ -72,6 +84,8 @@ export type RunRailProps = {
   onSelectAgent: (handle: string | null) => void;
   /** An orchestration that started while the user was reading an older one — announced, never jumped to. */
   newRunId: string | null;
+  /** "Load older history" — absent when the caller has no pages to offer (canned shells). */
+  older?: RailPaging;
   /** Present only on mobile, where the rail is a foldable band. Desktop passes nothing. */
   fold?: RailFold;
 };
@@ -84,6 +98,7 @@ export function RunRail({
   selectedAgent,
   onSelectAgent,
   newRunId,
+  older,
   fold,
 }: RunRailProps) {
   // Which row the pointer is on. The *only* reason this is state: the sliding highlight is one
@@ -260,6 +275,17 @@ export function RunRail({
                 </li>
               ))}
             </ul>
+          )}
+
+          {older?.hasOlder && (
+            <button
+              type="button"
+              data-testid="load-older"
+              onClick={older.loadOlder}
+              className={cn(CHIP_CLASS, 'mx-3 my-2 cursor-pointer max-lg:py-1.5')}
+            >
+              Load older history
+            </button>
           )}
 
           <CoordinatorRuns runs={coordinatorRuns} />
