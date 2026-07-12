@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { branchKinds, declaredKinds, projectCandidates } from '../../src/server/hints.ts';
+import {
+  AGENT_KIND_ALLOWLIST_VERSION,
+  AGENT_KINDS,
+  branchKinds,
+  declaredKinds,
+  projectCandidates,
+} from '../../src/server/hints.ts';
 import type { CastMember, Run } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
@@ -56,6 +62,19 @@ function member(run: Run, handle: string): CastMember {
   if (!found) throw new Error(`no cast member ${handle}`);
   return found;
 }
+
+describe('the allowlist', () => {
+  it('is versioned data: the list cannot move without the version moving with it', () => {
+    // "A small, versioned allowlist" (SPEC §12.4) means which kinds a build recognises is an
+    // auditable fact. This pins (version, kinds) as ONE pair: adding, removing or renaming a
+    // kind fails here, and the fix is to change both lines together — bump the version, edit
+    // the list — never one without the other.
+    expect({ version: AGENT_KIND_ALLOWLIST_VERSION, kinds: AGENT_KINDS }).toEqual({
+      version: 1,
+      kinds: ['aider', 'claude', 'codex', 'copilot', 'cursor', 'gemini'],
+    });
+  });
+});
 
 describe('declaredKinds: the "you are a <kind>" position in a spec', () => {
   it('reads the declared kind, and refuses the casual mention two clauses later', () => {
@@ -417,6 +436,24 @@ describe('repository hints on the wire', () => {
       value: 'long-archived-project',
       sources: ['task specs'],
     });
+  });
+
+  it('refuses the synthetic unattributed bucket — agreement among strangers captions nobody', async () => {
+    // Null-handle tasks share nothing but the absence of a handle (SPEC §4.3). They were never
+    // one orchestrator's work, so their paths agreeing is a coincidence about nobody — the same
+    // reason the bucket's waves are never cut.
+    const runs = await runsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_1', handle: null, spec: 'Work in /home/dev/orca/workspaces/orca-viz/wt-1.', createdAt: at(0) })
+        .task({
+          id: 'task_2',
+          handle: null,
+          spec: 'Work in /home/dev/orca/workspaces/orca-viz/wt-2.',
+          createdAt: at(MINUTE),
+        })
+    );
+
+    expect('repoHint' in byHandle(runs, null)).toBe(false);
   });
 
   it('scopes agreement to the run — another orchestrator’s project is not this one’s conflict', async () => {

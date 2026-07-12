@@ -201,6 +201,12 @@ const FEATURES: Feature[] = [
     // The hints are best-effort by design — a missing hint is their ordinary answer — so losing
     // one evidence source is just fewer hints, and only losing every source is a degraded
     // feature: there is then nothing left for the readers to read (SPEC §12.4, `hints.ts`).
+    //
+    // The message-branch source strictly also needs `messages.type` and `from_handle`, which
+    // this entry does not name: both are v1 columns whose absence already degrades the log and
+    // the gates loudly on their own lines, and `payload` is the one column whose loss would
+    // silence this source *alone*. Naming the trio would need (A ∨ B ∨ (C ∧ D ∧ E)), which the
+    // Feature type deliberately does not offer.
     anyOf: ['tasks.spec', 'tasks.result', MESSAGE_PAYLOAD],
     degraded:
       'Agent-kind hints — this Orca has none of tasks.spec, tasks.result or messages.payload, so no retained evidence can suggest what kind of agent a cast member was.',

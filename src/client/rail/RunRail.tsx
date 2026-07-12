@@ -13,6 +13,7 @@ import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import { Cast } from './Cast.tsx';
+import { provenanceOf } from './provenance.ts';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
 /**
@@ -387,9 +388,9 @@ function RunRow({
             <Dot />
             <span
               data-testid="run-repo-hint"
-              title={`Repository hint — uncertain, read from ${run.repoHint.sources.join(' + ')}. Never used to group or identify runs.`}
+              title={`Repository hint — uncertain, read ${provenanceOf(run.repoHint)}. Never used to group or identify runs.`}
             >
-              {run.repoHint.value}?<span className="opacity-70"> · from {run.repoHint.sources.join(' + ')}</span>
+              {run.repoHint.value}?<span className="opacity-70"> · {provenanceOf(run.repoHint)}</span>
             </span>
           </>
         )}

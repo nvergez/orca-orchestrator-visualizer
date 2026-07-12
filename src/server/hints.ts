@@ -32,7 +32,9 @@ import type { TaskWithHandle } from './runs.ts';
 /**
  * Bump this when `AGENT_KINDS` changes. The allowlist is deliberately versioned data, not an
  * open pattern: a kind this build has never heard of yields no hint (never a guess), and which
- * kinds a build recognises should be an auditable fact about the build.
+ * kinds a build recognises should be an auditable fact about the build. The test suite pins
+ * `(version, kinds)` as one pair (`test/server/hints.test.ts`), so the list cannot move without
+ * this number moving with it.
  */
 export const AGENT_KIND_ALLOWLIST_VERSION = 1;
 
@@ -193,7 +195,11 @@ export function attachHints(runs: Run[], evidence: TaskHintEvidence[], messages:
   }
 
   return runs.map((run) => {
-    const repoHint = repoHintOf(byRun.get(run.id) ?? []);
+    // No repo hint on the synthetic unattributed bucket: its tasks share nothing but the absence
+    // of a handle, so paths agreeing across them is agreement among strangers — the same reason
+    // its waves are never cut (`runs.ts`). Its *cast* still hints: a kind is a fact about a real
+    // terminal, whoever failed to sign the task it worked.
+    const repoHint = run.handle === null ? null : repoHintOf(byRun.get(run.id) ?? []);
 
     return {
       ...run,
@@ -210,6 +216,10 @@ export function attachHints(runs: Run[], evidence: TaskHintEvidence[], messages:
  * One cast member's kind, from everything retained about it: the declaration in each spec it was
  * dispatched (every attempt received the prompt), the branch in the result it completed (the
  * latest assignee's report, nobody else's), and the branches its own `worker_done`s carried.
+ *
+ * Message-branch evidence follows the *handle*, across runs: a kind is a property of the
+ * terminal, not of the run it appears in, and the same terminal cast by two orchestrators is
+ * still one agent of one kind. A cross-run disagreement is a conflict like any other — refused.
  */
 function kindHintOf(
   member: CastMember,

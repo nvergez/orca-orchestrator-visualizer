@@ -7,6 +7,7 @@ import { agentLook, MONOGRAM_CLASS, STALE_HEARTBEAT_MS } from '../canvas/theme.t
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SECTION_IN } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
+import { provenanceOf } from './provenance.ts';
 
 /**
  * **The cast — and the tool's central gesture.**
@@ -174,11 +175,11 @@ function Agent({
             // above it in the tree, so the more specific wording wins under the pointer.)
             <span
               data-testid="agent-kind-provenance"
-              title={`Kind hint — uncertain, read from ${member.kindHint.sources.join(' + ')}. Not an identity.`}
+              title={`Kind hint — uncertain, read ${provenanceOf(member.kindHint)}. Not an identity.`}
               className="opacity-75"
             >
               {' '}
-              · from {member.kindHint.sources.join(' + ')}
+              · {provenanceOf(member.kindHint)}
             </span>
           )}
         </code>
