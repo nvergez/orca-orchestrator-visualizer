@@ -100,6 +100,11 @@ describe('the tasks in a snapshot', () => {
     // the bound still matters: it is what a client pays to read the *whole* corpus back
     // through the paged contracts, and `spec` text is still the thing that must not be in it.
     //
+    // Features have come and said so. The latest is the duration observations (#66): one small
+    // object per run, per task and per latest attempt, absent whenever the endpoints cannot
+    // support one. Like the turns, they are bounded by the *row count*, never by what anybody
+    // typed — a duration cannot grow.
+    //
     // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec
     // and says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let
     // alone the wire. The bodies are one click away, in full, on `GET /api/task/:id`.

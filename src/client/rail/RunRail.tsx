@@ -9,6 +9,7 @@ import { shortHandle } from '../../shared/handles.ts';
 import type { CoordinatorRun, Run } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
+import { Duration } from '../duration.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -388,6 +389,15 @@ function RunRow({
 
       <span className="text-muted-foreground relative mt-0.5 flex flex-wrap gap-x-1.5 pl-4 text-[11px]">
         <span>{formatRunDate(run.startedAt)}</span>
+        {/* How long the run occupied the clock — the run span (#66), open and ageing while the
+            run is live. Absent when the retained evidence supported no observation: this row
+            shows no number rather than an invented one. */}
+        {run.duration && (
+          <>
+            <Dot />
+            <Duration observation={run.duration} testId="run-span" className="tabular-nums" />
+          </>
+        )}
         <Dot />
         {/* The number this whole screen is now about: how many agents this orchestrator spawned. */}
         <span data-testid="agent-count">

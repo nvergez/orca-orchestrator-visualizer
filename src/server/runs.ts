@@ -1,6 +1,7 @@
 import { shortHandle } from '../shared/handles.ts';
 import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
 import { castOf } from './cast.ts';
+import { runSpan } from './durations.ts';
 // The rail's order lives in `history.ts` beside the keyset cursor that pages it (#69): the two
 // must read the same total order, or a page boundary and a rail row could disagree.
 import { byMostRecentActivity } from './history.ts';
@@ -143,7 +144,11 @@ function describeRun(handle: string | null, members: TaskWithHandle[], orcaIsLiv
   const first = ordered[0]!;
   const tasks = ordered.map((entry) => entry.task);
 
-  return {
+  // No history mode: yesterday's run renders through this same code path, and the dot is the
+  // whole difference. It takes a running Orca *and* work that could still move.
+  const live = orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status));
+
+  const run: Run = {
     id: runIdFor(handle),
     handle,
     label: labelFor(handle, first),
@@ -153,15 +158,20 @@ function describeRun(handle: string | null, members: TaskWithHandle[], orcaIsLiv
     cast: castOf(handle, ordered),
     waves: wavesOf(handle, ordered),
     statusCounts: countStatuses(tasks),
-    // No history mode: yesterday's run renders through this same code path, and the dot is the
-    // whole difference. It takes a running Orca *and* work that could still move.
-    live: orcaIsLive && tasks.some((task) => IN_FLIGHT.has(task.status)),
+    live,
     // False here, and true only once the gates have actually been read: they come from
     // `decision_gate` *messages* (`gates.ts`), which this module has never seen — it is handed
     // tasks. `attachGates` flips it for the runs a gate really is blocking.
     hasOpenGates: false,
     edgeCount: countEdges(tasks),
   };
+
+  // Open while `live` — the span and the green dot must not disagree. Absent when no task
+  // creation is readable, which is the same honesty the observation keeps everywhere (#66).
+  const duration = runSpan(tasks, live);
+  if (duration !== undefined) run.duration = duration;
+
+  return run;
 }
 
 /**

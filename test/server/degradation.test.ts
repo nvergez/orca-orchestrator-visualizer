@@ -255,6 +255,111 @@ describe('the columns decide, not the version number', () => {
 });
 
 /**
+ * The duration observations (#66) read five timestamp columns, and each loss costs exactly
+ * the clocks that read it — never the DAG, never the raw timestamps that are still there.
+ * The behavioral half (no observation on the wire) falls out of the reads returning null;
+ * these tests are for the *naming* half: a feature that degrades silently is the one failure
+ * the `meta.degraded` list exists to prevent (SPEC §5).
+ */
+describe('durations degrade by name, clock by clock', () => {
+  /** A task worked to completion: the dispatch clock closed, and the task span closed over it. */
+  function timedOrchestration(schema: SchemaOptions): FixtureBuilder {
+    return new FixtureBuilder(schema)
+      .task({
+        id: CHARTED,
+        handle: CODER,
+        title: 'Chart the map',
+        status: 'completed',
+        createdAt: AT,
+        completedAt: LATER,
+      })
+      .dispatch({
+        taskId: CHARTED,
+        assigneeHandle: WORKER,
+        status: 'completed',
+        dispatchedAt: new Date(AT.getTime() + 5 * 60 * 1000),
+        completedAt: new Date(AT.getTime() + 25 * 60 * 1000),
+      });
+  }
+
+  const DISPATCH_DURATIONS = /^dispatch durations/i;
+  const TASK_SPANS = /^task spans/i;
+  const RUN_SPANS = /^run spans/i;
+
+  it('costs the dispatch clock when no attempt can say when it finished — and the task span steps in', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { dispatch_contexts: ['completed_at'] } })
+    );
+
+    expect(matching(meta.degraded, DISPATCH_DURATIONS)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(1);
+
+    // The clock that is gone, and the fallback doing exactly what its label promises.
+    const task = byId(snapshot.tasks, CHARTED);
+    expect(task.dispatch?.duration).toBeUndefined();
+    expect(task.duration).toMatchObject({ clock: 'task-span', complete: true });
+
+    // …and the run still has its span: it never read the column that vanished.
+    expect(snapshot.runs[0]!.duration).toMatchObject({ clock: 'run-span', complete: true });
+  });
+
+  it('costs the dispatch clock its start when no column says when an attempt began', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { dispatch_contexts: ['dispatched_at', 'created_at'] } })
+    );
+
+    expect(matching(meta.degraded, DISPATCH_DURATIONS)).toHaveLength(1);
+
+    const task = byId(snapshot.tasks, CHARTED);
+    expect(task.dispatch?.duration).toBeUndefined();
+    expect(task.duration).toMatchObject({ clock: 'task-span' });
+  });
+
+  it('does not cry wolf when only dispatched_at is gone — created_at still starts the clock', async () => {
+    // The same fallback `toDispatch` has always made: the row is written when the attempt is
+    // made, so `created_at` is when it was dispatched. A feature that still works is not named.
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { dispatch_contexts: ['dispatched_at'] } })
+    );
+
+    expect(matching(meta.degraded, DISPATCH_DURATIONS)).toHaveLength(0);
+    expect(byId(snapshot.tasks, CHARTED).dispatch?.duration).toMatchObject({ clock: 'dispatch', complete: true });
+  });
+
+  it('costs the task-span fallback when tasks.completed_at is gone — the dispatch clock survives', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { tasks: ['completed_at'] } })
+    );
+
+    expect(matching(meta.degraded, TASK_SPANS)).toHaveLength(1);
+    // The run span reads the same column for its *end*, and weakens rather than vanishes: it can
+    // now end only on a creation, understating any run whose last work outlived its last task's
+    // birth. A weakened feature degrades by name exactly like a lost one (SPEC §5) — this is the
+    // silent-shortfall case the list exists to prevent.
+    expect(matching(meta.degraded, /^run span ends/i)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(2);
+
+    // The preferred clock never read the missing column, so the task still has its duration…
+    expect(byId(snapshot.tasks, CHARTED).duration).toMatchObject({ clock: 'dispatch', complete: true });
+    // …and the run span honestly ends on the latest readable *creation* instead.
+    expect(snapshot.runs[0]!.duration).toMatchObject({ clock: 'run-span', endAt: AT.toISOString() });
+  });
+
+  it('costs the run span and the task span — and names both — when tasks.created_at is gone', async () => {
+    const { meta, snapshot } = await snapshotOf(timedOrchestration({ omitColumns: { tasks: ['created_at'] } }));
+
+    expect(matching(meta.degraded, RUN_SPANS)).toHaveLength(1);
+    expect(matching(meta.degraded, TASK_SPANS)).toHaveLength(1);
+    // The waves read the same column, and they were named long before this ticket.
+    expect(matching(meta.degraded, /^waves/i)).toHaveLength(1);
+
+    expect(snapshot.runs[0]!.duration).toBeUndefined();
+    // The dispatch clock reads its own table, and is untouched by any of it.
+    expect(byId(snapshot.tasks, CHARTED).duration).toMatchObject({ clock: 'dispatch', complete: true });
+  });
+});
+
+/**
  * **The DAG core is the only legal hard-fail** (SPEC §5). Everything else — every other
  * column, every other table — degrades. These are the two halves of that rule, and the second
  * is the one worth writing: a database this tool *could* have refused, and does not.
