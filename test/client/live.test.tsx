@@ -77,15 +77,17 @@ function event(over: { meta?: Partial<Meta>; runs?: Run[]; tasks?: Task[]; seq?:
 }
 
 /**
- * A stand-in for the browser's `EventSource` — it opens, it delivers, it closes, and it
- * records all three so the test can assert on them.
+ * A stand-in for the browser's `EventSource` — it opens, it delivers, it fails, it closes,
+ * and it records all four so the test can assert on them.
  */
 class FakeEventSource {
   static opened: FakeEventSource[] = [];
 
   readonly url: string;
   closed = false;
+  onopen: ((opened: Event) => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
+  onerror: ((error: Event) => void) | null = null;
 
   constructor(url: string) {
     this.url = url;
@@ -96,10 +98,24 @@ class FakeEventSource {
     this.closed = true;
   }
 
+  /** The connection opens — or, after `fail()`, the browser's automatic retry succeeds. */
+  open(): void {
+    act(() => {
+      this.onopen?.(new Event('open'));
+    });
+  }
+
   /** The server pushes. `act` because this lands outside React's own event loop. */
   push(streamEvent: StreamEvent): void {
     act(() => {
       this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(streamEvent) }));
+    });
+  }
+
+  /** The connection drops. The real `EventSource` is already retrying when this fires. */
+  fail(): void {
+    act(() => {
+      this.onerror?.(new Event('error'));
     });
   }
 }
@@ -195,5 +211,135 @@ describe('<Live>', () => {
     // An `EventSource` left open reconnects for ever, and the server would go on polling
     // SQLite for a browser that is gone.
     expect(source.closed).toBe(true);
+  });
+});
+
+/**
+ * The transport's own story (#57): connecting, connected, reconnecting — told separately from
+ * `meta.liveness`, which is about Orca, and separately from the data age, which is about the
+ * snapshot. `EventSource` retries on its own; all the client owes the reader is the narration.
+ */
+describe('<Live> connection state', () => {
+  it('shows the stream as connected once the first push lands', () => {
+    render(<Live />);
+
+    stream().push(event());
+
+    const pill = screen.getByTestId('stream-state');
+    expect(pill).toHaveAttribute('data-state', 'connected');
+    expect(pill).toHaveTextContent(/stream connected/i);
+  });
+
+  it('keeps the connecting presentation through an error that beat the first connection', () => {
+    render(<Live />);
+
+    // The server is not up yet. The browser is already retrying, and "connecting" is still
+    // the truth — nothing was ever connected for this to be a *re*connect of.
+    stream().fail();
+
+    expect(screen.getByText(/Connecting to the database/)).toBeVisible();
+  });
+
+  it('turns reconnecting on error without clearing the last good snapshot', async () => {
+    render(<Live />);
+    const source = stream();
+
+    source.open();
+    source.push(event());
+    await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(1));
+
+    source.fail();
+
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'reconnecting');
+    // …and the last good snapshot is still the whole screen. Blanking the page on a blip
+    // would be a worse lie than a slightly old one.
+    expect(screen.getByText('Ship the visualizer')).toBeVisible();
+    expect(screen.getAllByTestId('task-node')).toHaveLength(1);
+  });
+
+  it('recovers the connected presentation when the browser reopens the stream', () => {
+    render(<Live />);
+    const source = stream();
+
+    source.push(event());
+    source.fail();
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'reconnecting');
+
+    // The automatic retry succeeded. No message has to land for the pill to recover: a
+    // reopened stream to an idle database is connected, not suspect.
+    source.open();
+
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'connected');
+  });
+
+  it('recovers the connected presentation when a message lands after an error', () => {
+    render(<Live />);
+    const source = stream();
+
+    source.push(event());
+    source.fail();
+
+    // A delivered push *is* proof of a working stream, whether or not `onopen` fired first.
+    source.push(event({ seq: 1 }));
+
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'connected');
+  });
+});
+
+/**
+ * The data age (#57): how long ago the browser *successfully applied* a snapshot, on a wall
+ * clock of its own. A quiet connected stream is not an error — the age grows while the pill
+ * stays green, and neither is allowed to stand in for the other.
+ */
+describe('<Live> data age', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-11T21:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('starts at the applied snapshot and advances without any SSE traffic', () => {
+    render(<Live />);
+
+    stream().push(event());
+    expect(screen.getByTestId('data-age')).toHaveTextContent(/^0s$/);
+
+    // Thirty seconds of silence. No push, no error — just the wall clock. The acceptance
+    // criterion is that the age advances at least this often on a quiet stream.
+    act(() => vi.advanceTimersByTime(30_000));
+
+    expect(screen.getByTestId('data-age')).toHaveTextContent(/^30s$/);
+    // …while the quiet stream remains visibly connected. Old data on a healthy stream is
+    // a quiet orchestration, not a transport failure.
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'connected');
+  });
+
+  it('resets on a newly applied snapshot, and keeps aging while reconnecting', () => {
+    render(<Live />);
+    const source = stream();
+
+    source.push(event());
+    act(() => vi.advanceTimersByTime(60_000));
+    source.push(event({ seq: 2 }));
+    expect(screen.getByTestId('data-age')).toHaveTextContent(/^0s$/);
+
+    // The connection drops. The age keeps measuring the last *applied* snapshot — it is not
+    // connection age, and it does not freeze or reset just because the transport is down.
+    source.fail();
+    act(() => vi.advanceTimersByTime(30_000));
+
+    expect(screen.getByTestId('data-age')).toHaveTextContent(/^30s$/);
+    expect(screen.getByTestId('stream-state')).toHaveAttribute('data-state', 'reconnecting');
+  });
+
+  it('claims no update time before the first snapshot has been applied', () => {
+    render(<Live />);
+
+    // Still connecting: the page has observed nothing, so it says nothing — a fabricated
+    // "updated 0s ago" here would be the tool's first lie.
+    expect(screen.queryByTestId('data-age')).toBeNull();
   });
 });
