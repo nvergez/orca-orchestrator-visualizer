@@ -1,11 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { App } from '../../src/client/App.tsx';
-import type { CastMember, CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
+import type { CastMember, CoordinatorRun, Meta, Run, Task } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input.
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the client's only input.
  *
  * **The rail lists orchestrators, and the cast is the pivot.** 76 tasks in one graph is unreadable;
  * the rail is what makes the canvas mean something. It used to be headed "Runs (inferred)" and it
@@ -72,8 +72,8 @@ function task(over: Partial<Task> = {}): Task {
   };
 }
 
-function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): StreamEvent {
-  return { seq: 0, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
+function event(runs: Run[], tasks: Task[], coordinatorRuns: CoordinatorRun[] = []): CannedEvent {
+  return { seq: 0, affected: { all: true, runIds: [], unplaced: false }, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns }, messages: [] };
 }
 
 /** The rail row for a run — a button, because picking a run is the rail's whole job. */
@@ -126,7 +126,7 @@ const BOTH_RUNS_TASKS = [
 
 describe('the run rail', () => {
   it('is headed "Orchestrators" — because a row is a column, and no longer a guess', () => {
-    render(<App event={event([NEWER], [])} />);
+    render(<CannedApp event={event([NEWER], [])} />);
 
     // It used to read "Runs (inferred)", and it had to: a row *was* a guess, because the six-hour
     // idle gap cut one terminal's tasks into several unrelated rows. The gap is now a **wave** drawn
@@ -136,13 +136,13 @@ describe('the run rail', () => {
   });
 
   it('shows the terminal that ran it — the orchestrator’s only name in the schema', () => {
-    render(<App event={event([NEWER], [])} />);
+    render(<CannedApp event={event([NEWER], [])} />);
 
     expect(row('run_newer')).toHaveTextContent(HANDLE);
   });
 
   it('shows what each run was trying to do, when, how big it was and how it went', () => {
-    render(<App event={event([NEWER], [])} />);
+    render(<CannedApp event={event([NEWER], [])} />);
 
     // Enough to pick the interesting run *without opening it* (SPEC §7.2).
     const rail = row('run_newer');
@@ -153,13 +153,13 @@ describe('the run rail', () => {
   });
 
   it('keeps the full terminal handle in a tooltip — the row is too narrow for a uuid', () => {
-    render(<App event={event([NEWER], [])} />);
+    render(<CannedApp event={event([NEWER], [])} />);
 
     expect(row('run_newer')).toHaveAttribute('title', HANDLE);
   });
 
   it('marks a genuinely live run with a green dot, and a finished one without', () => {
-    render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
     // The one thing that tells a running orchestration from a finished one — and the only
     // difference between "history" and "now" in a tool that has no history mode (SPEC §7.3).
@@ -170,14 +170,14 @@ describe('the run rail', () => {
   it('lists the unattributed run as a normal row rather than hiding the orphans', () => {
     const orphans = run({ id: 'run_unattributed', handle: null, label: 'Unattributed', taskCount: 4 });
 
-    render(<App event={event([NEWER, orphans], BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event([NEWER, orphans], BOTH_RUNS_TASKS)} />);
 
     expect(within(row('run_unattributed')).getByText('Unattributed')).toBeVisible();
     expect(row('run_unattributed')).toHaveTextContent('4 tasks');
   });
 
   it('says so plainly when there is nothing to list', () => {
-    render(<App event={event([], [])} />);
+    render(<CannedApp event={event([], [])} />);
 
     expect(screen.getByText(/No orchestrators yet/i)).toBeVisible();
   });
@@ -185,7 +185,7 @@ describe('the run rail', () => {
 
 describe('the canvas renders exactly one run', () => {
   it('opens on the most recently active run, before you have clicked anything', async () => {
-    render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
     expect(row('run_newer')).toHaveAttribute('aria-current', 'true');
     // The whole ticket: the other run's task is not on the canvas. 76 tasks in one graph is
@@ -196,7 +196,7 @@ describe('the canvas renders exactly one run', () => {
   });
 
   it('swaps the canvas to the run you pick — yesterday through the same code path as today', async () => {
-    render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
     await nodeTitles(2);
 
     await userEvent.click(row('run_older'));
@@ -210,7 +210,7 @@ describe('the canvas renders exactly one run', () => {
   it('counts only the selected run in the edgeless note, not the whole database', async () => {
     // The note is what an edgeless run gets instead of an empty canvas (SPEC §7.5). Scoped
     // to the run, it says "2 tasks" — unscoped, it would say 3 and be a lie about this run.
-    render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
     await nodeTitles(2);
     expect(screen.getByTestId('edgeless-note')).toHaveTextContent(
@@ -225,10 +225,10 @@ describe('the canvas renders exactly one run', () => {
  */
 describe('a new run arriving while you read an old one', () => {
   it('leaves your selection alone and offers the jump instead of taking it', async () => {
-    const { rerender } = render(<App event={event([OLDER], [BOTH_RUNS_TASKS[0]!])} />);
+    const { rerender } = render(<CannedApp event={event([OLDER], [BOTH_RUNS_TASKS[0]!])} />);
     await nodeTitles(1);
 
-    rerender(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    rerender(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
     // Still reading yesterday. The new run announces itself; it does not interrupt.
     expect(row('run_older')).toHaveAttribute('aria-current', 'true');
@@ -237,9 +237,9 @@ describe('a new run arriving while you read an old one', () => {
   });
 
   it('takes you there when you ask, and stops nagging once you have arrived', async () => {
-    const { rerender } = render(<App event={event([OLDER], [BOTH_RUNS_TASKS[0]!])} />);
+    const { rerender } = render(<CannedApp event={event([OLDER], [BOTH_RUNS_TASKS[0]!])} />);
     await nodeTitles(1);
-    rerender(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    rerender(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
 
     await userEvent.click(screen.getByRole('button', { name: /new orchestration started/i }));
 
@@ -249,7 +249,7 @@ describe('a new run arriving while you read an old one', () => {
   });
 
   it('says nothing when the runs are the ones you already knew about', async () => {
-    const { rerender } = render(<App event={event([...BOTH_RUNS], BOTH_RUNS_TASKS)} />);
+    const { rerender } = render(<CannedApp event={event([...BOTH_RUNS], BOTH_RUNS_TASKS)} />);
     await nodeTitles(2);
 
     // A tick that changed a task's status, not the run list. A chip here would be furniture.
@@ -257,7 +257,7 @@ describe('a new run arriving while you read an old one', () => {
     // The arrays are rebuilt rather than re-passed: the server sends a *fresh* snapshot every
     // tick, and an implementation that re-announced every run it was handed would sail through
     // a test that quietly gave it the same array object twice.
-    rerender(<App event={event([...BOTH_RUNS], [...BOTH_RUNS_TASKS])} />);
+    rerender(<CannedApp event={event([...BOTH_RUNS], [...BOTH_RUNS_TASKS])} />);
 
     expect(screen.queryByRole('button', { name: /new orchestration started/i })).toBeNull();
   });
@@ -278,7 +278,7 @@ describe('coordinator runs', () => {
   };
 
   it('shows a coordinator row when Orca actually wrote one', () => {
-    render(<App event={event([NEWER], BOTH_RUNS_TASKS, [COORDINATOR])} />);
+    render(<CannedApp event={event([NEWER], BOTH_RUNS_TASKS, [COORDINATOR])} />);
 
     const panel = screen.getByTestId('coordinator-runs');
     expect(within(panel).getByText(/running/)).toBeVisible();
@@ -286,7 +286,7 @@ describe('coordinator runs', () => {
   });
 
   it('is not furniture on the ~100% of databases that have none', () => {
-    render(<App event={event([NEWER], BOTH_RUNS_TASKS)} />);
+    render(<CannedApp event={event([NEWER], BOTH_RUNS_TASKS)} />);
 
     expect(screen.queryByTestId('coordinator-runs')).toBeNull();
     // …and the runs are still there, because nothing about them depended on that table.
@@ -295,7 +295,7 @@ describe('coordinator runs', () => {
 
   it('copies the coordinator’s handle, which is shortened here like every other one', async () => {
     const user = userEvent.setup();
-    render(<App event={event([NEWER], BOTH_RUNS_TASKS, [COORDINATOR])} />);
+    render(<CannedApp event={event([NEWER], BOTH_RUNS_TASKS, [COORDINATOR])} />);
 
     await user.click(screen.getByRole('button', { name: `Copy the coordinator handle ${HANDLE}` }));
 
@@ -328,7 +328,7 @@ describe('the cast', () => {
   ];
 
   it('lists the orchestrator and its agents under the open row', () => {
-    render(<App event={event([CREW], CREW_TASKS)} />);
+    render(<CannedApp event={event([CREW], CREW_TASKS)} />);
 
     const cast = screen.getByTestId('cast');
 
@@ -339,7 +339,7 @@ describe('the cast', () => {
   });
 
   it('counts the agents on the row, so you can pick an orchestration without opening it', () => {
-    render(<App event={event([CREW], CREW_TASKS)} />);
+    render(<CannedApp event={event([CREW], CREW_TASKS)} />);
 
     expect(within(row('run_crew')).getByTestId('agent-count')).toHaveTextContent('2 agents');
   });
@@ -347,7 +347,7 @@ describe('the cast', () => {
   it('shows only the open orchestrator’s cast — an A1 in one is a different terminal from the next', () => {
     const other = run({ id: 'run_other', handle: OTHER_HANDLE, cast: [], label: 'Another orchestration' });
 
-    render(<App event={event([CREW, other], CREW_TASKS)} />);
+    render(<CannedApp event={event([CREW, other], CREW_TASKS)} />);
 
     // Exactly one cast is on screen, and it belongs to the row the rail has open.
     expect(screen.getAllByTestId('cast')).toHaveLength(1);
@@ -355,14 +355,14 @@ describe('the cast', () => {
   });
 
   it('says so when the orchestrator has no agents, rather than showing an empty list', () => {
-    render(<App event={event([run({ id: 'run_quiet', cast: [] })], [task({ runId: 'run_quiet' })])} />);
+    render(<CannedApp event={event([run({ id: 'run_quiet', cast: [] })], [task({ runId: 'run_quiet' })])} />);
 
     expect(screen.getByTestId('cast-empty')).toHaveTextContent(/has not dispatched/i);
   });
 
   it('says what an Unattributed row really is — no orchestrator on record, so nobody was dispatched', () => {
     render(
-      <App
+      <CannedApp
         event={event(
           [run({ id: 'run_unattributed', handle: null, label: 'Unattributed', cast: [] })],
           [task({ runId: 'run_unattributed' })]
@@ -380,7 +380,7 @@ describe('the cast', () => {
     const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(Date.now() - 12_000).toISOString() };
     const quiet: CastMember = { ...A2, lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() };
 
-    render(<App event={event([run({ id: 'run_crew', cast: [beating, quiet] })], CREW_TASKS)} />);
+    render(<CannedApp event={event([run({ id: 'run_crew', cast: [beating, quiet] })], CREW_TASKS)} />);
 
     const [alice, bob] = screen.getAllByTestId('agent-row');
 
@@ -395,7 +395,7 @@ describe('the cast', () => {
     const user = userEvent.setup();
     const other = run({ id: 'run_other', handle: OTHER_HANDLE, cast: [A1], label: 'Another orchestration' });
 
-    render(<App event={event([CREW, other], [...CREW_TASKS, task({ id: 'task_x', runId: 'run_other' })])} />);
+    render(<CannedApp event={event([CREW, other], [...CREW_TASKS, task({ id: 'task_x', runId: 'run_other' })])} />);
 
     await user.click(screen.getAllByTestId('agent-row')[0]!);
     expect(screen.getAllByTestId('agent-row')[0]!.getAttribute('aria-pressed')).toBe('true');
@@ -416,7 +416,7 @@ describe('the cast', () => {
    */
   it('copies an agent’s handle in full — never the eight hex the row has room for', async () => {
     const user = userEvent.setup();
-    render(<App event={event([CREW], CREW_TASKS)} />);
+    render(<CannedApp event={event([CREW], CREW_TASKS)} />);
 
     await user.click(screen.getByRole('button', { name: `Copy the agent handle ${BOB}` }));
 
@@ -428,7 +428,7 @@ describe('the cast', () => {
 
   it('copies the orchestrator’s handle from the head of its own cast', async () => {
     const user = userEvent.setup();
-    render(<App event={event([CREW], CREW_TASKS)} />);
+    render(<CannedApp event={event([CREW], CREW_TASKS)} />);
 
     await user.click(screen.getByRole('button', { name: `Copy the orchestrator handle ${HANDLE}` }));
 
@@ -438,7 +438,7 @@ describe('the cast', () => {
   it('offers nothing to copy on the synthetic run — it has no handle, which is why it exists', () => {
     const orphans = run({ id: 'run_unattributed', handle: null, label: 'Unattributed', cast: [A1] });
 
-    render(<App event={event([orphans], [task({ id: 'task_1', runId: 'run_unattributed' })])} />);
+    render(<CannedApp event={event([orphans], [task({ id: 'task_1', runId: 'run_unattributed' })])} />);
 
     expect(screen.queryByRole('button', { name: /copy the orchestrator handle/i })).toBeNull();
     // …and its agents, who *do* have handles, are copyable as any others are.

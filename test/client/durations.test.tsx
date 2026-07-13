@@ -1,17 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../src/client/App.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import { formatDurationMs } from '../../src/client/duration.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
-import type {
-  Dispatch,
-  DurationObservation,
-  Meta,
-  Run,
-  StreamEvent,
-  Task,
-  TaskDetail,
-} from '../../src/shared/types.ts';
+import type { Dispatch, DurationObservation, Meta, Run, Task, TaskDetail } from '../../src/shared/types.ts';
 
 /**
  * Honest durations, on screen (#66). The server sends a `DurationObservation` — a clock, two
@@ -114,8 +106,14 @@ function attempt(over: Partial<Dispatch> = {}): Dispatch {
   };
 }
 
-function event(runs: Run[], tasks: Task[]): StreamEvent {
-  return { seq: 0, meta: META, snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns: [] }, messages: [] };
+function event(runs: Run[], tasks: Task[]): CannedEvent {
+  return {
+    seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
+    meta: META,
+    snapshot: { runs, tasks, gates: [], turns: [], coordinatorRuns: [] },
+    messages: [],
+  };
 }
 
 function loaderFor(detail: TaskDetail): TaskLoader {
@@ -173,7 +171,7 @@ describe('a wire this client did not expect', () => {
       complete: true,
       ms: -25 * 60 * 1000,
     };
-    render(<App event={event([run({ duration: hostile })], [])} />);
+    render(<CannedApp event={event([run({ duration: hostile })], [])} />);
 
     expect(within(railRow(RUN_ID)).queryByTestId('run-span')).toBeNull();
   });
@@ -188,7 +186,7 @@ describe('the run span on the rail', () => {
       complete: true,
       ms: 100 * 60 * 1000,
     };
-    render(<App event={event([run({ duration: span })], [])} />);
+    render(<CannedApp event={event([run({ duration: span })], [])} />);
 
     const reading = within(railRow(RUN_ID)).getByTestId('run-span');
     expect(reading).toHaveTextContent('1h 40m');
@@ -197,7 +195,7 @@ describe('the run span on the rail', () => {
   });
 
   it('shows nothing at all when the evidence supported no observation', () => {
-    render(<App event={event([run()], [])} />);
+    render(<CannedApp event={event([run()], [])} />);
 
     expect(within(railRow(RUN_ID)).queryByTestId('run-span')).toBeNull();
   });
@@ -207,7 +205,7 @@ describe('the run span on the rail', () => {
     vi.setSystemTime(new Date('2026-07-08T13:00:00.000Z'));
 
     const open: DurationObservation = { clock: 'run-span', startAt: '2026-07-08T12:00:00.000Z', complete: false };
-    render(<App event={event([run({ live: true, duration: open })], [])} />);
+    render(<CannedApp event={event([run({ live: true, duration: open })], [])} />);
 
     expect(within(railRow(RUN_ID)).getByTestId('run-span')).toHaveTextContent('1h so far');
 
@@ -223,7 +221,7 @@ describe('the run span on the rail', () => {
     vi.setSystemTime(new Date('2026-07-08T13:00:00.000Z'));
 
     const open: DurationObservation = { clock: 'run-span', startAt: '2026-07-08T12:00:00.000Z', complete: false };
-    const { rerender } = render(<App event={event([run({ live: true, duration: open })], [])} />);
+    const { rerender } = render(<CannedApp event={event([run({ live: true, duration: open })], [])} />);
 
     // The next push carries the completed observation — the interval closed at 13:10.
     const closed: DurationObservation = {
@@ -233,7 +231,7 @@ describe('the run span on the rail', () => {
       complete: true,
       ms: 70 * 60 * 1000,
     };
-    rerender(<App event={event([run({ duration: closed })], [])} />);
+    rerender(<CannedApp event={event([run({ duration: closed })], [])} />);
 
     const reading = within(railRow(RUN_ID)).getByTestId('run-span');
     expect(reading).toHaveTextContent('1h 10m');
@@ -250,7 +248,7 @@ describe('the run span on the rail', () => {
 describe('durations in the inspector', () => {
   it('shows the task’s dispatch duration as a bare number — the preferred clock needs no apology', async () => {
     render(
-      <App
+      <CannedApp
         event={event([run()], [task({ duration: DISPATCH_CLOCK, dispatch: attempt() })])}
         loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [attempt()] })}
       />
@@ -265,7 +263,7 @@ describe('durations in the inspector', () => {
 
   it('labels the task-span fallback as what it is — a broader clock is never passed off as dispatch time', async () => {
     render(
-      <App
+      <CannedApp
         event={event([run()], [task({ duration: TASK_SPAN })])}
         loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [] })}
       />
@@ -293,7 +291,7 @@ describe('durations in the inspector', () => {
     const second = attempt({ id: 'ctx_second', duration: DISPATCH_CLOCK });
 
     render(
-      <App
+      <CannedApp
         event={event([run()], [task({ dispatch: second, attemptCount: 2, duration: DISPATCH_CLOCK })])}
         loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [first, second] })}
       />
@@ -317,7 +315,7 @@ describe('durations in the inspector', () => {
     });
 
     render(
-      <App
+      <CannedApp
         event={event([run()], [task({ status: 'dispatched', completedAt: null, dispatch: running, attemptCount: 2 })])}
         loadTask={loaderFor({ id: TASK_ID, spec: null, result: null, receipt: [], completions: [], attempts: [broken, running] })}
       />

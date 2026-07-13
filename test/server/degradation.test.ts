@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrcaDatabase } from '../../src/server/database.ts';
-import type { StreamEvent, Task } from '../../src/shared/types.ts';
+import type { Task } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import type { SchemaOptions } from '../fixtures/schema.ts';
 import { tempDbPath } from '../fixtures/temp-dir.ts';
-import { type Harness, serve } from './harness.ts';
+import { type Harness, serve, type SnapshotView } from './harness.ts';
 
 /**
  * Surviving Orca (#21). You update Orca and this tool degrades instead of dying.
@@ -73,7 +73,7 @@ function orchestration(schema: SchemaOptions): FixtureBuilder {
     .message({ fromHandle: WORKER, toHandle: CODER, subject: 'still here', type: 'heartbeat', createdAt: LATER });
 }
 
-async function snapshotOf(builder: FixtureBuilder): Promise<StreamEvent> {
+async function snapshotOf(builder: FixtureBuilder): Promise<SnapshotView> {
   harness = await serve(builder.write(tempDbPath()));
   return harness.snapshot();
 }

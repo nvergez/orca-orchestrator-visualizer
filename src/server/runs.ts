@@ -10,6 +10,9 @@ import {
 } from '../shared/types.ts';
 import { castOf } from './cast.ts';
 import { runSpan } from './durations.ts';
+// The rail's order lives in `history.ts` beside the keyset cursor that pages it (#69): the two
+// must read the same total order, or a page boundary and a rail row could disagree.
+import { byMostRecentActivity } from './history.ts';
 import type { Preview } from './tasks.ts';
 import { byInstant, instantOf } from './time.ts';
 
@@ -317,9 +320,4 @@ function countEdges(tasks: Task[]): number {
     (total, task) => total + [...new Set(task.deps)].filter((dep) => inRun.has(dep)).length,
     0
   );
-}
-
-/** The rail sorts by most-recent activity, so the run worth opening is the one on top. */
-function byMostRecentActivity(a: Run, b: Run): number {
-  return byInstant(b.endedAt, a.endedAt) || byInstant(b.startedAt, a.startedAt);
 }

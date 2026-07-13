@@ -382,14 +382,13 @@ export type Turn = {
   source: string;
 
   /*
-   * Everything below is **optional on the wire, and absent when it is the default** — which is not
-   * micro-optimisation, it is the difference between a snapshot this tool can re-send every five
-   * seconds and one it cannot.
+   * Everything below is **optional on the wire, and absent when it is the default**.
    *
-   * The snapshot is pushed **whole on every tick** (SPEC §6.3), and a conversation is ~360 turns on
-   * a live database. `"options":[],"answer":null,"beatCount":0,"truncated":false,"endedAt":null` is
-   * 75 bytes of nothing, and 75 bytes of nothing on 360 turns, five seconds apart, is 27 KB of
-   * nothing. So a field that has nothing to say does not say it.
+   * A selected run's conversation is refetched whole every time a push names the run (#69) —
+   * seconds apart, on a live orchestration — and it is ~360 turns on a live database.
+   * `"options":[],"answer":null,"beatCount":0,"truncated":false,"endedAt":null` is 75 bytes of
+   * nothing, and 75 bytes of nothing on 360 turns, refetch after refetch, is 27 KB of nothing.
+   * So a field that has nothing to say does not say it.
    */
 
   /** True ⇒ `body` is the first `BODY_PREVIEW_CHARS` of a longer one. The inspector has the rest. */
@@ -418,14 +417,107 @@ export type Turn = {
  * than an orchestrator is a filter on.
  *
  * Derived rather than carried. It is always one of the two handles already on the turn, so putting
- * it on the wire would be a third copy of a uuid in an object that is re-sent every five seconds —
- * 21 KB per push, to save one line of arithmetic. It lives here, beside the type, so the client and
- * the server cannot answer it differently.
+ * it on the wire would be a third copy of a uuid in an object a live run refetches seconds apart —
+ * 21 KB per fetch, to save one line of arithmetic. It lives here, beside the type, so the client
+ * and the server cannot answer it differently.
  */
 export function agentOfTurn(turn: Turn): string | null {
   const handle = turn.direction === 'in' ? turn.fromHandle : turn.toHandle;
   return handle === null || handle === '' ? null : handle;
 }
+
+/**
+ * **The invalidation notice** (`CONTEXT.md`): what changed since this client's previous event —
+ * identity to refetch by, never the data itself (SPEC §12, ADR 0002, #69).
+ *
+ * The stream used to re-send every retained run, task and turn on every push, and the database
+ * is never pruned — so the wire and the browser paid for the whole of history on every tick.
+ * A push now *names* what moved instead: the client holds pages of the run index and one
+ * selected-run snapshot, and this is how it knows which of those to fetch again.
+ *
+ * Over-invalidation is safe (a refetch of something unchanged) and under-invalidation is the
+ * bug (a view that is silently stale forever), so every ambiguity here resolves toward naming
+ * more, never less.
+ */
+export type Affected = {
+  /**
+   * True when the whole view may be out of date: a first connect, an SSE reconnect, and the
+   * one-shot `/api/snapshot`. The server cannot know what a client it was not talking to has
+   * missed — task rows are overwritten in place and leave no cursor — so it says so, and the
+   * client refetches what it displays: its loaded index pages and its selected run. That is
+   * bounded by what is on screen, never by the size of history.
+   */
+  all: boolean;
+  /** Orchestrator runs whose retained evidence — summary, tasks, attempts, gates, turns — changed. */
+  runIds: string[];
+  /**
+   * True when evidence *nothing places* changed: a turn no run could claim (SPEC §4.4, rule 3),
+   * or a coordinator row naming a handle no orchestrator has. A selected-run snapshot carries
+   * the unplaced turns so they stay reachable, so it goes stale when they change too.
+   */
+  unplaced: boolean;
+};
+
+/**
+ * One page of the **run index** — `GET /api/runs` (SPEC §12, ADR 0002, #69).
+ *
+ * The navigation surface for retained history: the summaries the rail lists, most recently
+ * active first, fifty at a time. It is deliberately the same `Run` shape the stream used to
+ * carry — cast, waves and tallies are aggregates, not evidence — while everything that grows
+ * with a run's *size* (tasks, attempts, gates, turns, bodies) lives in the selected-run
+ * snapshot and is fetched for one run at a time.
+ */
+export type RunIndexPage = {
+  meta: Meta;
+  /** Most recently active first; deterministic id tie-break. The first page is the newest 50. */
+  runs: Run[];
+  /**
+   * The opaque cursor "Load older history" follows — the keyset position after this page's last
+   * row, stable under writes: a run that becomes active moves *ahead* of every cursor rather
+   * than duplicating into a later page. Null ⇒ history ends here; there is no silent cutoff.
+   */
+  nextCursor: string | null;
+  /** Every `coordinator_runs` row, rendered if any exist (SPEC §4.2, trap 3). Empty in practice. */
+  coordinatorRuns: CoordinatorRun[];
+};
+
+/**
+ * The **selected-run snapshot** — `GET /api/run/:id` (SPEC §12, ADR 0002, #69).
+ *
+ * The complete retained evidence for one orchestrator run, fetched as a unit: **never
+ * time-windowed, never truncated**, however old or large the run is. Scaling bounded the
+ * *index*; it is not allowed to weaken a post-mortem (the whole point of ADR 0002).
+ */
+export type RunSnapshot = {
+  meta: Meta;
+  run: Run;
+  /** Every retained task of this run — all of them, in creation order. */
+  tasks: Task[];
+  /**
+   * **Every dispatch attempt**, oldest first, by task id — not just the `MAX(rowid)` survivor a
+   * `Task` carries. `dispatch_contexts` is the only genuinely append-only per-task history in
+   * the schema, and a selected run is complete or it is not a selected run.
+   */
+  attempts: Record<string, Dispatch[]>;
+  /** Every gate this run raised, answered ones included. */
+  gates: Gate[];
+  /**
+   * The complete reconstructed conversation (SPEC §4.7) — this run's turns, **plus the turns
+   * nothing places** (`runId: null`), in one chronological order. The unplaced turns ride along
+   * because they must still appear *somewhere*, attached to nobody (SPEC §4.4, rule 3), and a
+   * transport that paged them out of existence would be guessing by omission.
+   */
+  turns: Turn[];
+  /**
+   * Tasks *outside* this run that share a dependency edge with one inside it. `tasks.deps` is a
+   * real edge that knows nothing about which terminal created which task, so an edge can cross
+   * orchestrations — and the inspector's dep chips must be able to name the far end without
+   * fetching the whole of history to find it.
+   */
+  linkedTasks: Task[];
+  /** `coordinator_runs` rows whose handle is this orchestrator's — the evidence that belongs to it. */
+  coordinatorRuns: CoordinatorRun[];
+};
 
 /**
  * What clicking a node fetches — `GET /api/task/:id`, and the only payload in this tool that
@@ -441,12 +533,13 @@ export function agentOfTurn(turn: Turn): string | null {
  *   only genuinely append-only per-task history in this schema, and the retry and
  *   circuit-breaker story is not visible anywhere else (SPEC §7.5, §7.8).
  *
- * What is *not* here is as considered: the gate Q&A, the dependencies **and now the messages** are
- * already on the wire. `snapshot.gates` carries every gate — answered ones included — with the
- * task it blocks (#19), `Task.deps` carries the edges, and `snapshot.turns` carries this task's
- * whole exchange, *both sides of it*, filtered by `taskId`. Re-sending any of them would be a
- * second copy that could disagree with the first — which is why the flat `messages` list that
- * used to live here is gone: it was the weaker half of a conversation the wire now carries whole.
+ * What is *not* here is as considered: the gate Q&A, the dependencies **and now the messages**
+ * are already in the selected-run snapshot. Its `gates` carry every gate — answered ones
+ * included — with the task it blocks (#19), `Task.deps` carries the edges, and its `turns`
+ * carry this task's whole exchange, *both sides of it*, filtered by `taskId`. Re-sending any of
+ * them would be a second copy that could disagree with the first — which is why the flat
+ * `messages` list that used to live here is gone: it was the weaker half of a conversation the
+ * wire now carries whole.
  */
 /**
  * One `worker_done` message that named this task — the second evidence source an outcome has
@@ -489,24 +582,31 @@ export type TaskDetail = {
 /**
  * One event type: first connect, normal tick and SSE reconnect all have this shape, so
  * there is no separate resync path to get wrong (SPEC §6.2).
+ *
+ * It used to carry the whole of retained history — every run, task, gate and turn, re-sent on
+ * every push — and the database is never pruned, so that payload grew without bound (§12.1).
+ * The event is now the **doorbell**: `affected` names what moved, and the data lives behind
+ * `GET /api/runs` (the paged index) and `GET /api/run/:id` (one run, complete), fetched for
+ * what is actually on screen (#69, ADR 0002).
  */
 export type StreamEvent = {
   /** The message high-water mark — also the SSE event id. */
   seq: number;
   meta: Meta;
   /**
-   * `gates` is a derived collection beside the runs and the tasks — not a field of either,
-   * because a gate belongs to a *run* and only sometimes to a task (SPEC §4.5). `turns` is the
-   * same, and for the same reason: a turn belongs to a run, and it is scoped down to an agent or
-   * a task by the panel that shows it. The client filters both; it re-derives neither.
+   * What this push means the client should fetch again (#69): run ids on a tick, `all` on a
+   * connect or reconnect.
    */
-  snapshot: { runs: Run[]; tasks: Task[]; gates: Gate[]; turns: Turn[]; coordinatorRuns: CoordinatorRun[] };
+  affected: Affected;
   /**
-   * Only messages after the client's last-seen sequence.
+   * The messages that arrived after the client's last-seen sequence — the lossless delta a
+   * reconnect replays via `Last-Event-ID`, and empty on a *first* connect, where nothing was
+   * missed and the history behind it is the endpoints' to serve.
    *
-   * The **conversation** is `snapshot.turns`, not this: a feed of messages is exactly the half of
-   * the dialogue that got written down (SPEC §4.7). What this is still for is the one thing a
-   * snapshot cannot say — *what just arrived* — which is what flashes a node (SPEC §7.6).
+   * The **conversation** is the selected-run snapshot's `turns`, not this: a feed of messages
+   * is exactly the half of the dialogue that got written down (SPEC §4.7). What this is for is
+   * the one thing a snapshot cannot say — *what just arrived* — which is what flashes a node
+   * (SPEC §7.6).
    */
   messages: FeedMessage[];
 };

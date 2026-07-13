@@ -352,7 +352,9 @@ describe('a missing column costs exactly the receipts it held, by name', () => {
       });
     harness = await serve(builder.write(tempDbPath()));
 
-    const event = await harness.snapshot();
+    // Replayed from the start of the cursor, because a *first* connect misses nothing and so
+    // carries no delta (#69) — and the claim below is about the messages still flowing.
+    const event = await harness.snapshot(0);
 
     // Named, for a human, in meta.degraded (SPEC §12.4) — receipt enhancement, not just the
     // result body the older entry already covers.

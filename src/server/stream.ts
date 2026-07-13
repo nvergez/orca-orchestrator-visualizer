@@ -1,4 +1,5 @@
-import type { Liveness, StreamEvent } from '../shared/types.ts';
+import type { Affected, Liveness, StreamEvent } from '../shared/types.ts';
+import { UNPLACED_KEY } from './digests.ts';
 
 /**
  * The poll loop, and the browsers listening to it (SPEC §6.1–6.2).
@@ -26,15 +27,23 @@ import type { Liveness, StreamEvent } from '../shared/types.ts';
  * behind is fine; one that spins the fan is not.
  *
  * Every push — first connect, tick, reconnect — is one `StreamEvent` built by one call to
- * `snapshot(cursor)`. There is no resync mode, because there is nothing for a resync mode
- * to do differently.
+ * `push(cursor)`. There is no resync mode, because there is nothing for a resync mode to do
+ * differently. What a push *carries* changed with #69: it names what moved (`affected`) and
+ * hands over the lossless message delta, and the history itself lives behind `GET /api/runs`
+ * and `GET /api/run/:id` — the wire no longer re-ships every retained run on every change.
  */
 
 /** All the loop needs from a database — which is what lets a test hand it a counting stub. */
 export type StreamSource = {
   dataVersion(): number;
   liveness(): Liveness;
-  snapshot(since?: number): StreamEvent;
+  /**
+   * One event, plus one fingerprint per run (`digests.ts`). The event arrives claiming
+   * `affected.all` — the right claim for a connect — and the loop is what narrows it on a
+   * tick, by diffing the digests against what each subscriber last saw. Null — a first
+   * connect — means no message delta: a client that has seen nothing has missed nothing.
+   */
+  push(since: number | null): { event: StreamEvent; digests: Map<string, string> };
 };
 
 /** One connected browser, as this module sees it: something to push to, and to close. */
@@ -51,6 +60,13 @@ type Subscriber = {
   version: number;
   /** The liveness it was built from. Orca quitting changes this and *nothing else*. */
   liveness: Liveness;
+  /**
+   * One fingerprint per run, from the last event this client was actually sent. A tick diffs
+   * the fresh map against it to *name* what changed (`StreamEvent.affected`, #69) — per
+   * subscriber, because two clients that connected at different moments have seen different
+   * states, and an `affected` computed for one would silently under-invalidate the other.
+   */
+  digests: ReadonlyMap<string, string>;
 };
 
 export class EventStream {
@@ -67,13 +83,13 @@ export class EventStream {
   }
 
   /**
-   * Attach a browser and push it its first event immediately: one full snapshot plus every
-   * message after `since`.
+   * Attach a browser and push it its first event immediately.
    *
-   * On a fresh connect `since` is 0 and that is the whole feed. On a reconnect it is the
-   * `Last-Event-ID` the browser replayed, and the event carries exactly what was missed. It
-   * is the same call either way — *the same call a tick makes* — which is why there is no
-   * resync path here to get wrong.
+   * On a fresh connect `since` is null and the event carries no message delta — a client that
+   * has seen nothing has missed nothing, and history is the paged endpoints' to serve (#69).
+   * On a reconnect it is the `Last-Event-ID` the browser replayed, and the event carries
+   * exactly what was missed. It is the same call either way — *the same call a tick makes* —
+   * which is why there is no resync path here to get wrong.
    *
    * `since` is already a cursor: the HTTP edge (`server.ts`) is what turns an untrusted
    * `Last-Event-ID` header into one, and it is the only place that gets to decide what a
@@ -84,11 +100,18 @@ export class EventStream {
    * *send* can throw too — a browser that hung up while we were reading — and that unregisters
    * again rather than leaving the loop polling SQLite on behalf of a socket that is gone.
    */
-  subscribe(client: StreamClient, since = 0): () => void {
+  subscribe(client: StreamClient, since: number | null = null): () => void {
     const version = this.source.dataVersion();
-    const event = this.source.snapshot(since);
+    const { event, digests } = this.source.push(since);
 
-    const subscriber: Subscriber = { client, cursor: since, version, liveness: event.meta.liveness };
+    // The first event says `affected.all` — built that way by the source — because a connect
+    // and a reconnect are the two moments the server cannot know what this client missed:
+    // task rows are overwritten in place and leave no cursor behind (#69).
+    //
+    // A fresh connect (`since` null) starts its cursor at 0 — `deliver` advances it to the
+    // event's own id before anything else can happen, and 0 filters nothing out of an event
+    // that carries nothing.
+    const subscriber: Subscriber = { client, cursor: since ?? 0, version, liveness: event.meta.liveness, digests };
     this.subscribers.add(subscriber);
     this.start();
 
@@ -112,6 +135,7 @@ export class EventStream {
 
     let version: number;
     let event: StreamEvent;
+    let digests: Map<string, string>;
     let stale: Subscriber[];
 
     // Only the *reads* are guarded. The file can be deleted, or checkpointed out from under
@@ -138,7 +162,7 @@ export class EventStream {
 
       // Read the graph once, from the oldest cursor among the clients that need it, and give
       // each client the slice it has not seen. Two tabs are not two round trips to SQLite.
-      event = this.source.snapshot(Math.min(...stale.map((subscriber) => subscriber.cursor)));
+      ({ event, digests } = this.source.push(Math.min(...stale.map((subscriber) => subscriber.cursor))));
     } catch (error) {
       this.reportFailure(error);
       return;
@@ -153,11 +177,19 @@ export class EventStream {
       // this one client's stream that ends, and neither the other subscribers' push nor the
       // poll loop itself is allowed to fail with it.
       try {
-        this.deliver(subscriber, event);
+        // A tick knows exactly what this client last saw, so — unlike a connect — it gets to
+        // *name* the runs that moved instead of claiming everything did (#69).
+        this.deliver(subscriber, { ...event, affected: affectedSince(subscriber.digests, digests) });
       } catch {
         this.drop(subscriber);
         continue;
       }
+
+      // Recorded only after the send landed, for the same reason as `version` below: digests
+      // recorded for an event a broken socket swallowed would under-invalidate the reconnect…
+      // except that a reconnect is a *new* subscriber and starts from `all` anyway. It is kept
+      // in step with the cursor because two views of "what this client saw" must not disagree.
+      subscriber.digests = digests;
 
       // The version we *read before the snapshot*, never one read after it: a write landing
       // mid-read then leaves us holding the older version, so the next tick sees a change and
@@ -220,4 +252,26 @@ export class EventStream {
     clearInterval(this.timer);
     this.timer = null;
   }
+}
+
+/**
+ * What moved between two fingerprint maps — the runs whose evidence changed, appeared or
+ * vanished, and whether the evidence nothing places did (#69). This is the whole of how a tick
+ * turns "the database changed" into "here is what to fetch again", and it errs on the side of
+ * naming a run twice rather than never: over-invalidation costs a refetch, under-invalidation
+ * costs a view that is silently stale until some unrelated write happens to move it.
+ */
+function affectedSince(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): Affected {
+  const runIds: string[] = [];
+
+  for (const [key, digest] of after) {
+    if (key !== UNPLACED_KEY && before.get(key) !== digest) runIds.push(key);
+  }
+  for (const key of before.keys()) {
+    // A run that vanished — an `orchestration reset` took its tasks. It is named so the client
+    // refetches the index and stops listing it, rather than holding a row for a ghost.
+    if (key !== UNPLACED_KEY && !after.has(key)) runIds.push(key);
+  }
+
+  return { all: false, runIds, unplaced: before.get(UNPLACED_KEY) !== after.get(UNPLACED_KEY) };
 }

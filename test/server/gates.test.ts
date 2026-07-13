@@ -295,11 +295,16 @@ describe('the decision_gates table, merged in additively', () => {
     // A table row carries no handles and no window: without its task, nothing in the schema
     // says which orchestration it belonged to (SPEC §4.4, rule 3).
     const builder = orchestration();
+    asks(builder, { id: 'msg_real_gate', taskId: 'task_a' });
     builder.gate({ taskId: 'task_wiped_by_a_reset', question: 'Orphaned', createdAt: at(5) });
 
     const gates = await gatesOf(builder);
 
-    expect(gates[0]).toMatchObject({ taskId: null, runId: null });
+    // The wire is run-scoped now (#69): a gate placeable in *no* run appears in nobody's
+    // evidence — which is "never guessed into one", observed from the outside. The real gate
+    // beside it proves the fixture's gates do reach the wire when they have a run to belong to.
+    expect(gates.some((gate) => gate.messageId === 'msg_real_gate')).toBe(true);
+    expect(gates.find((gate) => gate.question === 'Orphaned')).toBeUndefined();
   });
 });
 
