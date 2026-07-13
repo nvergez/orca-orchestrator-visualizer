@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
 import { type EnrichmentOptions, OrcaEnrichment, withEnrichment } from './enrichment.ts';
+import { CursorError } from './history.ts';
+import { parseReportQuery, ReportQueryError } from './report.ts';
 import { EventStream, type StreamClient, type StreamSource } from './stream.ts';
 import { type WakeDeps, type WakeWatcher, watchForWakeHints } from './wake.ts';
 
@@ -24,6 +26,9 @@ const CONTENT_TYPES: Record<string, string> = {
 
 /** `GET /api/task/:id` — everything after this prefix is the id (#20). */
 const TASK_ROUTE = '/api/task/';
+
+/** `GET /api/run/:id` — the selected-run snapshot (#69). Everything after the prefix is the id. */
+const RUN_ROUTE = '/api/run/';
 
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
@@ -113,7 +118,8 @@ export function createServer({
     watch === undefined ? null : watchForWakeHints(database.path, () => stream.tick(), watch);
 
   const server = createHttpServer((req, res) => {
-    const urlPath = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`).pathname;
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`);
+    const urlPath = url.pathname;
 
     if (urlPath === '/api/stream') {
       openStream(stream, req, res);
@@ -121,12 +127,39 @@ export function createServer({
     }
 
     if (urlPath === '/api/snapshot') {
-      sendSnapshot(source, res);
+      // The *wrapped* source, never the bare database: while the opt-in is on, both
+      // event-shaped routes must serve the same enrichment, or two views of it would disagree.
+      sendSnapshot(source, url.searchParams.get('since'), res);
+      return;
+    }
+
+    if (urlPath === '/api/runs') {
+      sendRunIndex(database, url.searchParams.get('cursor'), res);
+      return;
+    }
+
+    if (urlPath === '/api/report') {
+      sendReport(database, url.searchParams, res);
+      return;
+    }
+
+    if (urlPath.startsWith(RUN_ROUTE)) {
+      sendById(
+        urlPath.slice(RUN_ROUTE.length),
+        (id) => database.runSnapshot(id),
+        (id) => `No run ${id} in this database.`,
+        res
+      );
       return;
     }
 
     if (urlPath.startsWith(TASK_ROUTE)) {
-      sendTaskDetail(database, urlPath.slice(TASK_ROUTE.length), res);
+      sendById(
+        urlPath.slice(TASK_ROUTE.length),
+        (id) => database.taskDetail(id),
+        (id) => `No task ${id} in this database.`,
+        res
+      );
       return;
     }
 
@@ -203,66 +236,129 @@ function openStream(stream: EventStream, req: IncomingMessage, res: ServerRespon
 }
 
 /**
- * The cursor a reconnecting `EventSource` replays. Absent (a first connect) or nonsense (a
- * hand-rolled client) mean the same thing: start from the top — which is a whole feed, and
- * never an error.
+ * The cursor a reconnecting `EventSource` replays — or null when there is none to honor.
+ *
+ * Absent means a first connect: the client has seen nothing, has therefore missed nothing,
+ * and gets no backfill — history is `GET /api/runs` and `GET /api/run/:id`'s to serve (#69).
+ * Present — **zero included**, because a browser that last saw event id 0 will replay exactly
+ * that — means "everything after this", losslessly. Nonsense from a hand-rolled client is
+ * treated as absent: there is no cursor in it to be lossless *from*.
  */
-function lastEventId(req: IncomingMessage): number {
+function lastEventId(req: IncomingMessage): number | null {
   const header = req.headers['last-event-id'];
   const value = Number(Array.isArray(header) ? header[0] : header);
-  return Number.isInteger(value) && value > 0 ? value : 0;
+  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 /**
- * A snapshot can throw — the database can be deleted, or Orca can checkpoint it out from
- * under a read. A 500 with the reason keeps the process up and tells the user which of
- * those it was; a thrown exception here would take the whole tool down mid-poll.
+ * A read can throw — the database can be deleted, or Orca can checkpoint it out from under
+ * us. A 500 with the reason keeps the process up and tells the user which of those it was; a
+ * thrown exception here would take the whole tool down mid-poll.
+ *
+ * `?since=<seq>` is the reconnect view, `curl`-able: the same lossless message delta a
+ * replayed `Last-Event-ID` gets. Explicit and unusable is a 400, never a silent default —
+ * the flag-that-does-not-work rule (SPEC §3) again.
  */
-function sendSnapshot(source: StreamSource, res: ServerResponse): void {
-  try {
-    const body = JSON.stringify(source.snapshot());
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(body);
-  } catch (error) {
-    sendError(res, error);
+function sendSnapshot(source: StreamSource, since: string | null, res: ServerResponse): void {
+  const cursor = since === null ? null : Number(since);
+  if (cursor !== null && (!Number.isInteger(cursor) || cursor < 0)) {
+    sendJson(res, 400, {
+      error: `Not a message cursor: ${JSON.stringify(since)}. since must be a non-negative integer.`,
+    });
+    return;
   }
+
+  read(res, () => sendJson(res, 200, source.push(cursor).event));
 }
 
 /**
- * `GET /api/task/:id` (#20) — the one route that is not a `StreamEvent`, because it is the one
- * route that reads the bodies.
+ * `GET /api/runs` (#69) — one page of the run index: the 50 most recently active summaries, or
+ * the page after `?cursor=`.
  *
- * Three answers, and each of them is a different thing to have happened:
- *
- * - **200** — the task, its spec and result, **every** dispatch attempt in `rowid` order, and
- *   the messages that referenced it (SPEC §7.8).
- * - **404** — no such task. Ids are pasted by hand and an `orchestration reset` deletes tasks
- *   that the rest of the file still names, so this is a case rather than a bug — and an empty
- *   200 would dress an id that means nothing up as a task with nothing to say.
- * - **500** — the read itself failed, exactly as a snapshot's would.
+ * A cursor this server never minted is a **400**, its own case: the flag-that-does-not-work
+ * rule (SPEC §3) in miniature — silently answering a nonsense cursor with the first page would
+ * show the user a different slice of history than the one they asked for.
  */
-function sendTaskDetail(database: OrcaDatabase, rawId: string, res: ServerResponse): void {
+function sendRunIndex(database: OrcaDatabase, cursor: string | null, res: ServerResponse): void {
+  read(res, () => sendJson(res, 200, database.runIndex(cursor)), (error) =>
+    error instanceof CursorError ? { status: 400, body: { error: error.message } } : null
+  );
+}
+
+/**
+ * `GET /api/report` (#70) — one page of the cross-history dispatch report: one row per retained
+ * task, sorted, filtered and paged on the server.
+ *
+ * Every refusal it can make is a **400**, and they are all the same refusal: a query this build
+ * cannot honour is not quietly replaced with one it can. A sort key it does not know, a range
+ * endpoint that is not an instant, a cursor cut under a different sort — answering any of them
+ * with the default first page would show the reader a slice of history they did not ask for, and
+ * nothing on screen would say so (SPEC §3, the flag-that-does-not-work rule).
+ */
+function sendReport(database: OrcaDatabase, params: URLSearchParams, res: ServerResponse): void {
+  read(
+    res,
+    () => sendJson(res, 200, database.report(parseReportQuery(params))),
+    (error) => (error instanceof ReportQueryError ? { status: 400, body: { error: error.message } } : null)
+  );
+}
+
+/**
+ * **The two routes that fetch one thing by an id somebody typed** — `GET /api/run/:id`, the
+ * selected-run snapshot (#69, never windowed, never truncated — ADR 0002), and `GET
+ * /api/task/:id`, the two bodies and every dispatch attempt (#20).
+ *
+ * They are one function because they are one shape, and the shape is three answers, each of
+ * them a different thing to have happened:
+ *
+ * - **200** — the whole of it.
+ * - **404** — nothing has this id. Ids are pasted by hand and an `orchestration reset` deletes
+ *   rows the rest of the file still names, so this is a *case* rather than a bug — and an empty
+ *   200 would dress an id that means nothing up as a thing with nothing to say.
+ * - **500** — the read itself failed.
+ */
+function sendById<T>(
+  rawId: string,
+  fetch: (id: string) => T | null,
+  missing: (id: string) => string,
+  res: ServerResponse
+): void {
   let id: string;
   try {
     id = decodeURIComponent(rawId);
   } catch {
-    id = rawId; // A malformed escape is not a task id either — it falls through to the 404.
+    id = rawId; // A malformed escape is not an id either — it falls through to the 404.
   }
 
+  read(res, () => {
+    const found = id === '' ? null : fetch(id);
+    if (found === null) sendJson(res, 404, { error: missing(id) });
+    else sendJson(res, 200, found);
+  });
+}
+
+/**
+ * Run a read, and turn whatever it throws into an HTTP answer instead of a dead process.
+ * `recognize` is how a route claims a failure of its own — a bad cursor is the client's
+ * mistake (400), not the database's (500).
+ */
+function read(
+  res: ServerResponse,
+  respond: () => void,
+  recognize: (error: unknown) => { status: number; body: unknown } | null = () => null
+): void {
   try {
-    const detail = id === '' ? null : database.taskDetail(id);
-
-    if (detail === null) {
-      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: `No task ${id} in this database.` }));
-      return;
-    }
-
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(detail));
+    respond();
   } catch (error) {
-    sendError(res, error);
+    const known = recognize(error);
+    if (known !== null) sendJson(res, known.status, known.body);
+    else sendError(res, error);
   }
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
 }
 
 function sendError(res: ServerResponse, error: unknown): void {
@@ -274,6 +370,5 @@ function sendError(res: ServerResponse, error: unknown): void {
     return;
   }
 
-  res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ error: (error as Error).message }));
+  sendJson(res, 500, { error: (error as Error).message });
 }

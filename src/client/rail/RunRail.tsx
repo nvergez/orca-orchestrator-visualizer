@@ -10,6 +10,7 @@ import { runHealth, type RunHealth } from '../../shared/run-health.ts';
 import type { CoordinatorRun, Enrichment, Run, Task } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
+import { Duration } from '../duration.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
@@ -72,6 +73,18 @@ export type RailFold = {
   onToggle: () => void;
 };
 
+/**
+ * The explicit way down into older history (#69). The index arrives a page at a time — the 50
+ * most recently active orchestrators first — and this is the reader following the cursor, out
+ * loud. There is no silent date cutoff to fall off: history ends where the button stops
+ * rendering, which is where the server said it ends.
+ */
+export type RailPaging = {
+  /** True while older pages exist beyond what is loaded. */
+  hasOlder: boolean;
+  loadOlder: () => void;
+};
+
 export type RunRailProps = {
   runs: Run[];
   tasks: Task[];
@@ -85,6 +98,8 @@ export type RunRailProps = {
   newRunId: string | null;
   /** Live Orca context (#61), when the opt-in is on. The cast is the one surface that wears it. */
   enrichment?: Enrichment;
+  /** "Load older history" — absent when the caller has no pages to offer (canned shells). */
+  older?: RailPaging;
   /** Present only on mobile, where the rail is a foldable band. Desktop passes nothing. */
   fold?: RailFold;
 };
@@ -99,6 +114,7 @@ export function RunRail({
   onSelectAgent,
   newRunId,
   enrichment,
+  older,
   fold,
 }: RunRailProps) {
   // Which row the pointer is on. The *only* reason this is state: the sliding highlight is one
@@ -301,6 +317,17 @@ export function RunRail({
             </ul>
           )}
 
+          {older?.hasOlder && (
+            <button
+              type="button"
+              data-testid="load-older"
+              onClick={older.loadOlder}
+              className={cn(CHIP_CLASS, 'mx-3 my-2 cursor-pointer max-lg:py-1.5')}
+            >
+              Load older history
+            </button>
+          )}
+
           <CoordinatorRuns runs={coordinatorRuns} />
         </ScrollArea>
       </div>
@@ -398,6 +425,15 @@ function RunRow({
 
       <span className="text-muted-foreground relative mt-0.5 flex flex-wrap gap-x-1.5 pl-4 text-[11px]">
         <span>{formatRunDate(run.startedAt)}</span>
+        {/* How long the run occupied the clock — the run span (#66), open and ageing while the
+            run is live. Absent when the retained evidence supported no observation: this row
+            shows no number rather than an invented one. */}
+        {run.duration && (
+          <>
+            <Dot />
+            <Duration observation={run.duration} testId="run-span" className="tabular-nums" />
+          </>
+        )}
         <Dot />
         {/* The number this whole screen is now about: how many agents this orchestrator spawned. */}
         <span data-testid="agent-count">

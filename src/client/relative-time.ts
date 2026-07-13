@@ -130,5 +130,19 @@ export function ageOf(at: string, now: number): Age {
 
   if (Number.isNaN(instant)) return { label: at, title: at, readable: false };
 
-  return { label: `${relativeTime(now - instant)} ago`, title: new Date(instant).toLocaleString(), readable: true };
+  return { label: `${relativeTime(now - instant)} ago`, title: localInstant(at), readable: true };
+}
+
+/**
+ * **An instant, in the reader's own timezone** — and the one rendering of one, for the whole
+ * client: the age tooltip above, the duration tooltip (`duration.tsx`), the top bar's last-write
+ * and the report's dispatch column all say a date the same way, or the tool says it four ways.
+ *
+ * An unparseable string comes back **verbatim**, for the reason `ageOf` refuses "NaN ago": a
+ * timestamp this tool could not normalize reaches the client as it was written (`server/time.ts`,
+ * SPEC §5), and showing it as it was written is the only honest thing left to do with it.
+ */
+export function localInstant(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? iso : new Date(at).toLocaleString();
 }

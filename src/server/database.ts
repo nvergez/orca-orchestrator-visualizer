@@ -1,17 +1,34 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Liveness, Run, StreamEvent, Task, TaskDetail } from '../shared/types.ts';
+import { mergeReceipts, receiptOfWorkerDone } from '../shared/receipt.ts';
+import type {
+  FeedMessage,
+  Liveness,
+  Meta,
+  ReceiptFact,
+  ReportPage,
+  Run,
+  RunIndexPage,
+  RunSnapshot,
+  StreamEvent,
+  Task,
+  TaskDetail,
+} from '../shared/types.ts';
 import { type Attribution, buildAttribution } from './attribution.ts';
 import { conversationOf } from './conversation.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
 import { databaseMtime } from './db-files.ts';
+import { digestRuns } from './digests.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
-import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { detectHistoryLoss } from './history-loss.ts';
+import { pageRuns, type RunEvidence, snapshotRun } from './history.ts';
+import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
+import { buildReport, type ReportQuery } from './report.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
 import { inspectSchema, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
+import type { PushResult } from './stream.ts';
 import { readTaskDetail } from './task-detail.ts';
 import { readTasks } from './tasks.ts';
 
@@ -75,19 +92,97 @@ export class OrcaDatabase {
   /**
    * The `StreamEvent` behind `GET /api/snapshot` and every SSE push — first connect, normal
    * tick and reconnect alike. One event type, one code path, no resync mode (SPEC §6.2).
-   *
-   * The order here is the one thing worth reading twice: **liveness is decided before the
-   * runs are**. A run is live only if Orca itself is (SPEC §7.3) — the task rows still read
-   * `dispatched` for an orchestration that was killed mid-flight, and nothing will ever
-   * rewrite them, so a green dot derived from the rows alone would be this tool's worst lie.
-   *
-   * `since` is the client's last-seen `messages.sequence`. The graph comes whole every time
-   * (it is overwritten in place, so a delta would have to be reconstructed and could drift);
-   * the messages come as the delta after that cursor, because they are append-only and a
-   * delta is therefore both cheap and *correct* (SPEC §6.3). 0 — a first connect, or a
-   * `curl` of `/api/snapshot` — means the whole feed.
    */
-  snapshot(since = 0): StreamEvent {
+  snapshot(since: number | null = null): StreamEvent {
+    return this.push(since).event;
+  }
+
+  /**
+   * One event, plus one fingerprint per run over the evidence its selected-run snapshot serves
+   * (`digests.ts`). The stream diffs two of those maps to fill `affected` on a tick — which is
+   * how a push *names* the runs a change touched instead of carrying the whole of history (#69).
+   *
+   * The event's own `affected` says `all`: this method backs the first connect, the reconnect
+   * and `/api/snapshot`, and for all three the honest claim is "your whole view may be stale".
+   * Only the poll loop knows a client's previous view, so only it narrows the claim (`stream.ts`).
+   *
+   * `since` is the client's last-seen `messages.sequence`, and the messages are the lossless
+   * delta after it — append-only rows, so a delta is both cheap and *correct* (SPEC §6.3).
+   * **Null — a first connect — means no delta at all**: a client that has seen nothing has
+   * missed nothing, and the history behind the cursor is the paged endpoints' to serve, not
+   * this event's to backfill. (A replayed `Last-Event-ID: 0` still means "everything after 0":
+   * losslessness is owed to a cursor, however small.)
+   */
+  push(since: number | null = null): PushResult {
+    const { liveness, evidence, messages, seq } = this.readEvidence();
+
+    const event: StreamEvent = {
+      seq,
+      meta: this.metaOf(liveness),
+      affected: { all: true, runIds: [], unplaced: false },
+      // What the delta is still *for* is the one thing a snapshot cannot say — what just
+      // arrived — which is what flashes a node (SPEC §7.6).
+      messages: since === null ? [] : messages.filter((message) => message.sequence > since),
+    };
+
+    return { event, digests: digestRuns(evidence), handles: handlesOf(evidence.runs) };
+  }
+
+  /**
+   * One page of the **run index** — `GET /api/runs` (#69). The 50 most recently active
+   * summaries, or the page an opaque cursor asks for; `CursorError` (a 400, not a 500) when the
+   * cursor is not one this server minted.
+   */
+  runIndex(cursor: string | null): RunIndexPage {
+    const { liveness, evidence } = this.readEvidence();
+    const page = pageRuns(evidence.runs, cursor);
+
+    return {
+      meta: this.metaOf(liveness),
+      runs: page.runs,
+      nextCursor: page.nextCursor,
+      coordinatorRuns: evidence.coordinatorRuns,
+    };
+  }
+
+  /**
+   * The **selected-run snapshot** — `GET /api/run/:id` (#69): one run's complete retained
+   * evidence, never windowed, never truncated (ADR 0002). Null when no run has this id — a
+   * 404, because an id that names nothing is not a run with nothing to say.
+   */
+  runSnapshot(id: string): RunSnapshot | null {
+    const { liveness, evidence } = this.readEvidence();
+    const snapshot = snapshotRun(evidence, id);
+
+    return snapshot === null ? null : { meta: this.metaOf(liveness), ...snapshot };
+  }
+
+  /**
+   * One page of the **cross-history dispatch report** — `GET /api/report` (#70): one row per
+   * retained task across every run, sorted, filtered and paged here rather than in a browser
+   * that would have to hold the whole of history to do it.
+   *
+   * It is a fourth projection of the same evidence pass, and it reads nothing the other three do
+   * not: no second task-detail truth, and — deliberately — no graph (SPEC §12.6).
+   */
+  report(query: ReportQuery): ReportPage {
+    const { liveness, evidence } = this.readEvidence();
+
+    return { meta: this.metaOf(liveness), ...buildReport(evidence, query) };
+  }
+
+  /**
+   * Everything one read of the database derives, exactly once — the projections above (the
+   * stream event, the run index, the selected-run snapshot, the report, the digests) all draw
+   * from this one pass, which is what keeps them incapable of disagreeing about what a run holds.
+   */
+  private readEvidence(): {
+    liveness: LivenessReport;
+    evidence: RunEvidence;
+    messages: FeedMessage[];
+    /** The cursor these very rows carry — read off them, never asked of the database again (#49). */
+    seq: number;
+  } {
     const { liveness, entries, runs, tasks, attribution } = this.derive();
 
     // The gates, from the `decision_gate` *messages* that raise them, enriched by the
@@ -97,9 +192,9 @@ export class OrcaDatabase {
     // tasks' current state and hung back on the runs they block (`hasBlockingGates`) and the
     // nodes they mark.
     //
-    // They are read *here* rather than in `derive()` because they are the snapshot's alone: a
-    // task detail already has its gates (they were in the snapshot the client is holding), and
-    // making a node click scan `messages` twice over for them would be work done to be discarded.
+    // `attachGates` is what derives that blocking effect, so it is `gated.gates` — never the raw
+    // `readGates` list — that every projection below serves. A gate on the wire without its
+    // present blocking fact is exactly the stale-probe lie #45 was filed about.
     const gated = attachGates(runs, tasks, readGates(this.db, this.schema.columns, attribution));
 
     // **Every** message, once — and then used twice, which is the only way to read them once.
@@ -108,27 +203,32 @@ export class OrcaDatabase {
     // client's cursor wants only what it has not seen. Reading the table twice would answer both
     // and disagree with itself the moment Orca wrote a row between the two reads.
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
-    // The cursor belongs to exactly these rows. A commit after this read stays above `seq`, so a
-    // subscriber cannot skip the new row behind an event id that did not carry it (#49).
+    // The cursor belongs to exactly these rows, and is read *off* them rather than asked of the
+    // database a second time (#49). A `MAX(sequence)` query here would race the read above: a
+    // commit landing between the two would advertise a cursor covering a row this event does not
+    // carry, and the subscriber would resume past it and never see it. Deriving it from the rows
+    // in hand makes that unrepresentable — a later commit simply stays above `seq`.
+    //
+    // It degrades to 0 exactly when the feed does. `readMessages` is guarded on
+    // `messages.sequence` (#21) and returns nothing without it, so an Orca whose message table
+    // this build cannot read yields cursor 0, event id 0, and every `Last-Event-ID` replay
+    // resuming from 0 — a feed that cannot be read is an empty feed, not a broken stream. The
+    // graph ticks on regardless (`dataVersion` needs no column), and `meta.degraded` names what
+    // went missing.
     const seq = messages.at(-1)?.sequence ?? 0;
     this.afterMessagesRead();
 
+    /** Memoized behind the getter below: merged at most once per read, and only if asked for. */
+    let receipts: Map<string, ReceiptFact[]> | undefined;
+
     return {
-      seq,
-      meta: {
-        dbPath: this.path,
-        schemaVersion: this.schema.version,
-        schemaSupport: this.schema.support,
-        degraded: this.schema.degraded,
-        // Re-derived on every call, never cached: the whole point is that it changes
-        // under us when the user quits Orca (SPEC §6.1).
-        ...liveness,
-        dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
-        historyLoss: detectHistoryLoss(this.db, this.schema.columns),
-      },
-      snapshot: {
+      liveness,
+      evidence: {
         runs: gated.runs,
         tasks: gated.tasks,
+        // Oldest attempt first, as `tasks.ts` reads them — the selected-run snapshot's
+        // append-only retry record (SPEC §12), and the same rows the cast was built from.
+        attemptsByTask: new Map(entries.map((entry) => [entry.task.id, entry.attempts])),
         gates: gated.gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
@@ -137,11 +237,35 @@ export class OrcaDatabase {
         turns: conversationOf({ entries, runs: gated.runs, gates: gated.gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
+        // The recognized outcome facts of both evidence columns, per task (#67) — what the
+        // report's compact summary is a cap of, and the inspector's receipt is the whole of.
+        //
+        // **Merged on first read, and only the report ever reads it** (#70). Every other
+        // projection of this evidence — the stream event, the run index, the selected-run
+        // snapshot, the digests — runs on the poll loop, five seconds apart, for ever; a machine-
+        // wide receipt merge they would all pay for and none of them would look at is exactly the
+        // per-tick cost §12.1 says these features must not add.
+        get receiptsByTask() {
+          return (receipts ??= receiptsOf(entries, messages));
+        },
       },
-      // The delta the client's cursor asked for. What it is still *for*, now that the conversation
-      // is not built out of it, is the one thing a snapshot cannot say — what just arrived — which
-      // is what flashes a node (SPEC §7.6).
-      messages: messages.filter((message) => message.sequence > since),
+      messages,
+      seq,
+    };
+  }
+
+  /** The header every payload carries. Re-derived on every call, never cached (SPEC §6.1). */
+  private metaOf(liveness: LivenessReport): Meta {
+    return {
+      dbPath: this.path,
+      schemaVersion: this.schema.version,
+      schemaSupport: this.schema.support,
+      degraded: this.schema.degraded,
+      // Re-derived on every call, never cached: the whole point is that it changes under us
+      // when the user quits Orca (SPEC §6.1).
+      ...liveness,
+      dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
+      historyLoss: detectHistoryLoss(this.db, this.schema.columns),
     };
   }
 
@@ -242,6 +366,62 @@ export class OrcaDatabase {
   close(): void {
     this.db.close();
   }
+}
+
+/**
+ * The whole outcome receipt of every task that has one (#67) — merged **once**, for the report
+ * that asks it of every task at once (#70).
+ *
+ * It is the inspector's reading, exactly (`task-detail.ts`): `tasks.result` merged with every
+ * `worker_done` payload that named the task, agreement deduplicating into one fact with two
+ * provenances and conflict staying two facts. The two have to *be* one reading — a row that
+ * summarized an outcome the panel behind it does not show would be the report inventing a second
+ * truth about a task, which is the one thing #70 is not allowed to do.
+ *
+ * Everything it reads is already in hand: the result column was recognized as the tasks were read
+ * (`tasks.ts`), and the payloads were parsed as the messages were (`readMessages`). So it is a
+ * pass over rows, never a second query — and never the per-task scan of the log that a merge done
+ * inside the row loop would be (O(tasks × messages)).
+ */
+function receiptsOf(entries: TaskWithHandle[], messages: FeedMessage[]): Map<string, ReceiptFact[]> {
+  const completions = new Map<string, unknown[]>();
+
+  for (const message of messages) {
+    // `taskId` is the attribution the rest of the server already made (SPEC §4.4): a payload that
+    // names no task that still exists names no task, and is not guessed into one here.
+    if (message.type !== 'worker_done' || message.taskId === null) continue;
+    const held = completions.get(message.taskId);
+    if (held) held.push(message.payload);
+    else completions.set(message.taskId, [message.payload]);
+  }
+
+  const receipts = new Map<string, ReceiptFact[]>();
+
+  for (const entry of entries) {
+    const done = completions.get(entry.task.id) ?? [];
+    const facts = mergeReceipts(entry.resultReceipt, ...done.map((payload) => receiptOfWorkerDone(payload)));
+    if (facts.length > 0) receipts.set(entry.task.id, facts);
+  }
+
+  return receipts;
+}
+
+/**
+ * Every terminal the retained runs name: each orchestrator, and every agent it ever dispatched.
+ *
+ * The enrichment decorator's exact join key (#61, `enrichment.ts`) — built here, off the runs
+ * this read already derived, because the runs themselves stopped travelling on the event when
+ * #69 took the full history off the wire.
+ */
+function handlesOf(runs: Run[]): string[] {
+  const handles: string[] = [];
+
+  for (const run of runs) {
+    if (run.handle !== null) handles.push(run.handle);
+    for (const member of run.cast) handles.push(member.handle);
+  }
+
+  return handles;
 }
 
 /**

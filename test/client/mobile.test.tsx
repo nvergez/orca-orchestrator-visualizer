@@ -1,15 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../src/client/App.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import { COPY_ON_HOVER } from '../../src/client/copy.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import { DOCK_CLASS } from '../../src/client/surface.ts';
-import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../../src/shared/types.ts';
+import type { CastMember, Gate, Meta, Run, Task, Turn } from '../../src/shared/types.ts';
 import { FakeMatchMedia, MOBILE_QUERY } from './fake-match-media.ts';
 
 /**
- * **The folded shell** (`docs/design/mobile.md`) — the same `<App>`, the same three panels, below
+ * **The folded shell** (`docs/design/mobile.md`) — the same `<CannedApp>`, the same three panels, below
  * Tailwind's `lg`: the rail a collapsible band on top, the canvas keeping the middle, the dock a
  * collapsible band at the bottom (SPEC §7.1 re-expressed as a column). Nothing is a new screen
  * and no panel mounts differently — which is exactly what this suite has to prove, because it is
@@ -42,7 +42,7 @@ const META: Meta = {
 };
 
 /** Selecting a task swaps the dock to the inspector, and the inspector fetches. */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], receipt: [], completions: [] });
 
 const HANDLE = 'term_9f8e7d6c-1234-4321-8888-aabbccddeeff';
 const OTHER_HANDLE = 'term_c0ffee00-1234-4321-8888-aabbccddeeff';
@@ -146,9 +146,10 @@ function gate(over: Partial<Gate> = {}): Gate {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: {
       runs: [run(), otherRun()],
@@ -163,7 +164,7 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
 }
 
 /** The default event with a conversation in it, and nothing else changed. */
-function withTurns(rows: Turn[]): StreamEvent {
+function withTurns(rows: Turn[]): CannedEvent {
   const base = event();
   return { ...base, snapshot: { ...base.snapshot, turns: rows } };
 }
@@ -224,7 +225,7 @@ afterEach(() => {
  */
 describe('the desktop guard', () => {
   it('renders no fold chrome at all where matchMedia is absent', async () => {
-    render(<App event={withTurns([turn()])} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={withTurns([turn()])} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     expect(screen.queryByTestId('rail-band-toggle')).toBeNull();
@@ -249,7 +250,7 @@ describe('the fold', () => {
     // nothing for the band's own header.
     phone();
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run({ hasBlockingGates: true }), otherRun()],
@@ -277,7 +278,7 @@ describe('the fold', () => {
     // mounted differently"). Element identity is the proof: `.toBe`, not a fresh query match.
     const media = new FakeMatchMedia();
     vi.stubGlobal('matchMedia', media.matchMedia);
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     expect(screen.queryByTestId('rail-band-toggle')).toBeNull();
@@ -301,7 +302,7 @@ describe('the fold', () => {
     // the largest panel, not the one whose whole folded self is 48px.
     const user = userEvent.setup();
     phone();
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     expect(screen.getByRole('navigation', { name: 'Orchestrators' }).className).toContain('max-lg:min-h-12');
@@ -321,7 +322,7 @@ describe('the rail band', () => {
   it('folds and unfolds by clamping — the rows stay mounted, and leave the tab order while clipped', async () => {
     const user = userEvent.setup();
     phone();
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     // Collapsed is the resting state (mobile.md §3): first sight is the canvas.
@@ -356,7 +357,7 @@ describe('the rail band', () => {
     // stays reachable while the canvas is showing. The dimmed canvas is never a dead zone.
     const user = userEvent.setup();
     phone();
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     await user.click(screen.getByTestId('rail-band-toggle'));
@@ -388,7 +389,7 @@ describe('the rail band', () => {
     // screen reader at the resting state (mobile.md §4.7).
     phone();
     const base = event();
-    const { rerender } = render(<App event={base} loadTask={NO_DETAIL} />);
+    const { rerender } = render(<CannedApp event={base} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     const toggle = screen.getByTestId('rail-band-toggle');
@@ -406,7 +407,7 @@ describe('the rail band', () => {
       cast: [],
     });
     rerender(
-      <App
+      <CannedApp
         event={{ ...base, seq: 1, snapshot: { ...base.snapshot, runs: [fresh, run(), otherRun()] } }}
         loadTask={NO_DETAIL}
       />
@@ -423,7 +424,7 @@ describe('the dock band', () => {
     // otherwise arrive behind a collapsed handle. The swap itself is byte-identical to
     // desktop's: conversation unmounts, inspector mounts, one panel at a time.
     phone();
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     expect(screen.getByTestId('dock-band-toggle')).toHaveAttribute('aria-expanded', 'false');
@@ -445,7 +446,7 @@ describe('the dock band', () => {
     // not inflate what the orchestrator is said to have said.
     phone();
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'turn_one', body: 'First.' }),
           turn({ id: 'turn_two', body: 'Second.' }),
@@ -477,7 +478,7 @@ describe('the gate strip on the fold', () => {
     const user = userEvent.setup();
     phone();
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run({ hasBlockingGates: true }), otherRun()],
@@ -522,7 +523,7 @@ describe('the cross-run hop', () => {
     const user = userEvent.setup();
     phone();
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run({ taskCount: 1 }), otherRun()],
@@ -566,7 +567,7 @@ describe('the cross-run hop', () => {
     const user = userEvent.setup();
     const media = phone();
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run({ taskCount: 1 }), otherRun()],
@@ -608,7 +609,7 @@ describe('the conversation on the fold', () => {
     const user = userEvent.setup();
     phone();
     const { rerender } = render(
-      <App event={withTurns([turn({ id: 'turn_one', body: 'First.' })])} loadTask={NO_DETAIL} />
+      <CannedApp event={withTurns([turn({ id: 'turn_one', body: 'First.' })])} loadTask={NO_DETAIL} />
     );
     await screen.findByTestId('conversation');
 
@@ -630,7 +631,7 @@ describe('the conversation on the fold', () => {
 
     // A turn lands while the reader sits 800px above the bottom: news, announced.
     rerender(
-      <App
+      <CannedApp
         event={withTurns([turn({ id: 'turn_one', body: 'First.' }), turn({ id: 'turn_two', body: 'Second.' })])}
         loadTask={NO_DETAIL}
       />
@@ -648,7 +649,7 @@ describe('the conversation on the fold', () => {
     // …and a turn landing while the reader is already at the bottom never raises it: the new
     // turn is in view, and a chip pointing at it would be noise.
     rerender(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'turn_one', body: 'First.' }),
           turn({ id: 'turn_two', body: 'Second.' }),
@@ -661,17 +662,18 @@ describe('the conversation on the fold', () => {
   });
 
   it('never raises the chip for the reader’s own re-scope — a filter is not an arrival', async () => {
-    // Flipping "All" re-derives the list from the same turns: the last shown id moves, but
+    // Flipping the scope re-derives the list from the same turns: the last shown id moves, but
     // nothing landed. The chip is arrival news in the new-run chip's grammar (mobile.md §4.10),
     // and announcing the reader's own tap back at them would make it furniture — so a move
     // that changed the scope retires the chip instead of raising it.
     const user = userEvent.setup();
     phone();
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'turn_here', body: 'Said in this run.' }),
-          turn({ id: 'turn_elsewhere', runId: OTHER_RUN_ID, taskId: null, at: '2026-07-08T14:00:00.000Z' }),
+          // A turn nothing places (SPEC §4.4, rule 3) — the whole of the second scope since #69.
+          turn({ id: 'turn_nobodys', runId: null, taskId: null, at: '2026-07-08T14:00:00.000Z' }),
         ])}
         loadTask={NO_DETAIL}
       />
@@ -686,10 +688,10 @@ describe('the conversation on the fold', () => {
     Object.defineProperty(viewport, 'scrollHeight', { configurable: true, get: () => 1000 });
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 200 });
 
-    // …and re-scopes. The global log ends on another run's turn, so the last shown id changes
-    // in both directions — and neither direction is news.
+    // …and re-scopes. The two scopes end on different turns, so the last shown id changes in
+    // both directions — and neither direction is news.
     await user.click(screen.getByTestId('dock-band-toggle'));
-    await user.click(screen.getByRole('button', { name: 'All' }));
+    await user.click(screen.getByRole('button', { name: 'Unattributed' }));
     expect(screen.queryByTestId('new-turns-chip')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'This orchestrator' }));
@@ -704,7 +706,7 @@ describe('the conversation on the fold', () => {
     const media = phone();
     media.set('(prefers-reduced-motion: reduce)', true);
     const { rerender } = render(
-      <App event={withTurns([turn({ id: 'turn_one', body: 'First.' })])} loadTask={NO_DETAIL} />
+      <CannedApp event={withTurns([turn({ id: 'turn_one', body: 'First.' })])} loadTask={NO_DETAIL} />
     );
     await screen.findByTestId('conversation');
 
@@ -718,7 +720,7 @@ describe('the conversation on the fold', () => {
     (viewport as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
 
     rerender(
-      <App
+      <CannedApp
         event={withTurns([turn({ id: 'turn_one', body: 'First.' }), turn({ id: 'turn_two', body: 'Second.' })])}
         loadTask={NO_DETAIL}
       />
@@ -736,7 +738,7 @@ describe('the canvas on the fold', () => {
     // stands down while a task is selected, because a selection is centred and a fit that
     // zoomed away from it would trade the reader's place for a tidier frame.
     const media = phone();
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     // Waited for, not asserted outright: `Refit` subscribes from an effect, and it lives *inside*
@@ -761,14 +763,14 @@ describe('the canvas on the fold', () => {
     // ours is that a push rebuilding the nodes inside that gap cancels and reschedules rather
     // than dropping the claim: the selection, the ring and the inspector all survive.
     phone();
-    const { rerender } = render(<App event={event()} loadTask={NO_DETAIL} />);
+    const { rerender } = render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     clickNode(TASK_A);
     await waitFor(() => expect(inspector()).not.toBeNull());
 
     // The very next push, before two frames have passed.
-    rerender(<App event={{ ...event(), seq: 1 }} loadTask={NO_DETAIL} />);
+    rerender(<CannedApp event={{ ...event(), seq: 1 }} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     // Two frames and change: the rescheduled centring has run against the fresh nodes.

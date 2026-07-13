@@ -41,7 +41,7 @@ describe('the feed', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const { messages } = await harness.snapshot();
+    const { messages } = await harness.snapshot(0);
 
     expect(messages.map((message) => message.subject)).toEqual(['first', 'second']);
     expect(messages.map((message) => message.sequence)).toEqual([1, 2]);
@@ -63,7 +63,7 @@ describe('the feed', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const [message] = (await harness.snapshot()).messages;
+    const [message] = (await harness.snapshot(0)).messages;
 
     expect(message).toBeDefined();
     expect(Object.keys(message!)).not.toContain('read');
@@ -78,7 +78,7 @@ describe('the feed', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).messages[0]!.createdAt).toBe(at(3).toISOString());
+    expect((await harness.snapshot(0)).messages[0]!.createdAt).toBe(at(3).toISOString());
   });
 
   it('parses the payload, so the client never has to know the column is TEXT', async () => {
@@ -94,7 +94,7 @@ describe('the feed', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).messages[0]!.payload).toEqual({ question: 'which way?', options: ['A', 'B'] });
+    expect((await harness.snapshot(0)).messages[0]!.payload).toEqual({ question: 'which way?', options: ['A', 'B'] });
   });
 });
 
@@ -117,7 +117,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    const snapshot = await harness.snapshot(0);
     const [message] = snapshot.messages;
 
     expect(message!.taskId).toBe('task_a');
@@ -142,7 +142,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const [message] = (await harness.snapshot()).messages;
+    const [message] = (await harness.snapshot(0)).messages;
 
     expect(message!.subject).toBe('about a task that is gone');
     expect(message!.taskId).toBeNull();
@@ -164,7 +164,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    const snapshot = await harness.snapshot(0);
     const [message] = snapshot.messages;
 
     expect(message!.taskId).toBeNull();
@@ -203,7 +203,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    const snapshot = await harness.snapshot(0);
     const runOf = (id: string) => snapshot.snapshot.tasks.find((task) => task.id === id)!.runId;
     const runIdBySubject = new Map(snapshot.messages.map((message) => [message.subject, message.runId]));
 
@@ -237,7 +237,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    const snapshot = await harness.snapshot(0);
 
     expect(snapshot.snapshot.runs).toHaveLength(2);
     expect(snapshot.messages[0]!.runId).toBeNull();
@@ -254,7 +254,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).messages[0]!.runId).toBeNull();
+    expect((await harness.snapshot(0)).messages[0]!.runId).toBeNull();
   });
 
   it('attributes a message that trails the run\'s last task, rather than losing it', async () => {
@@ -279,7 +279,7 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    const snapshot = await harness.snapshot(0);
 
     expect(snapshot.messages[0]!.runId).toBe(snapshot.snapshot.runs[0]!.id);
   });
@@ -312,7 +312,10 @@ describe('message → run attribution', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    const snapshot = await harness.snapshot();
+    // `since: 0` — "everything after cursor 0", the whole feed. A *first* connect carries no
+    // message delta at all since #69 (nothing seen, nothing missed), and this case is about
+    // where a message lands, so it has to ask for the rows.
+    const snapshot = await harness.snapshot(0);
 
     expect(snapshot.messages[0]!.runId).toBe(snapshot.snapshot.runs[0]!.id);
   });
@@ -339,7 +342,7 @@ describe('heartbeats', () => {
 
     harness = await serve(builder.write(tempDbPath()));
 
-    expect((await harness.snapshot()).messages.map((message) => message.type)).toEqual(['heartbeat']);
+    expect((await harness.snapshot(0)).messages.map((message) => message.type)).toEqual(['heartbeat']);
   });
 
   it('collapses out of the conversation — on a corpus that is 65% heartbeats, like the real one', async () => {
@@ -348,7 +351,7 @@ describe('heartbeats', () => {
     // exchange lost inside it. Collapsed by task, they keep the fact and lose the repetition.
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
-    const { messages, snapshot } = await harness.snapshot();
+    const { messages, snapshot } = await harness.snapshot(0);
 
     expect(messages).toHaveLength(466);
     expect(messages.filter((message) => message.type === 'heartbeat')).toHaveLength(302);
@@ -365,7 +368,7 @@ describe('heartbeats', () => {
   it('leaves the conversation readable — the events, and nothing that merely says "alive"', async () => {
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
-    const { snapshot } = await harness.snapshot();
+    const { snapshot } = await harness.snapshot(0);
     const kinds = new Set(snapshot.turns.map((turn) => turn.kind));
 
     // The four the events actually are, plus the three this tool reconstructs (SPEC §4.7), plus the
@@ -381,7 +384,7 @@ describe('heartbeats', () => {
     // landed a second ago. That is what flashes a node (SPEC §7.6), and it is what the delta is for.
     harness = await serve(liveShapeCorpus().write(tempDbPath()));
 
-    const { messages } = await harness.snapshot();
+    const { messages } = await harness.snapshot(0);
     const beats = messages.filter((message) => message.type === 'heartbeat');
 
     expect(beats).toHaveLength(302);
@@ -406,8 +409,8 @@ describe('the cursor', () => {
     const { event } = await stream.next();
 
     expect(event.messages.map((message) => message.subject)).toEqual(['note 3', 'note 4']);
-    // The graph, though, comes whole every time: it is overwritten in place, so there is no
-    // delta of it to trust (SPEC §6.3).
-    expect(event.snapshot.tasks).toHaveLength(1);
+    // The graph is not on the push at all (#69): a resume claims it whole (`all`), and the
+    // paged endpoints are where the client re-reads what it displays.
+    expect(event.affected.all).toBe(true);
   });
 });

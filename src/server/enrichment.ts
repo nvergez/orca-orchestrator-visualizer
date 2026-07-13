@@ -5,10 +5,8 @@ import type {
   Enrichment,
   EnrichmentState,
   Liveness,
-  Run,
-  StreamEvent,
 } from '../shared/types.ts';
-import type { StreamSource } from './stream.ts';
+import type { PushResult, StreamSource } from './stream.ts';
 
 /**
  * Live Orca context (#61 — the live-supervision roadmap #51; its SPEC §12 chapter lands
@@ -372,8 +370,13 @@ export function withEnrichment(source: StreamSource, adapter: OrcaEnrichment): S
     dataVersion: () => source.dataVersion(),
     liveness: () => source.liveness(),
     enrichmentVersion: () => adapter.generation,
-    snapshot(since?: number): StreamEvent {
-      const event = source.snapshot(since);
+    push(since: number | null): PushResult {
+      const result = source.push(since);
+
+      // The handles come from the push itself (`PushResult.handles`) rather than off the event:
+      // #69 took the full history off the wire, so the runs this joins against are no longer
+      // *on* the thing being decorated. The source hands them over from the read it just did,
+      // which keeps the exact join exact without a second pass over the database.
 
       // The liveness gate, enforced at the wire and not only on the timer. The SQLite poll
       // notices a quit within one tick; the adapter only on its own slower one — and for
@@ -381,23 +384,13 @@ export function withEnrichment(source: StreamSource, adapter: OrcaEnrichment): S
       // beside a stale badge, about an app that is not running. Live-only means the *event*
       // is never allowed to say both; the adapter's next tick then drops the cache for real.
       const enrichment: Enrichment =
-        event.meta.liveness === 'live'
-          ? adapter.enrich(snapshotHandles(event.snapshot.runs))
+        result.event.meta.liveness === 'live'
+          ? adapter.enrich(result.handles)
           : { state: 'suspended', fetchedAt: null, workers: [] };
 
-      return { ...event, enrichment };
+      return { ...result, event: { ...result.event, enrichment } };
     },
   };
-}
-
-/** Every terminal the snapshot names: each orchestrator, and every agent it ever dispatched. */
-function snapshotHandles(runs: Run[]): string[] {
-  const handles: string[] = [];
-  for (const run of runs) {
-    if (run.handle !== null) handles.push(run.handle);
-    for (const member of run.cast) handles.push(member.handle);
-  }
-  return handles;
 }
 
 function nowIso(): string {

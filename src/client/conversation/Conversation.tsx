@@ -11,7 +11,7 @@ import { BAND_IN, DOCK_IN, EASE, enter, ROW_IN, SPRING, SPRING_FAST } from '../m
 import { useNow } from '../relative-time.ts';
 import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import { useIsMobile } from '../viewport.tsx';
-import { exchangeCount, selectTurns } from './select.ts';
+import { exchangeCount, selectTurns, unplacedTurns } from './select.ts';
 import { TurnRow } from './TurnRow.tsx';
 
 /**
@@ -38,15 +38,28 @@ import { TurnRow } from './TurnRow.tsx';
  * orchestrator, then an agent, and the same click that fills this panel dims the canvas to that
  * agent's tasks. The two panels are one movement.
  *
- * The only state that *is* this panel's is the **"All"** scope, and it is here because it answers a
+ * The only state that *is* this panel's is the second scope, and it is here because it answers a
  * question only this panel is asked: a message the server could not place lives in no
  * orchestrator's conversation (SPEC §4.4, rule 3), and it must still be reachable — an
  * unattributable message appears, attached to nobody, rather than being guessed into somebody's
  * thread.
+ *
+ * **That scope used to be called "All", and it is now called "Unattributed"** (#69). The name was
+ * the whole of what changed, and it changed because the panel no longer holds the machine: since
+ * ADR 0002 the client fetches *one selected run* whole and the rail pages the rest, so a button
+ * marked "All" would have shown the reader one orchestration and called it every one — the exact
+ * class of lie the `source` caption under every bubble exists to prevent. What that button was
+ * *for* is untouched (SPEC §7.7: "'All' is not a convenience: a turn the server could not place
+ * belongs to no orchestrator, and it must still appear, attached to nobody"), and that is what it
+ * now says. Another orchestrator's conversation is a rail click away, where it always was.
  */
 
 export type ConversationProps = {
-  /** Every turn in the database. The panel picks a scope; it never re-derives one. */
+  /**
+   * The selected run's complete conversation, and beside it the turns nothing places
+   * (`runId: null`) — exactly what the selected-run snapshot carries (#69). The panel picks a
+   * scope; it never re-derives one.
+   */
   turns: Turn[];
   /** The orchestrator the rail has open. Null only when the database holds no tasks at all. */
   run: Run | null;
@@ -58,7 +71,7 @@ export type ConversationProps = {
   onSelectTask: (taskId: string) => void;
 };
 
-type Scope = 'run' | 'all';
+type Scope = 'run' | 'unplaced';
 
 const NO_CAST: CastMember[] = [];
 
@@ -71,12 +84,12 @@ export function Conversation({ turns, run, selectedAgent, onClearAgent, onSelect
 
   const shown = useMemo(
     () =>
-      selectTurns(turns, {
-        runId: scope === 'all' ? null : (run?.id ?? null),
-        // "All" is the whole log, and narrowing it by an agent of the run you happen to have open
-        // would be two scopes fighting over one list.
-        agentHandle: scope === 'all' ? null : selectedAgent,
-      }),
+      scope === 'unplaced'
+        ? unplacedTurns(turns)
+        : selectTurns(turns, {
+            runId: run?.id ?? null,
+            agentHandle: selectedAgent,
+          }),
     [turns, scope, run, selectedAgent]
   );
 
@@ -94,7 +107,7 @@ export function Conversation({ turns, run, selectedAgent, onClearAgent, onSelect
    * than 48px above the bottom, something arrived off-screen. A reader parked *at* the bottom
    * never sees the chip — the new turn is already in view — and scrolling back down retires it.
    *
-   * A re-scope is not an arrival. Flipping "All", picking an agent, hopping runs — each
+   * A re-scope is not an arrival. Flipping "Unattributed", picking an agent, hopping runs — each
    * re-derives `shown` from the same turns and moves the last id without a single exchange
    * having landed, so the scope's identity is watched beside the id: a move that changed the
    * scope retires the chip instead of raising it.
@@ -153,7 +166,7 @@ export function Conversation({ turns, run, selectedAgent, onClearAgent, onSelect
             so the *thumb* is one element that slides between them, and not two that light up. */}
         <div role="group" aria-label="Conversation scope" className="bg-muted/70 flex gap-0.5 rounded-lg p-0.5">
           <ScopeButton label="This orchestrator" active={scope === 'run'} onClick={() => setScope('run')} />
-          <ScopeButton label="All" active={scope === 'all'} onClick={() => setScope('all')} />
+          <ScopeButton label="Unattributed" active={scope === 'unplaced'} onClick={() => setScope('unplaced')} />
         </div>
 
         {scope === 'run' && (
@@ -297,7 +310,9 @@ function Who({
  * looking like it failed to load.
  */
 function emptyWording(run: Run | null, agent: CastMember | null, scope: Scope): string {
-  if (scope === 'all') return 'No messages in this database yet.';
+  if (scope === 'unplaced') {
+    return 'Nothing here is unattributable: every exchange this database retains belongs to an orchestrator.';
+  }
   if (agent) return `${agent.monogram} and the orchestrator never exchanged anything about these tasks.`;
   if (run && run.handle === null) {
     return 'No exchanges. These tasks were never attributed to a terminal — so there is no orchestrator on record, and nobody said anything to anybody.';

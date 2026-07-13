@@ -2,7 +2,7 @@
 
 orca-viz observes Orca orchestration state and turns incomplete, fallible evidence into an honest supervision view without becoming part of the orchestration itself.
 
-It also presents the retained orchestration history, including what can and cannot be concluded when parts of that history disappear. It describes retained evidence about Orca orchestrations without claiming more than the database can prove.
+It also presents the retained orchestration history, including what can and cannot be concluded when parts of that history disappear. It describes retained evidence about Orca orchestrations without claiming more than the database can prove — turning that evidence into both live supervision and post-mortem reports, and never claiming facts the database does not contain.
 
 ## Language
 **Orchestrator**:
@@ -78,7 +78,7 @@ A question sent through the ask flow with no recorded answer or gate lifecycle. 
 _Avoid_: Open gate, timed-out ask
 
 **Orchestrator Run**:
-The tasks attributed to one orchestrator terminal, including all of its recorded waves of work.
+The tasks and evidence attributed to one orchestrator terminal handle, including all of its recorded waves of work.
 _Avoid_: Session, inferred run
 
 **Convergence**:
@@ -112,3 +112,39 @@ _Avoid_: Run liveness, run health
 **Attribution Window**:
 The bounded period in which handle evidence may associate a task-id-less message with an orchestrator run.
 _Avoid_: Run lifetime
+
+**Retained evidence**:
+Rows that exist in Orca's orchestration database at the moment orca-viz reads them; it excludes events the database overwrote, deleted, or never recorded.
+_Avoid_: Complete history, event log
+
+**Post-mortem report**:
+A quantitative reading of one orchestrator run assembled from retained evidence, including durations, outcomes, and per-agent comparisons.
+_Avoid_: Analytics dashboard, audit log
+
+**Outcome receipt**:
+A task result or worker completion payload whose recognized fields describe produced files, links, branches, tickets, reports, or the completing agent; unrecognized content remains retained evidence and is shown verbatim.
+_Avoid_: Result blob, completion message
+
+**Run archive**:
+A versioned, self-contained, one-shot export of exactly one selected orchestrator run's retained evidence at the moment the user requests it.
+_Avoid_: Recording, backup, database export
+
+**Archived replay**:
+A read-only rendering of a run archive that is explicitly offline and makes no claim of current liveness.
+_Avoid_: Live replay, restored run
+
+**Run index**:
+A cursor-paginated list of lightweight orchestrator-run summaries used to navigate retained history without loading every run's evidence at once.
+_Avoid_: History window, complete snapshot
+
+**Selected-run snapshot**:
+The complete retained evidence for one selected orchestrator run, fetched as a unit without time-windowing or truncation.
+_Avoid_: Run page, history slice
+
+**Evidence hint**:
+An explicitly uncertain agent-kind or repository label derived from unambiguous retained evidence and accompanied by its provenance.
+_Avoid_: Identity, classification
+
+**Invalidation notice**:
+The identity a live stream event carries of the retained evidence that changed, so a reader refetches only the affected run summaries and selected run rather than the whole database. It names what to read again; it never carries the evidence itself.
+_Avoid_: Delta, patch, diff

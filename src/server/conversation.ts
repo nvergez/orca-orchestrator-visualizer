@@ -1,4 +1,5 @@
-import type { FeedMessage, Gate, Run, Turn } from '../shared/types.ts';
+import { receiptOfWorkerDone } from '../shared/receipt.ts';
+import type { FeedMessage, Gate, ReceiptFact, Run, Turn } from '../shared/types.ts';
 import type { TaskWithHandle } from './runs.ts';
 import type { Preview } from './tasks.ts';
 import { byInstant } from './time.ts';
@@ -75,6 +76,26 @@ const HEARTBEATS = 'heartbeats';
 
 const HEARTBEAT = 'heartbeat';
 const DECISION_GATE = 'decision_gate';
+const WORKER_DONE = 'worker_done';
+
+/**
+ * How much of a receipt a turn gets (#67) — the fact-count sibling of `BODY_PREVIEW_CHARS`,
+ * and for the same reason: the conversation rides a snapshot that is re-sent whole every five
+ * seconds, and a worker that modified four hundred files must not put four hundred chips on
+ * it. The inspector carries the whole receipt, merged across both sources.
+ */
+export const RECEIPT_PREVIEW_FACTS = 8;
+
+/**
+ * The compact summary, spelled the way every optional turn field is: **absent when it has
+ * nothing to say** (SPEC §6.3). A prose result and a bookkeeping-only payload are the common
+ * case, and 360 turns saying `"receipt":[]` five seconds apart is kilobytes of nothing.
+ */
+function compactReceipt(facts: ReceiptFact[]): { receipt?: ReceiptFact[]; receiptOmitted?: number } {
+  if (facts.length === 0) return {};
+  if (facts.length <= RECEIPT_PREVIEW_FACTS) return { receipt: facts };
+  return { receipt: facts.slice(0, RECEIPT_PREVIEW_FACTS), receiptOmitted: facts.length - RECEIPT_PREVIEW_FACTS };
+}
 
 export function conversationOf({ entries, runs, gates, messages }: ConversationSources): Turn[] {
   const cast = castIndex(runs);
@@ -214,6 +235,9 @@ function resultTurns(entries: TaskWithHandle[], cast: Cast): Turn[] {
       taskId: entry.task.id,
       subject: entry.task.title,
       ...bodyOf(entry.result, ''),
+      // What the body's (often truncated) JSON actually says, as facts (#67): the receipt is
+      // read from the whole column, so it survives the preview that cut the body above.
+      ...compactReceipt(entry.resultReceipt),
       source: 'tasks.result · tasks.completed_at',
     });
   }
@@ -280,6 +304,9 @@ function messageTurns(messages: FeedMessage[], cast: Cast, gateOfMessage: Map<st
       // screen. `blocking` is only ever said when true (`Turn`).
       ...(gate && { gateStatus: gate.status }),
       ...(gate?.blocking && { blocking: true }),
+      // A worker's completion payload is the other place an outcome receipt lives (#67) —
+      // the body above is its prose summary; these are its recognized facts.
+      ...(message.type === WORKER_DONE ? compactReceipt(receiptOfWorkerDone(message.payload)) : {}),
       source: answers
         ? `messages.thread_id = the gate's id · #${message.sequence}`
         : `messages · #${message.sequence}`,

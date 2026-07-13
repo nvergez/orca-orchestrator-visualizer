@@ -1,0 +1,3 @@
+# Page the history index, but keep selected runs complete
+
+orca-viz will replace unbounded full-history stream snapshots with a stable cursor-paginated run index, complete on-demand selected-run snapshots, paginated cross-history reports, and SSE invalidations or deltas that identify affected data. Older history must remain reachable through explicit navigation, reconnect must remain lossless, schema degradation must remain visible, and a selected run's tasks, attempts, gates, conversation, and export must never be silently time-windowed or truncated; this trades a more explicit transport contract for bounded wire and client costs without weakening the post-mortem record.

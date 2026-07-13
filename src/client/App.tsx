@@ -1,4 +1,4 @@
-import { ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
+import { ChevronUp, Database, Moon, Sun, Table2, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
 import { Beams } from '@/components/fx/beams';
@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
+import type { CastMember, Gate, Meta, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
@@ -16,12 +16,15 @@ import { Conversation } from './conversation/Conversation.tsx';
 import { useArrivals, usePulses } from './conversation/pulses.ts';
 import { exchangeCount, selectTurns } from './conversation/select.ts';
 import { GateStrip } from './gates/GateStrip.tsx';
+import { fetchHistory, type HistoryLoaders, useHistory } from './history.ts';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { relativeTime, useClock } from './relative-time.ts';
 import { RunRail } from './rail/RunRail.tsx';
-import { useRunSelection } from './rail/selection.ts';
+import { localInstant } from './relative-time.ts';
+import { fetchReport, type ReportLoader } from './report/query.ts';
+import { Report } from './report/Report.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { useIsMobile } from './viewport.tsx';
@@ -75,7 +78,6 @@ import { useIsMobile } from './viewport.tsx';
  */
 
 /** Stable empty arrays: a fresh `[]` each render would re-run the layout on every tick. */
-const NO_RUNS: Run[] = [];
 const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
 const NO_TURNS: Turn[] = [];
@@ -102,24 +104,53 @@ export type AppProps = {
    * than inventing one.
    */
   appliedAt?: number | null;
+  /**
+   * How the shell fetches history (#69): the run index a page at a time, and the selected run
+   * whole. Defaults to the real GETs; a canned pair drives the whole shell from a test —
+   * `loadTask`'s pattern, grown to the two reads the stream stopped carrying.
+   */
+  loadHistory?: HistoryLoaders;
+  /**
+   * How the cross-history report is read (#70): `GET /api/report`, one page at a time, sorted and
+   * filtered on the server. A prop for the same reason the other two are.
+   */
+  loadReport?: ReportLoader;
 };
 
-export function App({ event, loadTask = fetchTaskDetail, connection = 'connected', appliedAt = null }: AppProps) {
-  const runs = event?.snapshot.runs ?? NO_RUNS;
-  const { selected, select, newRunId } = useRunSelection(runs);
+export function App({
+  event,
+  loadTask = fetchTaskDetail,
+  connection = 'connected',
+  appliedAt = null,
+  loadHistory = fetchHistory,
+  loadReport = fetchReport,
+}: AppProps) {
+  // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
+  // selected run's complete evidence, each refetched when `event.affected` names it (#69).
+  const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, snapshot } = useHistory(
+    event,
+    loadHistory
+  );
 
-  // Every task in the database, which is a different question from the canvas's. The canvas draws
-  // one orchestrator's; a *dependency* is an edge in the schema and knows nothing about which
-  // terminal created which task, so resolving one against the canvas's tasks alone would report a
-  // task in the next orchestration along as deleted (the inspector's dep chips).
-  const allTasks = event?.snapshot.tasks ?? NO_TASKS;
+  // The selected run's complete evidence — tasks, gates and turns already scoped to it by the
+  // server, which owns the derivation (SPEC §4.3). Beside the run's own tasks ride the far ends
+  // of dependency edges that cross into other orchestrations (`linkedTasks`): an edge is real
+  // whichever terminal created its endpoints, and a dep chip that could not see across would
+  // call a task sitting right there in the database deleted.
+  const tasks = snapshot?.tasks ?? NO_TASKS;
+  const allTasks = useMemo(() => (snapshot === null ? NO_TASKS : [...snapshot.tasks, ...snapshot.linkedTasks]), [snapshot]);
 
-  // The conversation is the server's, whole, on every push (SPEC §4.7) — the client picks a scope
-  // and nothing else. What still arrives as a *delta* is the message log, and it is the only thing
-  // that can say **what just happened**, which is what flashes a node (`conversation/pulses.ts`).
+  // The conversation is the server's, whole, per selected run (SPEC §4.7) — the client picks a
+  // scope and nothing else. What still arrives as a *delta* is the message log, and it is the
+  // only thing that can say **what just happened**, which is what flashes a node
+  // (`conversation/pulses.ts`).
   const pulses = usePulses(useArrivals(event));
 
-  const turns = event?.snapshot.turns ?? NO_TURNS;
+  const turns = snapshot?.turns ?? NO_TURNS;
+
+  // The freshest description of the selected run: its snapshot once loaded, the index summary
+  // until then. Both are the same wire shape, and the snapshot is the completer truth (ADR 0002).
+  const activeRun = snapshot?.run ?? selected;
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -130,6 +161,12 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
   // describes are one task.
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  // The report is the shell's third selection-shaped thing (#70): it reads *across* runs, and a
+  // row it opens moves the run selection, the task selection and the dock — three pieces of state
+  // no panel can see. It is a dialog over the whole tool rather than a fourth panel: it is a place
+  // you go to find one task and then leave, not a thing you read beside the canvas.
+  const [reportOpen, setReportOpen] = useState(false);
 
   // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
   // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
@@ -159,25 +196,19 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
     [isMobile, turns, selected, selectedAgent]
   );
 
-  // The scoping, in one line. Every task carries the run the server put it in, so the client never
-  // re-derives the grouping — it only picks which one to draw.
-  const tasks = useMemo(
-    () => (selected ? allTasks.filter((task) => task.runId === selected.id) : NO_TASKS),
-    [allTasks, selected]
-  );
-
-  // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
-  // them. Which question is blocking *now*, and which run it blocks, are answers the server
-  // has already worked out from the gate messages, the `decision_gates` rows and the tasks'
-  // current state (`server/gates.ts`, #45); re-deriving either here would be re-implementing
-  // the one trap the ticket exists to avoid. The strip interrupts over `blocking` alone —
-  // an unanswered historical ask is not enough evidence to interrupt (SPEC §7.1).
+  // The gates arrive already scoped to the selected run (#19, #69), and this filter is the
+  // *only* thing the client does to them. Which question is blocking *now* is an answer the
+  // server has already worked out from the gate messages, the `decision_gates` rows and the
+  // tasks' current state (`server/gates.ts`, #45); re-deriving it here would re-implement the
+  // one trap #19 exists to avoid.
+  //
+  // The strip interrupts over `blocking` alone — never over a lifecycle state. `status` records
+  // what was written down; `blocking` is whether work is provably paused *right now* (#45), and
+  // an unanswered historical ask is not enough evidence to put a question in someone's way
+  // (SPEC §7.1). Stale probes on finished runs wore the old `status === 'open'` flag for days.
   const blockingGates = useMemo(
-    () =>
-      event && selected
-        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.blocking)
-        : NO_GATES,
-    [event, selected]
+    () => (snapshot === null ? NO_GATES : snapshot.gates.filter((gate) => gate.blocking)),
+    [snapshot]
   );
 
   // Only ever a task on the canvas: a selection is cleared whenever the run changes, and a run
@@ -188,9 +219,8 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
   // The node wears one ⛔ marker because it has room for one; the inspector is where the decision
   // that was actually made is legible.
   const taskGates = useMemo(
-    () =>
-      event && selectedTask ? event.snapshot.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES,
-    [event, selectedTask]
+    () => (snapshot !== null && selectedTask ? snapshot.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES),
+    [snapshot, selectedTask]
   );
 
   // The bodies, on the click and not before — the 172 KB the snapshot exists to not send
@@ -287,7 +317,30 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
     setSelectedTaskId(taskId);
   }
 
-  if (!event) return <Connecting />;
+  /**
+   * A row of the cross-history report (#70). It is `showTask` for a task the client has not
+   * loaded and cannot look up: the report ranks *all* of retained history, and the row names a
+   * run the selected-run snapshot has never seen.
+   *
+   * So the run id comes from the row, and the two selections are set together: `select` fetches
+   * that run whole (`useHistory`), and the task id waits — the inspector opens the moment the
+   * snapshot carrying its task lands. The report's whole job is to be an entry point into the
+   * existing story, and this is the entrance.
+   */
+  function openReportRow(runId: string, taskId: string): void {
+    if (runId !== selected?.id) {
+      if (isMobile) setCrossRunFrom(selected?.label ?? null);
+      select(runId);
+      setSelectedAgent(null); // A different orchestrator's cast — see `selectRun`.
+    }
+    openDock();
+    setSelectedTaskId(taskId);
+    setReportOpen(false);
+  }
+
+  // Two things have to land before the shell is worth drawing: the stream's first event (the
+  // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
+  if (!event || !ready) return <Connecting />;
 
   return (
     // One switch, at the top, for a reader who has asked their machine to hold still. Every
@@ -296,17 +349,39 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar meta={event.meta} connection={connection} appliedAt={appliedAt} />
+        <TopBar
+          meta={event.meta}
+          connection={connection}
+          appliedAt={appliedAt}
+          onOpenReport={() => setReportOpen(true)}
+        />
 
         <Notices meta={event.meta} />
+
+        {/* Across every orchestrator, and over all of them (#70). It is not a panel in the row
+            below: those three are one run's story, and this is the search that finds the run. */}
+        {reportOpen && (
+          <Report
+            event={event}
+            runs={runs}
+            load={loadReport}
+            onSelectRow={openReportRow}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
 
         {/* `max-lg:flex-col` is the fold itself: DOM order rail → centre → dock becomes
             top → middle → bottom, and nothing else about the row changes. */}
         <div className="flex min-h-0 flex-1 gap-2 max-lg:flex-col">
           <RunRail
             runs={runs}
+            // The tasks the client actually holds — the selected run's, and the far ends of its
+            // cross-run dep edges (#69 took every *other* run's tasks off the wire). The rail
+            // derives per-agent worker health from them, which it can therefore only do for the
+            // run that is open; the others show their summary counts and no health line, which
+            // is the honest shape of what a paged history knows.
             tasks={allTasks}
-            coordinatorRuns={event.snapshot.coordinatorRuns}
+            coordinatorRuns={coordinatorRuns}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
             selectedAgent={selectedAgent}
@@ -316,6 +391,7 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
             // It lands on the cast rows and nowhere else: the canvas never sees it, which is
             // half of how an enrichment push can never remount the DAG.
             enrichment={event.enrichment}
+            older={{ hasOlder, loadOlder }}
             fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
@@ -331,20 +407,30 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
-              <Canvas
-                // Continuity belongs to one orchestrator's stream updates. Picking another one is
-                // an explicit navigation to a different graph, whose initial fit is useful and
-                // whose viewport must not inherit the last run's framing (mobile.md §6).
-                key={selected?.id ?? 'empty'}
-                tasks={tasks}
-                cast={selected?.cast}
-                waves={selected?.waves}
-                selectedAgent={selectedAgent}
-                selectedTaskId={selectedTask?.id ?? null}
-                onSelectTask={selectTask}
-                pulses={pulses}
-                refitSignal={refitSignal}
-              />
+              {selected !== null && snapshot === null ? (
+                // The selected run's evidence is on its way (#69). Milliseconds on loopback —
+                // but an empty canvas would read as "this run has no tasks", which is a claim,
+                // and not one anybody has verified yet.
+                <LoadingRun />
+              ) : (
+                <Canvas
+                  // Continuity belongs to one orchestrator's stream updates. Picking another one
+                  // is an explicit navigation to a different graph, whose initial fit is useful
+                  // and whose viewport must not inherit the last run's framing (mobile.md §6).
+                  // It keys off the *selection*, not the loaded snapshot: the run's evidence
+                  // arriving is a stream update to the graph you already chose, and remounting on
+                  // it would throw away the viewport every time the run refetched (#46).
+                  key={selected?.id ?? 'empty'}
+                  tasks={tasks}
+                  cast={activeRun?.cast}
+                  waves={activeRun?.waves}
+                  selectedAgent={selectedAgent}
+                  selectedTaskId={selectedTask?.id ?? null}
+                  onSelectTask={selectTask}
+                  pulses={pulses}
+                  refitSignal={refitSignal}
+                />
+              )}
             </div>
           </div>
 
@@ -398,7 +484,7 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
                   detail={detail}
                   error={detailError}
                   turns={turns}
-                  cast={selected?.cast ?? NO_CAST}
+                  cast={activeRun?.cast ?? NO_CAST}
                   onClose={() => {
                     setSelectedTaskId(null);
                     // The dock band stays open — the conversation returns in the same band at the
@@ -414,7 +500,7 @@ export function App({ event, loadTask = fetchTaskDetail, connection = 'connected
               ) : (
                 <Conversation
                   turns={turns}
-                  run={selected}
+                  run={activeRun}
                   selectedAgent={selectedAgent}
                   onClearAgent={() => setSelectedAgent(null)}
                   onSelectTask={showTask}
@@ -501,7 +587,17 @@ function Backdrop() {
  * write (SPEC §1.2) — so the only control on it is the one that is about the reader and not the
  * data: the light the page is read in.
  */
-function TopBar({ meta, connection, appliedAt }: { meta: Meta; connection: Connection; appliedAt: number | null }) {
+function TopBar({
+  meta,
+  connection,
+  appliedAt,
+  onOpenReport,
+}: {
+  meta: Meta;
+  connection: Connection;
+  appliedAt: number | null;
+  onOpenReport: () => void;
+}) {
   return (
     <motion.header
       initial={enter({ opacity: 0, y: -8 })}
@@ -536,6 +632,21 @@ function TopBar({ meta, connection, appliedAt }: { meta: Meta; connection: Conne
       <StreamPill connection={connection} />
 
       <Source meta={meta} appliedAt={appliedAt} />
+
+      {/* The one thing on this bar that is *about all of history* rather than about the run on
+          screen — which is why it is here, on the bar the whole tool shares, and not in the rail
+          that lists one orchestrator at a time (#70). */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="open-report"
+        onClick={onOpenReport}
+        className="h-7 shrink-0 cursor-pointer gap-1.5 px-2 text-[11px] pointer-coarse:h-10"
+      >
+        <Table2 className="size-3.5" />
+        <span className="max-lg:hidden">Task report</span>
+      </Button>
 
       <ThemeToggle />
     </motion.header>
@@ -583,7 +694,7 @@ function Status({ meta }: { meta: Meta }) {
       <RadarDot live={live} />
       {/* The sentence is the spec's, down to the word (`wording.ts`) — the capital is the
           stylesheet's, because a sentence in a pill still starts like a sentence. */}
-      <span className="first-letter:uppercase">{livenessSentence(meta, formatTime)}.</span>
+      <span className="first-letter:uppercase">{livenessSentence(meta, localInstant)}.</span>
     </p>
   );
 }
@@ -639,7 +750,7 @@ function Source({ meta, appliedAt }: { meta: Meta; appliedAt: number | null }) {
 
       <div className="hidden shrink-0 items-center gap-1.5 lg:flex" title="When this database was last written to">
         <dt className="opacity-70">Last write</dt>
-        <dd className="m-0 tabular-nums">{formatTime(meta.dbMtime)}</dd>
+        <dd className="m-0 tabular-nums">{localInstant(meta.dbMtime)}</dd>
       </div>
 
       {appliedAt !== null && <DataAge appliedAt={appliedAt} />}
@@ -772,6 +883,22 @@ function Notices({ meta }: { meta: Meta }) {
 }
 
 /**
+ * Between selecting a run and its complete evidence arriving (#69) — one blink on loopback.
+ * It stands where the canvas will, because that is what it is standing in for; and it says
+ * "loading" rather than showing an empty canvas, because an empty canvas *means something*
+ * ("no tasks in this run") and nothing has verified that yet.
+ */
+function LoadingRun() {
+  return (
+    <section aria-label="Loading run" className={cn(PANEL_CLASS, 'flex h-full items-center justify-center')}>
+      <p data-testid="run-loading" className="text-muted-foreground text-xs">
+        Loading this run’s history…
+      </p>
+    </section>
+  );
+}
+
+/**
  * Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink.
  *
  * **The one screen in this tool with no data on it**, and therefore the one screen where a purely
@@ -824,8 +951,3 @@ function Connecting() {
   );
 }
 
-/** An instant a person can place, in their own timezone. */
-function formatTime(iso: string): string {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
-}

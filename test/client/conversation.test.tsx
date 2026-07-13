@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { App } from '../../src/client/App.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import { GATE_THEME, STATUS_THEME } from '../../src/client/canvas/theme.ts';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
-import type { CastMember, FeedMessage, Meta, Run, StreamEvent, Task, Turn } from '../../src/shared/types.ts';
+import type { CastMember, FeedMessage, Meta, Run, Task, Turn } from '../../src/shared/types.ts';
 
 /**
  * **The conversation** — the panel this whole feature exists for (SPEC §4.7, §7.7).
@@ -24,7 +24,7 @@ import type { CastMember, FeedMessage, Meta, Run, StreamEvent, Task, Turn } from
  */
 
 /** Selecting a task swaps the dock to the inspector, and the inspector fetches. */
-const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [] });
+const NO_DETAIL: TaskLoader = async (id) => ({ id, spec: null, result: null, attempts: [], receipt: [], completions: [] });
 
 const META: Meta = {
   dbPath: '/home/dev/.config/orca/orchestration.db',
@@ -130,9 +130,10 @@ function message(over: Partial<FeedMessage> = {}): FeedMessage {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: {
       runs: [run()],
@@ -147,7 +148,7 @@ function event(over: Partial<StreamEvent> = {}): StreamEvent {
 }
 
 /** An event with a conversation in it, and nothing else to distract from it. */
-function withTurns(rows: Turn[], over: Partial<StreamEvent> = {}): StreamEvent {
+function withTurns(rows: Turn[], over: Partial<CannedEvent> = {}): CannedEvent {
   const base = event(over);
   return { ...base, snapshot: { ...base.snapshot, turns: rows } };
 }
@@ -182,7 +183,7 @@ async function drawn(count: number): Promise<void> {
 
 describe('the conversation', () => {
   it('is what the right dock shows by default', async () => {
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
 
     expect(await screen.findByTestId('conversation')).toBeVisible();
     expect(screen.queryByTestId('inspector')).not.toBeInTheDocument();
@@ -193,7 +194,7 @@ describe('the conversation', () => {
     // `tasks.spec` at `dispatch_contexts.dispatched_at`, merged (SPEC §4.7). Without it, the panel
     // below shows an agent answering a question nobody asked.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'dispatch',
@@ -222,7 +223,7 @@ describe('the conversation', () => {
 
   it('names the two speakers — the orchestrator, and the agent by its monogram', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([turn({ kind: 'dispatch', direction: 'out', fromHandle: HANDLE, toHandle: ALICE })])}
         loadTask={NO_DETAIL}
       />
@@ -241,7 +242,7 @@ describe('the conversation', () => {
     // The caption is not a footnote. A bubble that *looked* like a message the orchestrator sent,
     // when no such message was ever written, would be the most convincing lie this tool could tell.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ kind: 'dispatch', direction: 'out', source: 'tasks.spec · dispatch_contexts.dispatched_at' }),
           turn({ kind: 'result', direction: 'in', source: 'tasks.result · tasks.completed_at' }),
@@ -260,7 +261,7 @@ describe('the conversation', () => {
     // One palette for the page: the entries in `conversation/theme.ts` *are* the node themes, reused
     // rather than re-picked. A green `worker_done` and a green `completed` node mean the same thing.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ kind: 'worker_done' }),
           turn({ kind: 'escalation' }),
@@ -286,7 +287,7 @@ describe('the conversation', () => {
 
   it('truncates a long prompt and says so — the body itself stays in the file', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([turn({ kind: 'dispatch', direction: 'out', body: 'x'.repeat(240), truncated: true })])}
         loadTask={NO_DETAIL}
       />
@@ -299,7 +300,7 @@ describe('the conversation', () => {
 describe('a question, and its answer', () => {
   it('shows the options, and ticks the one that was taken', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'decision_gate',
@@ -324,7 +325,7 @@ describe('a question, and its answer', () => {
     // resolution only to the `decision_gates` row, so no reply turn follows this question.
     // If nothing here shows the answer, the resolved gate reads exactly like an open one.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'decision_gate',
@@ -345,7 +346,7 @@ describe('a question, and its answer', () => {
 
   it('says a resolved gate whose resolution text was never recorded is still resolved', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ kind: 'decision_gate', body: 'Ship it today?', gateStatus: 'resolved' }),
         ])}
@@ -360,7 +361,7 @@ describe('a question, and its answer', () => {
     // The blocking chip follows the server's separate `blocking` fact, never the mere absence
     // of a reply (#45): here the gate's task is authoritatively blocked right now.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'decision_gate',
@@ -383,7 +384,7 @@ describe('a question, and its answer', () => {
     // persists its timeout, and the live database is full of finished runs wearing stale
     // probes (#45). "Waiting" here was the lie this issue exists to remove.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'decision_gate',
@@ -403,7 +404,7 @@ describe('a question, and its answer', () => {
 
   it('names a timed-out gate as timed out — its own terminal state, never an open question', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ kind: 'decision_gate', body: 'Ship it today?', options: ['yes', 'no'], gateStatus: 'timeout' }),
         ])}
@@ -418,7 +419,7 @@ describe('a question, and its answer', () => {
     // Half the live gate messages are hand-written escalations with no options at all. Their
     // state chip must not live inside an options list they do not have.
     render(
-      <App
+      <CannedApp
         event={withTurns([turn({ kind: 'decision_gate', body: 'Which base branch?', gateStatus: 'unanswered' })])}
         loadTask={NO_DETAIL}
       />
@@ -433,7 +434,7 @@ describe('heartbeats', () => {
     // 302 of 466 messages, and all of them say "alive" (SPEC §7.7). Rendered straight, the
     // conversation is a ticker with the real exchange lost inside it.
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({
             kind: 'heartbeats',
@@ -454,13 +455,13 @@ describe('heartbeats', () => {
   });
 
   it('never pulse a node — 65% of the traffic would be a strobe, not a signal', async () => {
-    const { rerender } = render(<App event={event()} loadTask={NO_DETAIL} />);
+    const { rerender } = render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     // A *second* push, so the message is news rather than history: the 466 that come down on first
     // connect are the page, and flashing them would strobe the whole canvas at once.
     rerender(
-      <App
+      <CannedApp
         event={{ ...event(), seq: 1, messages: [message({ type: 'heartbeat', taskId: TASK_A })] }}
         loadTask={NO_DETAIL}
       />
@@ -473,7 +474,7 @@ describe('heartbeats', () => {
 describe('scope', () => {
   it('shows the selected orchestrator, and not another one', async () => {
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'mine', body: 'From this orchestrator.' }),
           turn({ id: 'theirs', runId: OTHER_RUN_ID, body: 'From another one.' }),
@@ -487,13 +488,17 @@ describe('scope', () => {
     expect(screen.queryByText('From another one.')).not.toBeInTheDocument();
   });
 
-  it('shows the whole database, unplaceable turns included, under "All"', async () => {
+  it('shows the turns nothing places, and only those, under "Unattributed"', async () => {
     // A message the server could not place belongs to no orchestrator (SPEC §4.4, rule 3). It must
     // still *appear* — attached to nobody — rather than be guessed into somebody's conversation.
+    //
+    // The scope was called "All" until #69, and the rename is the honesty: since ADR 0002 the
+    // client holds one selected run and the turns nothing places, so a button marked "All" would
+    // have shown one orchestration and called it every one.
     const user = userEvent.setup();
 
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'mine', body: 'From this orchestrator.' }),
           turn({ id: 'nobodys', runId: null, taskId: null, body: 'From nobody at all.' }),
@@ -504,10 +509,13 @@ describe('scope', () => {
 
     await waitFor(() => expect(turns()).toHaveLength(1));
 
-    await user.click(screen.getByRole('button', { name: 'All' }));
+    await user.click(screen.getByRole('button', { name: 'Unattributed' }));
 
-    await waitFor(() => expect(turns()).toHaveLength(2));
+    await waitFor(() => expect(turns()).toHaveLength(1));
     expect(screen.getByText('From nobody at all.')).toBeVisible();
+    // The selected run's own turns are the *other* scope's; a scope that showed both would be
+    // two scopes fighting over one list, and neither of them would have a name that was true.
+    expect(screen.queryByText('From this orchestrator.')).not.toBeInTheDocument();
   });
 
   it('narrows to one agent when the rail selects one, and lets go again', async () => {
@@ -516,7 +524,7 @@ describe('scope', () => {
     const user = userEvent.setup();
 
     render(
-      <App
+      <CannedApp
         event={withTurns([
           turn({ id: 'alices', fromHandle: ALICE, taskId: TASK_A, body: 'Alice said this.' }),
           turn({ id: 'bobs', fromHandle: BOB, taskId: TASK_B, body: 'Bob said this.' }),
@@ -546,7 +554,7 @@ describe('a turn and its node', () => {
   it('selects the task a turn names when the turn is clicked', async () => {
     const user = userEvent.setup();
 
-    render(<App event={withTurns([turn({ taskId: TASK_B, body: 'About the other task.' })])} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={withTurns([turn({ taskId: TASK_B, body: 'About the other task.' })])} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     await user.click(screen.getByText('About the other task.'));
@@ -557,7 +565,7 @@ describe('a turn and its node', () => {
   });
 
   it('gives the dock up to the inspector when a node is selected, and takes it back when it is let go', async () => {
-    render(<App event={event()} loadTask={NO_DETAIL} />);
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
     clickNode(TASK_A);
@@ -576,7 +584,7 @@ describe('the empty conversation', () => {
     // Not "no messages": these tasks have no `created_by_terminal_handle`, so there is no
     // orchestrator on record. Nobody said anything to anybody, and the panel says exactly that.
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run({ id: 'run_unattributed', handle: null, label: 'Unattributed', cast: [], taskCount: 1 })],
@@ -591,5 +599,67 @@ describe('the empty conversation', () => {
     );
 
     expect(await screen.findByTestId('conversation-empty')).toHaveTextContent(/never attributed to a terminal/i);
+  });
+});
+
+describe('outcome receipts on a turn (#67)', () => {
+  /** A worker's completion, summarized: what it produced, as facts the panel can act on. */
+  function receiptTurn(over: Partial<Turn> = {}): Turn {
+    return turn({
+      kind: 'worker_done',
+      direction: 'in',
+      body: 'Three sentences of prose summary.',
+      receipt: [
+        {
+          kind: 'link',
+          value: 'https://gitlab.example.com/team/repo/-/merge_requests/3',
+          sources: ['worker_done.payload · prUrl'],
+        },
+        { kind: 'branch', value: 'nvergez/issue-67', sources: ['worker_done.payload · branch'] },
+        { kind: 'file', value: 'src/shared/receipt.ts', sources: ['worker_done.payload · filesModified'] },
+      ],
+      source: 'messages · #9',
+      ...over,
+    });
+  }
+
+  it('renders a validated URL as an ordinary link, whoever the provider is', async () => {
+    render(<CannedApp event={withTurns([receiptTurn()])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    const link = screen.getByTestId('receipt-link');
+
+    // Provider-neutral: the href is the URL, verbatim — no provider was consulted, and a
+    // self-hosted GitLab is exactly as much an outcome as GitHub (#67).
+    expect(link).toHaveAttribute('href', 'https://gitlab.example.com/team/repo/-/merge_requests/3');
+    // A receipt is untrusted text out of a database anyone can write to: a link out of it
+    // never gets this page's window, and never sends it a referrer.
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('renders paths and branches as copyable text, never as claims this machine can open them', async () => {
+    render(<CannedApp event={withTurns([receiptTurn()])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    // A copy affordance, not an <a href="file://…">: the path was true on the worker's
+    // machine at completion time, and copying is the one act that makes no further claim.
+    expect(screen.getByRole('button', { name: /copy the file path src\/shared\/receipt\.ts/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /copy the branch nvergez\/issue-67/i })).toBeVisible();
+    expect(screen.queryByRole('link', { name: /src\/shared\/receipt\.ts/ })).not.toBeInTheDocument();
+  });
+
+  it('says how many facts the cap cut, and that the inspector holds the rest', async () => {
+    render(<CannedApp event={withTurns([receiptTurn({ receiptOmitted: 22 })])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    expect(screen.getByTestId('receipt-omitted')).toHaveTextContent(/22 more/);
+  });
+
+  it('renders no receipt block at all on a turn that carries none', async () => {
+    render(<CannedApp event={withTurns([turn({ kind: 'worker_done', body: 'Prose only.' })])} loadTask={NO_DETAIL} />);
+    await screen.findByTestId('conversation');
+
+    expect(screen.queryByTestId('turn-receipt')).not.toBeInTheDocument();
   });
 });

@@ -1,11 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { App } from '../../src/client/App.tsx';
-import type { Meta, StreamEvent } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
+import type { Meta } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<App>` fed a canned `StreamEvent`. `StreamEvent` is already the client's
- * only input, so this is the highest available frontend seam and it costs nothing new — and
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the stream event plus the
+ * loaders' data, so this is the highest available frontend seam and it costs nothing new — and
  * the same fixtures feed both seams, so the contract cannot drift between them.
  *
  * What #14 owes the screen is **honesty about what is being read**. Every case below is a
@@ -24,30 +24,31 @@ const META: Meta = {
   historyLoss: [],
 };
 
-function event(meta: Partial<Meta> = {}): StreamEvent {
+function event(meta: Partial<Meta> = {}): CannedEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: { ...META, ...meta },
     snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
   };
 }
 
-describe('<App>', () => {
+describe('<CannedApp>', () => {
   it('tells you which database it is reading', () => {
-    render(<App event={event()} />);
+    render(<CannedApp event={event()} />);
 
     expect(screen.getByText('/home/dev/.config/orca/orchestration.db')).toBeVisible();
   });
 
   it('says so when it is connected to a running Orca', () => {
-    render(<App event={event({ liveness: 'live' })} />);
+    render(<CannedApp event={event({ liveness: 'live' })} />);
 
     expect(screen.getByText(/connected to a running Orca/i)).toBeVisible();
   });
 
   it("says Orca isn't running, and from when the data is, rather than pretending it is live", () => {
-    render(<App event={event({ liveness: 'stale', orcaPid: null })} />);
+    render(<CannedApp event={event({ liveness: 'stale', orcaPid: null })} />);
 
     const banner = screen.getByText(/Orca isn't running; showing last-known state from/i);
 
@@ -58,13 +59,13 @@ describe('<App>', () => {
   it('degrades an unknown liveness to the same honest stale wording', () => {
     // We could not read orca-runtime.json, so we do not know. Saying "live" would be a
     // guess, and this is the one thing the tool must never guess about.
-    render(<App event={event({ liveness: 'unknown', orcaPid: null })} />);
+    render(<CannedApp event={event({ liveness: 'unknown', orcaPid: null })} />);
 
     expect(screen.getByText(/Orca isn't running; showing last-known state from/i)).toBeVisible();
   });
 
   it('warns when the database comes from a newer Orca than this build knows about', () => {
-    render(<App event={event({ schemaVersion: 6, schemaSupport: 'newer' })} />);
+    render(<CannedApp event={event({ schemaVersion: 6, schemaSupport: 'newer' })} />);
 
     expect(screen.getByText(/newer Orca schema/i)).toBeVisible();
     expect(screen.getByText(/some data may be missing or mislabeled/i)).toBeVisible();
@@ -74,7 +75,7 @@ describe('<App>', () => {
     // Every feature, not the first one: this list *is* the explanation for an empty badge, and
     // a truncated one sends the user hunting for a bug that is really a missing column (#21).
     render(
-      <App
+      <CannedApp
         event={event({
           schemaVersion: 3,
           schemaSupport: 'older',
@@ -99,7 +100,7 @@ describe('<App>', () => {
     // user staring at an empty badge with nothing on screen to explain it, which is the bug
     // `meta.degraded` exists to prevent.
     render(
-      <App
+      <CannedApp
         event={event({
           schemaSupport: 'supported',
           degraded: ['The "last seen" badge — this Orca has no last_heartbeat_at column, so agent liveness is not shown.'],
@@ -113,7 +114,7 @@ describe('<App>', () => {
   it('says nothing about degradation when an older Orca happens to cost you nothing', () => {
     // The version alone is not a problem — a missing *column* is. An older schema we read in
     // full has no feature to name, and a banner over an empty list would be furniture.
-    render(<App event={event({ schemaVersion: 4, schemaSupport: 'older', degraded: [] })} />);
+    render(<CannedApp event={event({ schemaVersion: 4, schemaSupport: 'older', degraded: [] })} />);
 
     expect(screen.queryByText(/older Orca schema/i)).toBeNull();
   });
@@ -122,7 +123,7 @@ describe('<App>', () => {
   // two surfaces are pinned to the same evidence-first words (SPEC §5.1) by the tests and
   // not merely by sharing `shared/wording.ts`.
   it('explains lost message history with the exact evidence-first sentence', () => {
-    render(<App event={event({ historyLoss: ['message-history'] })} />);
+    render(<CannedApp event={event({ historyLoss: ['message-history'] })} />);
 
     expect(
       screen.getByText(
@@ -132,7 +133,7 @@ describe('<App>', () => {
   });
 
   it('explains lost task graph history with the exact evidence-first sentence', () => {
-    render(<App event={event({ historyLoss: ['task-graph-history'] })} />);
+    render(<CannedApp event={event({ historyLoss: ['task-graph-history'] })} />);
 
     expect(
       screen.getByText(
@@ -142,7 +143,7 @@ describe('<App>', () => {
   });
 
   it('raises both full notices, message history first, when both loss shapes are present', () => {
-    render(<App event={event({ historyLoss: ['message-history', 'task-graph-history'] })} />);
+    render(<CannedApp event={event({ historyLoss: ['message-history', 'task-graph-history'] })} />);
 
     const message = screen.getByText(
       'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.'
@@ -158,7 +159,7 @@ describe('<App>', () => {
   });
 
   it('says nothing about lost history, schemas or staleness when there is nothing to say', () => {
-    render(<App event={event()} />);
+    render(<CannedApp event={event()} />);
 
     expect(screen.queryByText(/reset/i)).toBeNull();
     expect(screen.queryByText(/history/i)).toBeNull();
@@ -168,7 +169,7 @@ describe('<App>', () => {
 
 
   it('says it is connecting before the first snapshot arrives', () => {
-    render(<App event={null} />);
+    render(<CannedApp event={null} />);
 
     expect(screen.getByText(/connecting/i)).toBeVisible();
   });
@@ -176,7 +177,7 @@ describe('<App>', () => {
   it('renders the stream presentation it is handed, apart from the liveness sentence (#57)', () => {
     // The transport can be down while Orca is very much alive — the two pills answer two
     // different questions, and the shell must be able to say both at once.
-    render(<App event={event({ liveness: 'live' })} connection="reconnecting" />);
+    render(<CannedApp event={event({ liveness: 'live' })} connection="reconnecting" />);
 
     const pill = screen.getByTestId('stream-state');
     expect(pill).toHaveAttribute('data-state', 'reconnecting');
@@ -185,7 +186,7 @@ describe('<App>', () => {
   });
 
   it('shows how old the applied snapshot is when it was given an apply time (#57)', () => {
-    render(<App event={event()} appliedAt={Date.now() - 125_000} />);
+    render(<CannedApp event={event()} appliedAt={Date.now() - 125_000} />);
 
     expect(screen.getByTestId('data-age')).toHaveTextContent(/^2m$/);
   });
@@ -193,7 +194,7 @@ describe('<App>', () => {
   it('claims no data age it was never handed (#57)', () => {
     // A canned event with no apply instant — the shell shows the data, and simply does not
     // invent a time it never observed.
-    render(<App event={event()} />);
+    render(<CannedApp event={event()} />);
 
     expect(screen.queryByTestId('data-age')).toBeNull();
   });

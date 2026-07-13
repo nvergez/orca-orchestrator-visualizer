@@ -1,11 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { App } from '../../src/client/App.tsx';
-import type { CastMember, Enrichment, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { CastMember, Enrichment, Meta, Run, Task } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 
 /**
- * Live Orca context on the cast (#61) — seam 2: `<App>` fed a canned `StreamEvent`.
+ * Live Orca context on the cast (#61) — seam 2: `<CannedApp>` fed a canned world.
  *
  * The server has already done everything hard: the exact join, the ambiguity rule, the
  * honest states. What the client owes is exactly three things, asserted here:
@@ -100,10 +100,14 @@ function runOf(tasks: Task[]): Run {
   };
 }
 
-function event(tasks: Task[], enrichment?: Enrichment): StreamEvent {
-  const streamEvent: StreamEvent = {
+function event(tasks: Task[], enrichment?: Enrichment): CannedEvent {
+  // The enrichment still rides on the *event* after #69 — it is live context about the runs, not
+  // retained evidence of them, so it never moved to the paged reads. The runs it is joined
+  // against did move, which is why they are the canned world here rather than event payload.
+  const streamEvent: CannedEvent = {
     seq: 0,
     meta: META,
+    affected: { all: true, runIds: [], unplaced: false },
     snapshot: { runs: [runOf(tasks)], tasks, gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
   };
@@ -145,7 +149,7 @@ async function agentRow(): Promise<HTMLElement> {
 
 describe('live Orca context on the cast', () => {
   it('says where a joined worker works, and what it is doing right now', async () => {
-    render(<App event={event([task()], enrichmentOf())} />);
+    render(<CannedApp event={event([task()], enrichmentOf())} />);
 
     const row = await agentRow();
     const worktree = within(row).getByTestId('agent-worktree');
@@ -166,7 +170,7 @@ describe('live Orca context on the cast', () => {
     const ambiguous = enrichmentOf();
     delete ambiguous.workers[0]!.activity;
 
-    render(<App event={event([task()], ambiguous)} />);
+    render(<CannedApp event={event([task()], ambiguous)} />);
 
     const row = await agentRow();
     expect(within(row).getByTestId('agent-worktree')).toHaveTextContent('issue-61');
@@ -176,7 +180,7 @@ describe('live Orca context on the cast', () => {
   });
 
   it('adds nothing to a worker the join could not place', async () => {
-    render(<App event={event([task()], enrichmentOf({ workers: [] }))} />);
+    render(<CannedApp event={event([task()], enrichmentOf({ workers: [] }))} />);
 
     const row = await agentRow();
     expect(within(row).queryByTestId('agent-worktree')).toBeNull();
@@ -184,7 +188,7 @@ describe('live Orca context on the cast', () => {
   });
 
   it('says honestly, once, that live context is unavailable when the adapter failed', async () => {
-    render(<App event={event([task()], { state: 'unavailable', fetchedAt: null, workers: [] })} />);
+    render(<CannedApp event={event([task()], { state: 'unavailable', fetchedAt: null, workers: [] })} />);
 
     await agentRow();
     expect(screen.getByTestId('enrichment-unavailable')).toHaveTextContent(/unavailable/i);
@@ -192,18 +196,18 @@ describe('live Orca context on the cast', () => {
 
   it('renders nothing at all while enrichment is off, pending, or Orca is not live', async () => {
     // Off: the wire has no field. The screen must look exactly as it did before #61 existed.
-    const view = render(<App event={event([task()])} />);
+    const view = render(<CannedApp event={event([task()])} />);
     await agentRow();
     expect(screen.queryByTestId('enrichment-unavailable')).toBeNull();
     expect(screen.queryByTestId('agent-worktree')).toBeNull();
 
     // Suspended: enabled, but Orca is closed — a live-only feature disappears honestly.
-    view.rerender(<App event={event([task()], { state: 'suspended', fetchedAt: null, workers: [] })} />);
+    view.rerender(<CannedApp event={event([task()], { state: 'suspended', fetchedAt: null, workers: [] })} />);
     expect(screen.queryByTestId('enrichment-unavailable')).toBeNull();
     expect(screen.queryByTestId('agent-worktree')).toBeNull();
 
     // Pending: enabled and live, first answer not landed. Silence, not a spinner.
-    view.rerender(<App event={event([task()], { state: 'pending', fetchedAt: null, workers: [] })} />);
+    view.rerender(<CannedApp event={event([task()], { state: 'pending', fetchedAt: null, workers: [] })} />);
     expect(screen.queryByTestId('enrichment-unavailable')).toBeNull();
   });
 
@@ -217,7 +221,7 @@ describe('live Orca context on the cast', () => {
       ],
     });
 
-    render(<App event={event([task()], withOrchestrator)} />);
+    render(<CannedApp event={event([task()], withOrchestrator)} />);
     await agentRow();
 
     expect(screen.getByTestId('orchestrator-worktree')).toHaveTextContent('main');
@@ -236,7 +240,7 @@ describe('enrichment pushes against the canvas (#46)', () => {
 
   it('updates live context in place without remounting the DAG or resetting its viewport', async () => {
     const tasks = [task(), task({ id: 'task_bbbbbbbb', title: 'Second task', deps: ['task_aaaaaaaa'] })];
-    const view = render(<App event={event(tasks, enrichmentOf())} />);
+    const view = render(<CannedApp event={event(tasks, enrichmentOf())} />);
     await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
 
     await zoomToMaximum();
@@ -247,7 +251,7 @@ describe('enrichment pushes against the canvas (#46)', () => {
     const updated = enrichmentOf();
     updated.workers[0]!.activity!.toolName = 'Edit';
     updated.workers[0]!.activity!.toolInput = 'src/server/enrichment.ts';
-    view.rerender(<App event={event(tasks, updated)} />);
+    view.rerender(<CannedApp event={event(tasks, updated)} />);
 
     expect(screen.queryByText(/Laying out/i)).toBeNull();
     expect(screen.getAllByTestId('task-node')).toHaveLength(2);

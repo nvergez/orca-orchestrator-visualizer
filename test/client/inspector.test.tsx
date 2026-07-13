@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../src/client/App.tsx';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type {
   CastMember,
@@ -9,14 +9,13 @@ import type {
   Gate,
   Meta,
   Run,
-  StreamEvent,
   Task,
   TaskDetail,
   Turn,
 } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — and, for this ticket, a canned loader.
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — and, for this ticket, a canned loader.
  *
  * Clicking a task is where the graph stops being a picture and starts being an account of what
  * happened: the spec the agent was handed, the result that came back, **every** dispatch attempt
@@ -25,7 +24,7 @@ import type {
  *
  * The loader is injected rather than mocked at the `fetch` boundary, because the laziness is the
  * point: what the tests must be able to see is *when* the bodies are asked for and *how often* —
- * and a stub that records its calls says that plainly (`<App loadTask={…}>`).
+ * and a stub that records its calls says that plainly (`<CannedApp loadTask={…}>`).
  */
 
 const META: Meta = {
@@ -84,9 +83,10 @@ function run(over: Partial<Run> = {}): Run {
   };
 }
 
-function event(over: Partial<StreamEvent> = {}): StreamEvent {
+function event(over: Partial<CannedEvent> = {}): CannedEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     snapshot: { runs: [run()], tasks: [task()], gates: [], turns: [], coordinatorRuns: [] },
     messages: [],
@@ -132,6 +132,8 @@ function detail(over: Partial<TaskDetail> = {}): TaskDetail {
     spec: 'Build the node inspector, and the route it exists for.',
     result: null,
     attempts: [],
+    receipt: [],
+    completions: [],
     ...over,
   };
 }
@@ -184,7 +186,7 @@ afterEach(() => {
  */
 describe('the right dock', () => {
   it('swaps the conversation for the inspector when a node is selected', async () => {
-    render(<App event={event({ })} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event({ })} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     expect(conversation()).not.toBeNull();
@@ -197,7 +199,7 @@ describe('the right dock', () => {
   });
 
   it('goes back to the conversation when the selection is let go', async () => {
-    render(<App event={event({ })} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event({ })} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     await open();
@@ -210,7 +212,7 @@ describe('the right dock', () => {
 
   it('closes from the inspector itself, and the canvas lets the node go with it', async () => {
     const user = userEvent.setup();
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -227,7 +229,7 @@ describe('the right dock', () => {
  */
 describe('the header', () => {
   it('names the task, its status, and its id in full', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -242,7 +244,7 @@ describe('the header', () => {
     // `userEvent.setup()` installs the clipboard the browser would have — so what is asserted
     // here is the id landing in it, and not a spy standing where the clipboard should be.
     const user = userEvent.setup();
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -279,7 +281,7 @@ describe('the identifiers', () => {
 
   it('copies the whole handle of the agent that held an attempt — the badge shows eight hex of it', async () => {
     const user = userEvent.setup();
-    render(<App event={event()} loadTask={loaderFor(detail({ attempts: [attempt()] }))} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail({ attempts: [attempt()] }))} />);
     await drawn(1);
 
     const panel = await open();
@@ -295,7 +297,7 @@ describe('the identifiers', () => {
   it('copies the id of a gate the task raised', async () => {
     const user = userEvent.setup();
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: { runs: [run()], tasks: [task({ gate: GATE })], gates: [GATE], turns: [], coordinatorRuns: [] },
         })}
@@ -320,7 +322,7 @@ describe('the identifiers', () => {
 describe('the spec and the result', () => {
   it('are not fetched until a node is clicked', async () => {
     const load = loaderFor(detail());
-    render(<App event={event()} loadTask={load} />);
+    render(<CannedApp event={event()} loadTask={load} />);
     await drawn(1);
 
     expect(load).not.toHaveBeenCalled();
@@ -334,7 +336,7 @@ describe('the spec and the result', () => {
     const load = loaderFor(
       detail({ spec: 'Build the node inspector.', result: 'Done: it swaps with the feed.' })
     );
-    render(<App event={event()} loadTask={load} />);
+    render(<CannedApp event={event()} loadTask={load} />);
     await drawn(1);
 
     const panel = await open();
@@ -345,7 +347,7 @@ describe('the spec and the result', () => {
 
   it('say so honestly when the task has none — a blank panel looks like a bug', async () => {
     const load = loaderFor(detail({ spec: null, result: null }));
-    render(<App event={event()} loadTask={load} />);
+    render(<CannedApp event={event()} loadTask={load} />);
     await drawn(1);
 
     const panel = await open();
@@ -355,7 +357,7 @@ describe('the spec and the result', () => {
 
   it('are re-read when the database changes, so an open inspector is not a stale one', async () => {
     const load = loaderFor(detail({ result: null }));
-    const { rerender } = render(<App event={event()} loadTask={load} />);
+    const { rerender } = render(<CannedApp event={event()} loadTask={load} />);
     await drawn(1);
 
     await open();
@@ -364,7 +366,7 @@ describe('the spec and the result', () => {
     // A push arrives (the poll loop only pushes when the file really changed — #17). The task
     // being read may have just completed, and an inspector that never asked again would go on
     // showing "no result yet" over a result that is sitting in the database.
-    rerender(<App event={event({ seq: 1 })} loadTask={load} />);
+    rerender(<CannedApp event={event({ seq: 1 })} loadTask={load} />);
 
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
   });
@@ -373,7 +375,7 @@ describe('the spec and the result', () => {
     const load = vi.fn(async () => {
       throw new Error('the database was deleted');
     }) as unknown as TaskLoader;
-    render(<App event={event()} loadTask={load} />);
+    render(<CannedApp event={event()} loadTask={load} />);
     await drawn(1);
 
     const panel = await open();
@@ -397,7 +399,7 @@ describe('the dispatch attempts', () => {
   ];
 
   it('are all there, in the order they were made — not just the latest', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail({ attempts: THREE }))} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail({ attempts: THREE }))} />);
     await drawn(1);
 
     const panel = await open();
@@ -411,7 +413,7 @@ describe('the dispatch attempts', () => {
   });
 
   it('name the terminal that held each one — a retry goes to a new worktree, and a new agent', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail({ attempts: THREE }))} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail({ attempts: THREE }))} />);
     await drawn(1);
 
     const panel = await open();
@@ -425,7 +427,7 @@ describe('the dispatch attempts', () => {
 
   it('say plainly when a task was never dispatched at all', async () => {
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run()],
@@ -497,7 +499,7 @@ describe('the exchange', () => {
     }),
   ];
 
-  function withExchange(): StreamEvent {
+  function withExchange(): CannedEvent {
     return event({
       snapshot: {
         runs: [run({ cast: [AGENT] })],
@@ -510,7 +512,7 @@ describe('the exchange', () => {
   }
 
   it('shows both sides — including the prompt, which no message anywhere records', async () => {
-    render(<App event={withExchange()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={withExchange()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -526,7 +528,7 @@ describe('the exchange', () => {
   });
 
   it('collapses the heartbeats into one line, and says how many it stood in for', async () => {
-    render(<App event={withExchange()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={withExchange()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -541,7 +543,7 @@ describe('the exchange', () => {
   });
 
   it('says so when a task was never dispatched — nobody was ever given it, so nobody spoke', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -573,14 +575,14 @@ describe('the gate Q&A', () => {
     };
   }
 
-  function withGates(gates: Gate[]): StreamEvent {
+  function withGates(gates: Gate[]): CannedEvent {
     return event({
       snapshot: { runs: [run()], tasks: [task({ gate: gates[0] ?? null })], gates, turns: [], coordinatorRuns: [] },
     });
   }
 
   it('shows an answered question, and the answer', async () => {
-    render(<App event={withGates([gate()])} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={withGates([gate()])} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -594,7 +596,7 @@ describe('the gate Q&A', () => {
     // Both blocking shapes wear the warning: a table-backed pending gate, and an unanswered
     // ask whose task is authoritatively blocked right now (#45).
     render(
-      <App
+      <CannedApp
         event={withGates([gate({ status: 'pending', blocking: true, resolution: null })])}
         loadTask={loaderFor(detail())}
       />
@@ -610,7 +612,7 @@ describe('the gate Q&A', () => {
     // A reply-less ask proves only that no answer was retained (CONTEXT.md, "Unanswered
     // Ask"). "Waiting" would be the pre-#45 lie, one panel down.
     render(
-      <App
+      <CannedApp
         event={withGates([gate({ status: 'unanswered', blocking: false, resolution: null })])}
         loadTask={loaderFor(detail())}
       />
@@ -626,7 +628,7 @@ describe('the gate Q&A', () => {
 
   it('shows a timed-out gate as timed out — a terminal state with its own name', async () => {
     render(
-      <App
+      <CannedApp
         event={withGates([gate({ status: 'timeout', blocking: false, resolution: null })])}
         loadTask={loaderFor(detail())}
       />
@@ -640,7 +642,7 @@ describe('the gate Q&A', () => {
 
   it('shows every gate this task raised, not only the one the node marks', async () => {
     render(
-      <App
+      <CannedApp
         event={withGates([
           gate({ id: 'msg_one', question: 'Asked first, and answered' }),
           gate({ id: 'msg_two', question: 'Asked second, no answer', status: 'unanswered', resolution: null }),
@@ -656,7 +658,7 @@ describe('the gate Q&A', () => {
   });
 
   it('says nothing at all when the task never raised one', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
@@ -671,7 +673,7 @@ describe('the dependencies', () => {
   const HERE = task({ id: TASK_ID, deps: ['task_before'] });
   const AFTER = task({ id: 'task_after', title: 'The one after', status: 'pending', deps: [TASK_ID] });
 
-  function chain(): StreamEvent {
+  function chain(): CannedEvent {
     return event({
       snapshot: {
         runs: [run({ edgeCount: 2, taskCount: 3 })],
@@ -684,7 +686,7 @@ describe('the dependencies', () => {
   }
 
   it('shows what this task waited for, and what waited on it', async () => {
-    render(<App event={chain()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={chain()} loadTask={loaderFor(detail())} />);
     await drawn(3);
 
     const panel = await open();
@@ -695,7 +697,7 @@ describe('the dependencies', () => {
 
   it('walks to the neighbour when its chip is clicked — the inspector follows the selection', async () => {
     const user = userEvent.setup();
-    render(<App event={chain()} loadTask={loaderFor(detail(), detail({ id: 'task_after' }))} />);
+    render(<CannedApp event={chain()} loadTask={loaderFor(detail(), detail({ id: 'task_after' }))} />);
     await drawn(3);
 
     const panel = await open();
@@ -721,7 +723,7 @@ describe('the dependencies', () => {
     });
 
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [
@@ -755,7 +757,7 @@ describe('the dependencies', () => {
     // No foreign keys in this schema (SPEC §4.2, trap 8): `deps` can name a task an
     // `orchestration reset` deleted. The canvas drops that edge; the chip has to admit it.
     render(
-      <App
+      <CannedApp
         event={event({
           snapshot: {
             runs: [run()],
@@ -778,12 +780,118 @@ describe('the dependencies', () => {
   });
 
   it('says so when a task has no dependencies at all — 4 of 13 real runs have none', async () => {
-    render(<App event={event()} loadTask={loaderFor(detail())} />);
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
     await drawn(1);
 
     const panel = await open();
 
     expect(within(panel).getByTestId('deps-in')).toHaveTextContent(/nothing/i);
     expect(within(panel).getByTestId('deps-out')).toHaveTextContent(/nothing/i);
+  });
+});
+
+/**
+ * The outcome receipts (#67, SPEC §12.4): the inspector is where the *whole* receipt lives —
+ * every recognized fact from both evidence sources, merged with its provenance on screen, and
+ * the complete raw evidence beside it. The conversation's compact summary points here.
+ */
+describe('the outcome receipts', () => {
+  const withReceipt = detail({
+    result: '{"branch":"nvergez/94-codex","filesModified":["src/a.ts"]}',
+    receipt: [
+      { kind: 'branch', value: 'nvergez/94-codex', sources: ['tasks.result · branch'] },
+      { kind: 'branch', value: 'nvergez/94-claude', sources: ['worker_done.payload · branch'] },
+      {
+        kind: 'file',
+        value: 'src/a.ts',
+        sources: ['tasks.result · filesModified', 'worker_done.payload · filesModified'],
+      },
+    ],
+    completions: [
+      {
+        messageId: 'msg_strange',
+        at: '2026-07-08T12:38:00.000Z',
+        payload: `{"taskId":"${TASK_ID}","outcome":{"nested":["x"]},"score":0.9}`,
+      },
+    ],
+  });
+
+  it('shows every merged fact with its provenance on screen — a conflict stays two facts', async () => {
+    render(<CannedApp event={event()} loadTask={loaderFor(withReceipt)} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+
+    // The conflict: the result named one branch and the worker another. Both render, and
+    // each fact's caption says which column claimed it — the provenance is what makes the
+    // deduplicated file below honest, so it is on screen, not in a tooltip (#67).
+    expect(within(outcome).getByRole('button', { name: /copy the branch nvergez\/94-codex/i })).toBeInTheDocument();
+    expect(within(outcome).getByRole('button', { name: /copy the branch nvergez\/94-claude/i })).toBeInTheDocument();
+
+    const sources = within(outcome)
+      .getAllByTestId('receipt-sources')
+      .map((caption) => caption.textContent);
+    expect(sources).toContain('tasks.result · branch');
+    expect(sources).toContain('worker_done.payload · branch');
+    // The agreement: one chip, both provenances.
+    expect(sources).toContain('tasks.result · filesModified, worker_done.payload · filesModified');
+  });
+
+  it('keeps the raw completion payload verbatim — the shape nobody has seen most of all', async () => {
+    render(<CannedApp event={event()} loadTask={loaderFor(withReceipt)} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+    const raw = within(outcome).getByTestId('completion-payload');
+
+    // Schema tolerance applies to outcomes too (#67): the reader recognized none of this,
+    // and all of it reaches the screen anyway — the column's text itself, not a re-print.
+    expect(raw.textContent).toContain('"score":0.9');
+    expect(raw.textContent).toContain('"nested"');
+    // The message id is real and Orca-written, so it is copyable (SPEC §7.9).
+    expect(within(outcome).getByRole('button', { name: /copy the message id msg_strange/i })).toBeInTheDocument();
+  });
+
+  it('renders a payload that never parsed as the string it is', async () => {
+    render(
+      <CannedApp
+        event={event()}
+        loadTask={loaderFor(
+          detail({
+            receipt: [],
+            completions: [{ messageId: 'msg_broken', at: '', payload: '{"files": [' }],
+          })
+        )}
+      />
+    );
+    await drawn(1);
+    const panel = await open();
+
+    expect(within(panel).getByTestId('completion-payload').textContent).toContain('{"files": [');
+  });
+
+  it('claims no space at all on a task with nothing recognized and no completion', async () => {
+    render(<CannedApp event={event()} loadTask={loaderFor(detail())} />);
+    await drawn(1);
+    const panel = await open();
+
+    expect(within(panel).queryByTestId('outcome-receipts')).not.toBeInTheDocument();
+  });
+
+  it('never caps — this is where the conversation says the rest of the facts are', async () => {
+    const facts = Array.from({ length: 20 }, (_, n) => ({
+      kind: 'file' as const,
+      value: `src/generated/file-${n}.ts`,
+      sources: ['tasks.result · filesModified'],
+    }));
+    render(<CannedApp event={event()} loadTask={loaderFor(detail({ receipt: facts }))} />);
+    await drawn(1);
+    const panel = await open();
+
+    const outcome = within(panel).getByTestId('outcome-receipts');
+    expect(within(outcome).getAllByRole('button', { name: /copy the file path/i })).toHaveLength(20);
+    expect(within(outcome).queryByTestId('receipt-omitted')).not.toBeInTheDocument();
   });
 });

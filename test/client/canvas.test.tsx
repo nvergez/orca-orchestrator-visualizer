@@ -1,13 +1,13 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../src/client/App.tsx';
 import { STATUS_THEME, UNKNOWN_STATUS_THEME } from '../../src/client/canvas/theme.ts';
 import { STALE_HEARTBEAT_MS } from '../../src/shared/run-health.ts';
-import type { CastMember, Dispatch, Meta, Run, StreamEvent, Task, Wave } from '../../src/shared/types.ts';
+import type { CastMember, Dispatch, Meta, Run, Task, Wave } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 
 /**
- * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input, and therefore
+ * Seam 2 (#12): `<CannedApp>` fed a canned world (`CannedEvent`, canned.tsx) — the client's only input, and therefore
  * the highest frontend seam there is.
  *
  * What is asserted is the DOM the user reads: the title on the node, the status chip, the
@@ -123,9 +123,10 @@ function runOf(tasks: Task[], over: Partial<Run> = {}): Run {
   };
 }
 
-function event(tasks: Task[], over: Partial<Run> = {}): StreamEvent {
+function event(tasks: Task[], over: Partial<Run> = {}): CannedEvent {
   return {
     seq: 0,
+    affected: { all: true, runIds: [], unplaced: false },
     meta: META,
     // No tasks means no orchestrator to have created them — the empty database, honestly.
     snapshot: {
@@ -141,7 +142,7 @@ function event(tasks: Task[], over: Partial<Run> = {}): StreamEvent {
 
 /** The canvas lays out asynchronously (elkjs), so the nodes arrive on a later tick. */
 async function draw(tasks: Task[], over: Partial<Run> = {}): Promise<HTMLElement[]> {
-  render(<App event={event(tasks, over)} />);
+  render(<CannedApp event={event(tasks, over)} />);
   await waitFor(() => expect(screen.getAllByTestId('task-node').length).toBe(tasks.length));
   return screen.getAllByTestId('task-node');
 }
@@ -316,7 +317,7 @@ describe('the task DAG on the canvas', () => {
       }),
       attemptCount: 1,
     });
-    render(<App event={event([quietTask])} />);
+    render(<CannedApp event={event([quietTask])} />);
     await vi.waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(1));
 
     expect(node('task_quiet_stream')).toHaveAttribute('data-health', 'quiet');
@@ -370,7 +371,7 @@ describe('live snapshot updates', () => {
       task({ id: 'task_one', title: 'First task' }),
       task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
     ];
-    const view = render(<App event={event(first)} />);
+    const view = render(<CannedApp event={event(first)} />);
     await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
 
     await zoomToMaximum();
@@ -388,7 +389,7 @@ describe('live snapshot updates', () => {
       }),
       task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
     ];
-    view.rerender(<App event={event(second)} />);
+    view.rerender(<CannedApp event={event(second)} />);
 
     expect(screen.queryByText(/Laying out/i)).toBeNull();
     expect(within(node('task_one')).getByText('dispatched')).toBeVisible();
@@ -401,13 +402,13 @@ describe('live snapshot updates', () => {
       task({ id: 'task_one', title: 'First task' }),
       task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
     ];
-    const view = render(<App event={event(first)} />);
+    const view = render(<CannedApp event={event(first)} />);
     await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
 
     await zoomToMaximum();
 
     view.rerender(
-      <App
+      <CannedApp
         event={event([
           task({
             id: 'task_one',
@@ -544,7 +545,7 @@ describe('tasks that depend on nothing', () => {
 
 describe('a database with nothing in it', () => {
   it('says so rather than drawing an empty canvas', async () => {
-    render(<App event={event([])} />);
+    render(<CannedApp event={event([])} />);
 
     expect(await screen.findByText(/No tasks in this database/i)).toBeVisible();
   });
@@ -655,12 +656,12 @@ describe('the waves', () => {
   it('replaces the layout when the same tasks move into different wave bounds', async () => {
     const tasks = [task({ id: 'task_one' }), task({ id: 'task_two' })];
     const view = render(
-      <App event={event(tasks, { waves: waves([['task_one', 'task_two']], [null]) })} />
+      <CannedApp event={event(tasks, { waves: waves([['task_one', 'task_two']], [null]) })} />
     );
     await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
 
     view.rerender(
-      <App
+      <CannedApp
         event={event(tasks, {
           waves: waves([['task_one'], ['task_two']], [null, 14 * 60 * 60 * 1000]),
         })}

@@ -5,10 +5,11 @@ import { type Pulse, PULSE_MS, pulseOf } from './theme.ts';
 /**
  * **What just happened** — the one question a snapshot cannot answer.
  *
- * The conversation itself is `snapshot.turns`: re-derived whole on every push, and the client does
- * nothing to it but choose a scope. So nothing on this page has to *remember* messages any more…
- * except for this. A pulse is the difference between a row that has always been there and a row
- * that landed a second ago, and a snapshot — which is a photograph — has no way to tell you which.
+ * The conversation itself is the selected-run snapshot's `turns`: refetched whole when a push
+ * names the run (#69), and the client does nothing to it but choose a scope. So nothing on this
+ * page has to *remember* messages any more… except for this. A pulse is the difference between a
+ * row that has always been there and a row that landed a second ago, and a snapshot — which is a
+ * photograph — has no way to tell you which.
  *
  * `StreamEvent.messages` still does: it is the append-only delta after the client's cursor (SPEC
  * §6.3), so anything in it is, by construction, news. That is the whole of what it is for now, and
@@ -21,9 +22,10 @@ const NOTHING: FeedMessage[] = [];
 /**
  * The messages that arrived in the **last** push, and none on the first.
  *
- * The distinction is the pulse: a message that just landed is news and flashes its node; the 466
- * that come down on first connect are the *page*, and flashing them would strobe the whole canvas
- * at once for the sake of announcing four days of history.
+ * The distinction is the pulse: a message that just landed is news and flashes its node. The
+ * first push carries no backfill any more (#69), so the guard is now a defence rather than a
+ * filter — against any wire that hands the first event history, because flashing history would
+ * strobe the whole canvas at once for the sake of announcing four days of it.
  */
 export function useArrivals(event: StreamEvent | null): FeedMessage[] {
   const [arrived, setArrived] = useState<FeedMessage[]>(NOTHING);

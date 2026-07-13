@@ -1,0 +1,3 @@
+# Export selected retained rows, never record orchestration history
+
+orca-viz may create a versioned, self-contained run archive only when a user explicitly exports one selected orchestrator run. The archive captures the run's retained task details and attempts plus messages attributed to that run at that moment, and archived replay must be unmistakably offline; background recording, future-row capture, machine-global database export, unattributed/global messages, mutation, and automatic retention remain forbidden because they would turn a read-only history reader into a shadow event store and weaken the privacy boundary.

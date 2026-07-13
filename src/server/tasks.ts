@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Dispatch } from '../shared/types.ts';
+import { receiptOfResult } from '../shared/receipt.ts';
+import type { Dispatch, Task } from '../shared/types.ts';
+import { dispatchDuration, taskDuration } from './durations.ts';
 import { type Columns, type Row, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
 import { byInstant, isoInstant } from './time.ts';
@@ -54,19 +56,25 @@ const TASK_COLUMNS = [
 export const BODY_PREVIEW_CHARS = 240;
 
 /**
- * The bodies never cross the SQLite boundary in the first place.
+ * The spec never crosses the SQLite boundary whole.
  *
  * `substr` is what keeps that true now that the conversation wants the beginning of a spec:
  * SQLite slices the column and hands over 240 characters, and the other 3 KB of agent prompt
  * stays in the file. Reading the whole thing into the process to slice it here would be the
- * same waste the snapshot exists to avoid (SPEC §6.3).
+ * same waste the snapshot exists to avoid (SPEC §6.3). One character *past* the cap, so that
+ * "was there more?" is a fact about the string we hold rather than a guess: a preview longer
+ * than the cap is a body that was cut.
  *
- * One character *past* the cap, so that "was there more?" is a fact about the string we hold
- * rather than a guess: a preview longer than the cap is a body that was cut.
+ * **`result` used to be sliced here too, and no longer is** — the receipt readers (#67) parse
+ * it, and a truncated JSON receipt parses to nothing: the summary would silently vanish on
+ * exactly the results structured enough to have one. So the *result* is read whole into the
+ * process, its facts are recognized there, and what reaches the wire is still only the
+ * 240-character preview plus the compact facts. The asymmetry is the honest one: `spec` is
+ * whatever a person typed at their agents and grows without limit (the 172 KB dump was almost
+ * entirely spec text); `result` is the receipt the worker handed back.
  */
 const BODY_PREVIEW: Record<string, string> = {
   spec: `substr(spec, 1, ${BODY_PREVIEW_CHARS + 1}) AS spec`,
-  result: `substr(result, 1, ${BODY_PREVIEW_CHARS + 1}) AS result`,
 };
 
 /**
@@ -111,6 +119,32 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
       const spec = text(row.spec);
       const result = text(row.result);
 
+      const task: Task = {
+        id,
+        // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
+        runId: '',
+        // Filled by `attachGates` — from the `decision_gate` *messages* that raise a gate,
+        // never from the `decision_gates` table, which is empty on every real database
+        // (SPEC §4.2, trap 1). Nothing about a task row says it is blocked.
+        gate: null,
+        parentId: text(row.parent_id),
+        title: name ?? shortId(id),
+        // Verbatim: a status this tool has never heard of still names a real state, and a
+        // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
+        status: text(row.status) ?? '',
+        deps: parseDeps(row.deps),
+        createdAt: isoInstant(row.created_at) ?? '',
+        completedAt: isoInstant(row.completed_at),
+        hasSpec: spec !== null,
+        hasResult: result !== null,
+        dispatch: latest,
+        attemptCount: held.length,
+      };
+
+      // Absent when the retained endpoints support no number — never zero, never the epoch (#66).
+      const duration = taskDuration(task);
+      if (duration !== undefined) task.duration = duration;
+
       return {
         // Absent before schema v4, and null on 4 of 76 live tasks even now: both land the
         // task in the one synthetic `run_unattributed` rather than losing it (SPEC §4.3).
@@ -119,27 +153,11 @@ export function readTasks(db: DatabaseSync, columns: Columns): TaskWithHandle[] 
         attempts: held,
         spec: preview(spec),
         result: preview(result),
-        task: {
-          id,
-          // Filled by `inferRuns` — the schema has no run id, so nothing here can read one.
-          runId: '',
-          // Filled by `attachGates` — from the `decision_gate` *messages* that raise a gate,
-          // never from the `decision_gates` table, which is empty on every real database
-          // (SPEC §4.2, trap 1). Nothing about a task row says it is blocked.
-          gate: null,
-          parentId: text(row.parent_id),
-          title: name ?? shortId(id),
-          // Verbatim: a status this tool has never heard of still names a real state, and a
-          // task missing from the graph is a worse lie than a task in an odd colour (SPEC §5).
-          status: text(row.status) ?? '',
-          deps: parseDeps(row.deps),
-          createdAt: isoInstant(row.created_at) ?? '',
-          completedAt: isoInstant(row.completed_at),
-          hasSpec: spec !== null,
-          hasResult: result !== null,
-          dispatch: latest,
-          attemptCount: held.length,
-        },
+        // From the whole column (`BODY_PREVIEW` says why) — a receipt sliced at 240
+        // characters is malformed JSON, and the facts would vanish from exactly the results
+        // structured enough to carry them (#67).
+        resultReceipt: receiptOfResult(result),
+        task,
       };
     })
     .sort(byCreation);
@@ -151,8 +169,9 @@ export type Preview = { text: string; truncated: boolean };
 function preview(body: string | null): Preview | null {
   if (body === null) return null;
 
-  // SQLite was asked for one character past the cap (`BODY_PREVIEW`), so a preview that is
-  // *longer* than the cap is the proof that the column held more — no second read, no guess.
+  // A string longer than the cap is the proof that the column held more — for the spec,
+  // because SQLite was asked for one character *past* the cap (`BODY_PREVIEW`); for the
+  // result, because the whole column is in hand. No second read, no guess.
   return body.length > BODY_PREVIEW_CHARS
     ? { text: body.slice(0, BODY_PREVIEW_CHARS), truncated: true }
     : { text: body, truncated: false };
@@ -189,7 +208,7 @@ function readAttempts(db: DatabaseSync, columns: Columns): Map<string, Dispatch[
 }
 
 export function toDispatch(row: Row): Dispatch {
-  return {
+  const dispatch: Dispatch = {
     id: text(row.id) ?? '',
     assigneeHandle: text(row.assignee_handle) ?? '',
     status: text(row.status) ?? '',
@@ -203,6 +222,12 @@ export function toDispatch(row: Row): Dispatch {
     // `meta.degraded` says so on screen.
     lastHeartbeatAt: isoInstant(row.last_heartbeat_at),
   };
+
+  // The attempt's own clock, both endpoints from this row (#66). Absent when they cannot carry it.
+  const duration = dispatchDuration(dispatch);
+  if (duration !== undefined) dispatch.duration = duration;
+
+  return dispatch;
 }
 
 /**

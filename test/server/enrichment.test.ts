@@ -13,7 +13,7 @@ import {
   type OrcaView,
   type RunOrcaCommand,
 } from '../../src/server/enrichment.ts';
-import { EventStream, type StreamClient, type StreamSource } from '../../src/server/stream.ts';
+import { EventStream, type PushResult, type StreamClient, type StreamSource } from '../../src/server/stream.ts';
 import type { Liveness, StreamEvent } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
 import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
@@ -335,7 +335,13 @@ describe('the adapter', () => {
   });
 });
 
-/** A bare, valid event over an empty database — what a stub source hands the code under test. */
+/**
+ * A bare, valid event over an empty database — what a stub source hands the code under test.
+ *
+ * #69 took the full history off the event, so there is no `snapshot` here any more; the handles
+ * the enrichment joins against ride on the `PushResult` beside it (`pushOf`), which is where the
+ * real source now hands them over too.
+ */
 function plainEvent(liveness: Liveness = 'live'): StreamEvent {
   return {
     seq: 0,
@@ -351,9 +357,14 @@ function plainEvent(liveness: Liveness = 'live'): StreamEvent {
       // "no reset detected"; the same claim is now an empty list — no safe history-loss claim.
       historyLoss: [],
     },
-    snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
+    affected: { all: true, runIds: [], unplaced: false },
     messages: [],
   };
+}
+
+/** One read of a stub source: the event, no runs to fingerprint, and the handles to join on. */
+function pushOf(liveness: Liveness = 'live', handles: string[] = []): PushResult {
+  return { event: plainEvent(liveness), digests: new Map(), handles };
 }
 
 /** A counting stream source whose enrichment generation the test moves by hand. */
@@ -365,9 +376,9 @@ function stubSource(): StreamSource & { bump(): void; reads: { snapshots: number
     dataVersion: () => 1,
     liveness: () => 'live',
     enrichmentVersion: () => generation,
-    snapshot: () => {
+    push: () => {
       reads.snapshots += 1;
-      return plainEvent();
+      return pushOf();
     },
     bump: () => {
       generation += 1;
@@ -383,10 +394,12 @@ describe('the wire-level liveness gate', () => {
     await adapter.refresh();
     expect(adapter.enrich([WORKER]).state).toBe('ok');
 
+    // The handles the push hands over name exactly the worker the adapter *has* fresh context
+    // for — so the refusal below is a refusal, and not an empty join dressed up as one.
     const source: StreamSource = {
       dataVersion: () => 1,
       liveness: () => liveness,
-      snapshot: () => plainEvent(liveness),
+      push: () => pushOf(liveness, [WORKER]),
     };
     const enriched = withEnrichment(source, adapter);
 
@@ -394,7 +407,7 @@ describe('the wire-level liveness gate', () => {
     // slower timer — and in that gap the cache still says `ok`. Live-only is a property of
     // the *event*: it must never say "stale, and here is what the agent is doing right now".
     liveness = 'stale';
-    const event = enriched.snapshot();
+    const { event } = enriched.push(null);
     expect(event.meta.liveness).toBe('stale');
     expect(event.enrichment).toEqual({ state: 'suspended', fetchedAt: null, workers: [] });
   });

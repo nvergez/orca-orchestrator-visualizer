@@ -170,10 +170,12 @@ describe('the WAL wake hint (--watch)', () => {
     });
     writer = new FixtureWriter(dbPath);
 
-    // The failure cost a warning and the latency — never the data.
+    // The failure cost a warning and the latency — never the data. The data left the event with
+    // #69 (it is the paged reads' now), so that is where the claim is checked: a watch that could
+    // not start must not have cost a single retained task.
     const stream = await harness.stream();
-    const first = await stream.next();
-    expect(first.event.snapshot.tasks).toHaveLength(2);
+    await stream.next();
+    expect((await harness.snapshot()).snapshot.tasks).toHaveLength(2);
 
     writer.message({ fromHandle: CODER, toHandle: COORDINATOR, subject: 'Built it', createdAt: AT });
     expect((await stream.next()).event.seq).toBe(2);

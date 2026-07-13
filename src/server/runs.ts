@@ -1,7 +1,19 @@
 import { shortHandle } from '../shared/handles.ts';
 import { runHealth } from '../shared/run-health.ts';
-import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
+import {
+  type Dispatch,
+  type ReceiptFact,
+  type Run,
+  type Task,
+  TASK_STATUSES,
+  type TaskStatus,
+  type Wave,
+} from '../shared/types.ts';
 import { castOf } from './cast.ts';
+import { runSpan } from './durations.ts';
+// The rail's order lives in `history.ts` beside the keyset cursor that pages it (#69): the two
+// must read the same total order, or a page boundary and a rail row could disagree.
+import { byMostRecentActivity } from './history.ts';
 import type { Preview } from './tasks.ts';
 import { byInstant, instantOf } from './time.ts';
 
@@ -83,6 +95,13 @@ export type TaskWithHandle = {
   spec: Preview | null;
   /** The beginning of `tasks.result` — what came back. Null while the task is still working. */
   result: Preview | null;
+  /**
+   * The recognized outcome facts of `tasks.result` (#67) — read from the **whole** column,
+   * because a receipt sliced to the preview above is malformed JSON and recognizes as
+   * nothing. Empty when the result is prose, malformed or absent: an unknown shape is
+   * ordinary retained evidence, not schema drift.
+   */
+  resultReceipt: ReceiptFact[];
 };
 
 export type InferredRuns = {
@@ -156,7 +175,7 @@ function describeRun(handle: string | null, members: TaskWithHandle[], { orcaIsL
   // completed is not a task that did — the task row is the record of the outcome (SPEC §12.1).
   const converged = tasks.every((task) => TERMINAL.has(task.status));
 
-  return {
+  const run: Run = {
     id: runIdFor(handle),
     handle,
     label: labelFor(handle, first),
@@ -181,6 +200,18 @@ function describeRun(handle: string | null, members: TaskWithHandle[], { orcaIsL
     hasBlockingGates: false,
     edgeCount: countEdges(tasks),
   };
+
+  // Open while the run has not converged — never while `live` (#66 met #48). The old boolean
+  // asked "is Orca up *and* is something in flight", which made the span a fact about the
+  // *reader's* moment: quitting Orca would retroactively close a span over a run that never
+  // finished, and reopening it would reopen the span. `converged` is a fact about the retained
+  // evidence alone — every task reached a terminal outcome — so an unconverged run's span stays
+  // honestly open ("so far") whether or not anyone is watching, which is exactly what run health
+  // now says out loud as `silent` (SPEC §12.3). Absent when no task creation is readable.
+  const duration = runSpan(tasks, !converged);
+  if (duration !== undefined) run.duration = duration;
+
+  return run;
 }
 
 /**
@@ -341,9 +372,4 @@ function countEdges(tasks: Task[]): number {
     (total, task) => total + [...new Set(task.deps)].filter((dep) => inRun.has(dep)).length,
     0
   );
-}
-
-/** The rail sorts by most-recent activity, so the run worth opening is the one on top. */
-function byMostRecentActivity(a: Run, b: Run): number {
-  return byInstant(b.lastActivityAt, a.lastActivityAt) || byInstant(b.startedAt, a.startedAt);
 }
