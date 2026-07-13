@@ -346,6 +346,21 @@ describe('deriveAttention: retry risk', () => {
     });
   });
 
+  it('admits the attempt one failure short of the breaker, and no earlier', () => {
+    // The tier exists because Orca's breaker trips at 3 (HANDOFF.md): two failures is the last
+    // moment intervening is still cheap. One is noise, and a queue that cried at one would be a
+    // queue nobody read at two.
+    const failures = (failureCount: number) =>
+      deriveAttention(
+        snapshot({ tasks: [task({ dispatch: dispatch({ failureCount }) })] }),
+        NOW
+      ).filter((item) => item.kind === 'retry-risk');
+
+    expect(failures(1)).toEqual([]);
+    expect(failures(2)).toHaveLength(1);
+    expect(failures(2)[0]?.explanation).toBe('2 failures — the breaker trips at 3');
+  });
+
   it('leaves with its evidence: a terminal task carries no retry risk', () => {
     const items = deriveAttention(
       snapshot({

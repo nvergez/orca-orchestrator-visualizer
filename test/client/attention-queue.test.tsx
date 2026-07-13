@@ -226,6 +226,49 @@ describe('the attention queue', () => {
     expect(screen.queryByTestId('inspector')).toBeNull();
   });
 
+  it('shows a cause it can place nowhere, and offers nothing to click', () => {
+    // Attribution can leave a gate in no run and on no task (SPEC §4.4, rule 3). Hiding it would
+    // be the queue lying about the database; a *disabled* button would leave the one thing it can
+    // still do — be read — unreachable by keyboard. So it is a plain row, as the strip's
+    // task-less gate is.
+    render(
+      <App loadTask={NO_DETAIL} event={event({ gates: [gate({ runId: null, taskId: null })] })} />
+    );
+
+    const item = within(queue()!).getByTestId('attention-item');
+    expect(item).toHaveTextContent('Which driver?');
+    expect(item.tagName).not.toBe('BUTTON');
+    expect(within(queue()!).queryByRole('button')).toBeNull();
+  });
+
+  it('falls back to the orchestrator when a cause names a task the snapshot no longer holds', async () => {
+    // The wire promises this cannot happen — the server nulls a `Gate.taskId` naming a task a
+    // reset deleted. If it ever does, the click must still land: selecting nothing at all is the
+    // one thing a queue built on "one click and you are there" may not quietly do.
+    const other = run({
+      id: 'run_other',
+      handle: OTHER_HANDLE,
+      label: 'The other orchestration',
+      lastActivityAt: ago(5 * 60_000),
+    });
+
+    render(
+      <App
+        loadTask={NO_DETAIL}
+        event={event({
+          runs: [run(), other],
+          tasks: [task(), task({ id: 'task_other', runId: 'run_other' })],
+          gates: [gate({ id: 'msg_ghost', runId: 'run_other', taskId: 'task_deleted_by_a_reset' })],
+        })}
+      />
+    );
+
+    await userEvent.click(within(queue()!).getByTestId('attention-item'));
+
+    expect(row('run_other')).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByTestId('inspector')).toBeNull();
+  });
+
   it('keeps one row per cause across repeated snapshots', () => {
     const view = render(<App loadTask={NO_DETAIL} event={event({ turns: [escalation()] }, 1)} />);
     expect(within(queue()!).getAllByTestId('attention-item')).toHaveLength(1);

@@ -1,8 +1,8 @@
 import { shortHandle } from '../shared/handles.ts';
 import { STALE_HEARTBEAT_MS } from '../shared/run-health.ts';
-import type { Gate, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
+import { type Gate, isTerminalStatus, type Run, type StreamEvent, type Task, type Turn } from '../shared/types.ts';
 import { relativeTime } from './relative-time.ts';
-import { isActiveWorkerHealth, taskWorkerHealth, type ActiveWorkerHealth } from './worker-health.ts';
+import { workerEvidenceByAgent } from './worker-health.ts';
 
 /**
  * **The attention queue's one derivation** (#56, the roadmap's §12): does anything, in any
@@ -57,7 +57,11 @@ type AttentionBase = {
   runLabel: string | null;
   /** The task to open, when the evidence names one that still exists. */
   taskId: string | null;
-  /** The evidence instant the item is ranked by within its tier — verbatim from the wire. */
+  /**
+   * The evidence instant the item is ranked by within its tier: the wire's own string wherever
+   * one column carries the evidence, and a normalized ISO instant for the one tier whose
+   * evidence is the newest of several columns (a fresh failure, §`freshFailures`).
+   */
   at: string;
   /** What needs attention: the question, the worker, or the task's title. */
   title: string;
@@ -94,8 +98,17 @@ export function deriveAttention(snapshot: Snapshot, now: number): AttentionItem[
 /** Resolves a run id to the label the server gave that run — null when it names no run we hold. */
 type LabelOf = (runId: string | null) => string | null;
 
-/** The two statuses that end a task's story (SPEC §12.1). Anything else — unknown included — may still move. */
-const TERMINAL = new Set<string>(['completed', 'failed']);
+/**
+ * Where Orca's circuit breaker trips (HANDOFF.md): the third failure of an attempt strands the
+ * task. So the *second* is the moment intervening is still cheap — which is what makes
+ * `failureCount >= RETRY_RISK_FAILURES` the tier's threshold and not an arbitrary two.
+ *
+ * Named because it is Orca's number, not this tool's: if Orca ever moves its breaker, the copy
+ * on screen ("the breaker trips at 3") and the threshold that admits the item have to move
+ * together, and they can only do that from one place.
+ */
+const CIRCUIT_BREAKER_TRIPS_AT = 3;
+const RETRY_RISK_FAILURES = CIRCUIT_BREAKER_TRIPS_AT - 1;
 
 /**
  * Oldest-first ordering on wire instants, unreadable ones last, ids breaking ties — the
@@ -158,23 +171,14 @@ function staleWorkers(runs: Run[], tasks: Task[], now: number): AttentionItem[] 
   const items: Extract<AttentionItem, { kind: 'stale-worker' }>[] = [];
 
   for (const run of runs) {
-    const freshest = new Map<string, { health: ActiveWorkerHealth; taskId: string; title: string }>();
+    const runTasks = tasks.filter((task) => task.runId === run.id);
 
-    for (const task of tasks) {
-      const handle = task.dispatch?.assigneeHandle;
-      if (task.runId !== run.id || !handle) continue;
-
-      const health = taskWorkerHealth(task, now);
-      if (!isActiveWorkerHealth(health)) continue;
-
-      const current = freshest.get(handle);
-      if (!current || health.elapsedMs < current.health.elapsedMs) {
-        freshest.set(handle, { health, taskId: task.id, title: task.title });
-      }
-    }
-
-    for (const [handle, { health, taskId, title }] of freshest) {
-      if (health.state !== 'stale') continue;
+    // #47's rule, *called* rather than reproduced: which attempt speaks for a worker is one
+    // question with one answer, and a second implementation of it here is how the queue and the
+    // cast row would come to disagree about who has gone quiet.
+    for (const [handle, evidence] of workerEvidenceByAgent(runTasks, now)) {
+      const { health, task } = evidence;
+      if (health.state !== 'stale' || task === null) continue;
 
       // The row is named for the **task**, not the worker: clicking it lands on that task, and a
       // row headed `A2` would tell a supervisor who went quiet while hiding what they went quiet
@@ -191,9 +195,9 @@ function staleWorkers(runs: Run[], tasks: Task[], now: number): AttentionItem[] 
         id: `worker:${run.id}:${handle}`,
         runId: run.id,
         runLabel: run.label,
-        taskId,
+        taskId: task.id,
         at: health.evidenceAt,
-        title,
+        title: task.title,
         explanation: `${agent} · ${silence}`,
         handle,
         heartbeat: health.heartbeat,
@@ -214,7 +218,10 @@ function staleWorkers(runs: Run[], tasks: Task[], now: number): AttentionItem[] 
  */
 function retryRisks(tasks: Task[], labelOf: LabelOf): AttentionItem[] {
   return tasks
-    .filter((task) => !TERMINAL.has(task.status) && task.dispatch !== null && task.dispatch.failureCount >= 2)
+    .filter(
+      (task) =>
+        !isTerminalStatus(task.status) && task.dispatch !== null && task.dispatch.failureCount >= RETRY_RISK_FAILURES
+    )
     .map((task): Extract<AttentionItem, { kind: 'retry-risk' }> => {
       const dispatch = task.dispatch!;
       return {
@@ -228,7 +235,7 @@ function retryRisks(tasks: Task[], labelOf: LabelOf): AttentionItem[] {
         explanation:
           dispatch.status === 'circuit_broken'
             ? `circuit broken after ${dispatch.failureCount} failures`
-            : `${dispatch.failureCount} failures — the breaker trips at 3`,
+            : `${dispatch.failureCount} failures — the breaker trips at ${CIRCUIT_BREAKER_TRIPS_AT}`,
         failureCount: dispatch.failureCount,
       };
     })
@@ -252,7 +259,7 @@ function escalations(turns: Turn[], tasksById: Map<string, Task>, labelOf: Label
     .filter((turn) => turn.kind === 'escalation')
     .flatMap((turn): AttentionItem[] => {
       const task = turn.taskId === null ? undefined : tasksById.get(turn.taskId);
-      if (!task || TERMINAL.has(task.status)) return [];
+      if (!task || isTerminalStatus(task.status)) return [];
 
       const escalatedAt = Date.parse(turn.at);
       const retriedAt = Date.parse(task.dispatch?.dispatchedAt ?? '');

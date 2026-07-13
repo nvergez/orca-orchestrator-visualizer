@@ -266,9 +266,18 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
    * orchestration you are not looking at — otherwise the run it blocks. Nothing is written
    * anywhere: attending to a cause is *going and looking at it*, and the item leaves the queue
    * only when its evidence does (SPEC §1.2).
+   *
+   * The task is resolved before it is shown, and the run is the fallback when it does not
+   * resolve. On the wire that cannot happen — every id an attention item carries was read off a
+   * task in this very snapshot, and the server nulls a `Gate.taskId` naming a task a reset
+   * deleted (`server/attribution.ts`) — but `showTask` on an id it cannot find selects nothing
+   * at all, and a queue whose whole promise is "one click and you are there" is the last place
+   * that may quietly do nothing.
    */
   function attend(item: AttentionItem): void {
-    if (item.taskId !== null) showTask(item.taskId);
+    const target = item.taskId === null ? undefined : allTasks.find((task) => task.id === item.taskId);
+
+    if (target) showTask(target.id);
     else if (item.runId !== null) selectRun(item.runId);
   }
 

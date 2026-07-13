@@ -1,6 +1,6 @@
 import { shortHandle } from '../shared/handles.ts';
 import { runHealth } from '../shared/run-health.ts';
-import { type Dispatch, type Run, type Task, TASK_STATUSES, type TaskStatus, type Wave } from '../shared/types.ts';
+import { type Dispatch, isTerminalStatus, type Run, type Task, TASK_STATUSES, type Wave } from '../shared/types.ts';
 import { castOf } from './cast.ts';
 import type { Preview } from './tasks.ts';
 import { byInstant, instantOf } from './time.ts';
@@ -43,13 +43,6 @@ export const UNATTRIBUTED_RUN_ID = 'run_unattributed';
 
 /** …and the rail says exactly that, rather than dressing the orphans up as an orchestration. */
 export const UNATTRIBUTED_LABEL = 'Unattributed';
-
-/**
- * The two statuses that prove a task's outcome is known (SPEC §12.1). Everything else —
- * `pending`, `ready`, `dispatched`, `blocked`, and any status this build has never heard of —
- * holds convergence back: render-what-parses cannot prove an unknown status terminal.
- */
-const TERMINAL: ReadonlySet<string> = new Set<TaskStatus>(['completed', 'failed']);
 
 /**
  * A task as the database has it, plus the four things the wire contract deliberately does not
@@ -154,7 +147,7 @@ function describeRun(handle: string | null, members: TaskWithHandle[], { orcaIsL
   const lastActivityAt = lastActivity(ordered);
   // Terminal task outcomes only. Dispatch-attempt status never gets a vote: an attempt that
   // completed is not a task that did — the task row is the record of the outcome (SPEC §12.1).
-  const converged = tasks.every((task) => TERMINAL.has(task.status));
+  const converged = tasks.every((task) => isTerminalStatus(task.status));
 
   return {
     id: runIdFor(handle),

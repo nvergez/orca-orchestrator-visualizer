@@ -20,6 +20,24 @@
 export const TASK_STATUSES = ['pending', 'ready', 'dispatched', 'completed', 'failed', 'blocked'] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * **The statuses that end a task's story** — and the definition of *Convergence* (CONTEXT.md).
+ *
+ * `pending`, `ready`, `dispatched` and `blocked` are work that can still move. A status this
+ * build has never heard of is conservatively *not* terminal: render-what-parses cannot prove an
+ * unknown status is an ending (SPEC §5, §12.1).
+ *
+ * Shared, and not restated per module, for the reason `STALE_HEARTBEAT_MS` is: the server asks
+ * this to decide whether a run has converged (`server/runs.ts`) and the client asks it to decide
+ * whether a task can still be intervened on (`client/attention.ts`). Two lists would eventually
+ * be two answers, and they are answers to one question.
+ */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set<TaskStatus>(['completed', 'failed']);
+
+export function isTerminalStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
 export type DispatchStatus = 'pending' | 'dispatched' | 'completed' | 'failed' | 'circuit_broken';
 export type MessageType =
   | 'status'

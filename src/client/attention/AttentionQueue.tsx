@@ -37,7 +37,10 @@ export type AttentionQueueProps = {
  */
 const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string; label: string }> = {
   'blocking-gate': { icon: OctagonAlert, ink: 'text-gate', label: 'blocking decision gate' },
-  'stale-worker': { icon: HeartPulse, ink: 'text-amber-700 dark:text-amber-400', label: 'quiet worker' },
+  // "Stale", never "quiet": `quiet` is a *different* worker-health state in #47 — dispatched, the
+  // first beat still plausibly in flight — and it is one this tier deliberately refuses to admit.
+  // Naming the row after the state it excludes is the one label that could not be right.
+  'stale-worker': { icon: HeartPulse, ink: 'text-amber-700 dark:text-amber-400', label: 'stale worker' },
   'retry-risk': { icon: RotateCcw, ink: 'text-amber-700 dark:text-amber-400', label: 'retry risk' },
   escalation: { icon: Megaphone, ink: 'text-red-700 dark:text-red-400', label: 'unresolved escalation' },
   'fresh-failure': { icon: CircleX, ink: 'text-red-700 dark:text-red-400', label: 'fresh failure' },
@@ -85,42 +88,60 @@ export function AttentionQueue({ items, onAttend }: AttentionQueueProps) {
   );
 }
 
+const ROW_CLASS = 'flex w-full items-start gap-2 rounded-lg px-1.5 py-1 text-left';
+
 function AttentionRow({ item, onAttend }: { item: AttentionItem; onAttend: (item: AttentionItem) => void }) {
-  const look = KIND_LOOK[item.kind];
-  const Icon = look.icon;
-  // A cause the schema attributed to nothing offers nowhere to go — shown all the same, because
-  // hiding evidence over a missing join would be the queue lying about the database.
-  const navigable = item.taskId !== null || item.runId !== null;
+  // A cause the schema attributed to no run *and* no task offers nowhere to go. It is shown all
+  // the same — hiding evidence over a missing join would be the queue lying about the database —
+  // as a plain row rather than a dead button: a `disabled` button is unreachable by keyboard, and
+  // the one thing this row still has to do is *be read*. It is the GateStrip's rule for a gate
+  // that names no task, and it is the same rule.
+  const body = <AttentionBody item={item} />;
 
   return (
     <li>
-      <button
-        type="button"
-        data-testid="attention-item"
-        data-kind={item.kind}
-        data-cause={item.id}
-        onClick={() => onAttend(item)}
-        disabled={!navigable}
-        className={cn(
-          'flex w-full items-start gap-2 rounded-lg px-1.5 py-1 text-left',
-          'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
-          navigable && 'hover:bg-accent/60 cursor-pointer'
-        )}
-      >
-        <Icon role="img" aria-label={look.label} className={cn('size-3.5 shrink-0 translate-y-px', look.ink)} />
-        <span className="min-w-0">
-          <b className="block truncate text-xs font-semibold" title={item.title}>
-            {item.title}
-          </b>
-          <span className="text-muted-foreground block truncate text-[11px]">
-            {item.explanation}
-            {/* Whose cause this is — the label the server already gave the run, because a
-                cross-run queue that never says which orchestration it means sends every click
-                in blind. */}
-            {item.runLabel !== null && <span className="opacity-70"> · {item.runLabel}</span>}
-          </span>
-        </span>
-      </button>
+      {item.taskId === null && item.runId === null ? (
+        <div data-testid="attention-item" data-kind={item.kind} data-cause={item.id} className={ROW_CLASS}>
+          {body}
+        </div>
+      ) : (
+        <button
+          type="button"
+          data-testid="attention-item"
+          data-kind={item.kind}
+          data-cause={item.id}
+          onClick={() => onAttend(item)}
+          className={cn(
+            ROW_CLASS,
+            'hover:bg-accent/60 cursor-pointer',
+            'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none'
+          )}
+        >
+          {body}
+        </button>
+      )}
     </li>
+  );
+}
+
+function AttentionBody({ item }: { item: AttentionItem }) {
+  const look = KIND_LOOK[item.kind];
+  const Icon = look.icon;
+
+  return (
+    <>
+      <Icon role="img" aria-label={look.label} className={cn('size-3.5 shrink-0 translate-y-px', look.ink)} />
+      <span className="min-w-0">
+        <b className="block truncate text-xs font-semibold" title={item.title}>
+          {item.title}
+        </b>
+        <span className="text-muted-foreground block truncate text-[11px]">
+          {item.explanation}
+          {/* Whose cause this is — the label the server already gave the run, because a cross-run
+              queue that never says which orchestration it means sends every click in blind. */}
+          {item.runLabel !== null && <span className="opacity-70"> · {item.runLabel}</span>}
+        </span>
+      </span>
+    </>
   );
 }

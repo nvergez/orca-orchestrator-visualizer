@@ -51,3 +51,23 @@ _Avoid_: Run liveness, run health
 **Attribution Window**:
 The bounded period in which handle evidence may associate a task-id-less message with an orchestrator run.
 _Avoid_: Run lifetime
+
+**Attention Item**:
+One thing that currently needs a supervisor's intervention, with a stable identity, a kind, an explanation and the orchestrator and task it names. It is derived from retained evidence; it is never acknowledged, dismissed or otherwise written back to Orca.
+_Avoid_: Alert, notification, warning
+
+**Attention Cause**:
+The evidence that puts an attention item in the queue: a blocking decision gate, a stale worker, a retry risk, an unresolved escalation, or a fresh failure. Distinct causes for one task coexist rather than merging.
+_Avoid_: Issue, problem, error
+
+**Retry Risk**:
+A task's current dispatch attempt that has already failed at least twice, so the next failure trips Orca's circuit breaker. It reports proximity to the breaker, not a prediction that the task will fail.
+_Avoid_: Failing task, flaky task
+
+**Attention Freshness Window**:
+How long a failure remains recent enough to demand intervention rather than being read as history. It is the same canonical recency threshold that turns a worker stale and a run silent.
+_Avoid_: Timeout, expiry
+
+**Stale Worker**:
+A worker whose current dispatch attempt has produced no activity evidence for at least the recency threshold, whether or not it ever sent a heartbeat. It reports missing evidence, never that the terminal is dead, stuck or hung.
+_Avoid_: Dead worker, hung worker, quiet worker
