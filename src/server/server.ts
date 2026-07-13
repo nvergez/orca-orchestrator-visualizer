@@ -2,6 +2,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { archiveFilename } from '../shared/archive.ts';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
 import { type EnrichmentOptions, OrcaEnrichment, withEnrichment } from './enrichment.ts';
@@ -12,6 +13,10 @@ import { type WakeDeps, type WakeWatcher, watchForWakeHints } from './wake.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
 export const CLIENT_DIR = fileURLToPath(new URL('../client', import.meta.url));
+
+/** The live page, and the replay page — two Vite entries, and the whole of the mode switch. */
+const LIVE_PAGE = '/index.html';
+const REPLAY_PAGE = '/replay.html';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -29,6 +34,12 @@ const TASK_ROUTE = '/api/task/';
 
 /** `GET /api/run/:id` — the selected-run snapshot (#69). Everything after the prefix is the id. */
 const RUN_ROUTE = '/api/run/';
+
+/** `GET /api/run/:id/archive` — the one-shot export of that run (#74). */
+const ARCHIVE_SUFFIX = '/archive';
+
+/** `GET /api/archive` — the artifact an archived replay is reading, and its only route (#74). */
+const REPLAY_ROUTE = '/api/archive';
 
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
@@ -91,8 +102,12 @@ export type Viz = { server: Server; close(): Promise<void> };
  * Two routes return a `StreamEvent`, and they are deliberately the same event from the same
  * call: `GET /api/stream` pushes one whenever the database changes (#17), and
  * `GET /api/snapshot` returns one and hangs up — which makes the whole tool `curl`-debuggable
- * and is the seam the server tests drive (#12). `GET /api/task/:id` (#20) is the only route
- * that returns something else, because it is the only one that reads the bodies.
+ * and is the seam the server tests drive (#12). `GET /api/task/:id` (#20) reads the bodies, and
+ * `GET /api/run/:id/archive` (#74) exports one selected run as a file — the only route that
+ * exists to leave with something.
+ *
+ * The *replay* of that file is `createReplayServer` below, and it is a separate server with no
+ * database in it at all.
  */
 export function createServer({
   database,
@@ -143,6 +158,13 @@ export function createServer({
       return;
     }
 
+    // Before the snapshot route, and deliberately: `/api/run/<id>/archive` starts with
+    // `/api/run/`, so the export has to claim it first or the id would swallow the verb.
+    if (urlPath.startsWith(RUN_ROUTE) && urlPath.endsWith(ARCHIVE_SUFFIX)) {
+      sendArchive(database, urlPath.slice(RUN_ROUTE.length, -ARCHIVE_SUFFIX.length), res);
+      return;
+    }
+
     if (urlPath.startsWith(RUN_ROUTE)) {
       sendById(
         urlPath.slice(RUN_ROUTE.length),
@@ -163,25 +185,7 @@ export function createServer({
       return;
     }
 
-    const filePath = resolveAsset(clientDir, urlPath === '/' ? '/index.html' : urlPath);
-
-    if (!filePath) {
-      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Forbidden');
-      return;
-    }
-
-    readFile(filePath)
-      .then((body) => {
-        res.writeHead(200, {
-          'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
-        });
-        res.end(body);
-      })
-      .catch(() => {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end('Not found');
-      });
+    sendAsset(clientDir, urlPath === '/' ? LIVE_PAGE : urlPath, res);
   });
 
   return {
@@ -199,6 +203,116 @@ export function createServer({
       await new Promise((resolve) => server.close(resolve));
     },
   };
+}
+
+export type ReplayOptions = {
+  /**
+   * The archive file's bytes, **verbatim** — already read and already validated at boot
+   * (`loadArchiveFile`). The wire *is* the artifact: nothing here reshapes it, so a field this
+   * build has never heard of reaches the browser exactly as it was written (#74).
+   */
+  artifact: string;
+  clientDir?: string;
+};
+
+/**
+ * **The archived replay** (#74, ADR 0001) — `orca-viz --archive <file>`, and a completely
+ * different server from the one above.
+ *
+ * It is different by *construction*, which is the point. There is no `OrcaDatabase` in this
+ * function's scope, no `EventStream`, no poll loop, and no route that could serve one: the four
+ * live endpoints do not exist here, so "an archived replay performs no polling and makes no
+ * liveness claim" is not a promise the UI has to keep — it is a thing the server cannot do.
+ *
+ * The page it serves is the other Vite entry (`replay.html` → `client/Replay.tsx`), and the live
+ * page is *unreachable*: `/` and `/index.html` both land on the replay bundle. A browser that
+ * loaded `index.html` here would open an `EventSource` on a stream that is not there and retry it
+ * for as long as the tab stayed open — which is the one thing a replay is not allowed to do.
+ */
+export function createReplayServer({ artifact, clientDir = CLIENT_DIR }: ReplayOptions): Viz {
+  const server = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`);
+    const urlPath = url.pathname;
+
+    if (urlPath === REPLAY_ROUTE) {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache' });
+      res.end(artifact);
+      return;
+    }
+
+    // Every other API path, said out loud rather than 404-ing like a missing file: this is the
+    // one server where "there is no database" is the answer, and it is worth reading.
+    if (urlPath.startsWith('/api/')) {
+      sendJson(res, 404, {
+        error: `${urlPath} does not exist in an archived replay: there is no Orca database here, only the exported run.`,
+      });
+      return;
+    }
+
+    sendAsset(clientDir, urlPath === '/' || urlPath === LIVE_PAGE ? REPLAY_PAGE : urlPath, res);
+  });
+
+  return {
+    server,
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+/** The client bundle, or a 403 for a path that tried to leave it, or a 404 for one that is not in it. */
+function sendAsset(clientDir: string, urlPath: string, res: ServerResponse): void {
+  const filePath = resolveAsset(clientDir, urlPath);
+
+  if (!filePath) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return;
+  }
+
+  readFile(filePath)
+    .then((body) => {
+      res.writeHead(200, {
+        'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
+      });
+      res.end(body);
+    })
+    .catch(() => {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Not found');
+    });
+}
+
+/**
+ * `GET /api/run/:id/archive` (#74) — **the export**, and the only thing in this tool a user has
+ * to *ask* for twice: once by selecting the run, and once by clicking the link.
+ *
+ * It is a download rather than a payload the page holds: `Content-Disposition` names the file
+ * after the run and the instant, so what lands in the downloads folder says what it is without
+ * being opened. A run id that names nothing is a 404, like everywhere else — an id that means
+ * nothing is not a run with nothing to export.
+ */
+function sendArchive(database: OrcaDatabase, rawId: string, res: ServerResponse): void {
+  let id: string;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    id = rawId;
+  }
+
+  read(res, () => {
+    const archive = id === '' ? null : database.archive(id);
+    if (archive === null) {
+      sendJson(res, 404, { error: `No run ${id} in this database.` });
+      return;
+    }
+
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-disposition': `attachment; filename="${archiveFilename(archive.run.id, archive.provenance.exportedAt)}"`,
+    });
+    res.end(JSON.stringify(archive));
+  });
 }
 
 /**

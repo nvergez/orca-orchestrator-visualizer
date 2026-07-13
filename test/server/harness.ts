@@ -69,6 +69,11 @@ export type Harness = {
   report(query?: string): Promise<Response>;
   /** `GET /api/run/:id` — the selected-run snapshot (#69). Raw, because an unknown id is a 404. */
   run(id: string): Promise<Response>;
+  /**
+   * `GET /api/run/:id/archive` — the one-shot export (#74). Raw: the headers *are* the download
+   * (`Content-Disposition`), an unknown id is a 404, and both are the contract under test.
+   */
+  archive(id: string): Promise<Response>;
   close(): Promise<void>;
 };
 
@@ -176,6 +181,10 @@ export async function serve(
 
     async run(id) {
       return fetch(`${origin}/api/run/${encodeURIComponent(id)}`);
+    },
+
+    async archive(id) {
+      return fetch(`${origin}/api/run/${encodeURIComponent(id)}/archive`);
     },
 
     async close() {

@@ -1,8 +1,15 @@
-import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { RunArchive } from '../shared/archive.ts';
 import type { Meta } from '../shared/types.ts';
-import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
+import {
+  archiveCompatibilitySentence,
+  archivedSentence,
+  HISTORY_LOSS_SENTENCES,
+  livenessSentence,
+  schemaSentence,
+} from '../shared/wording.ts';
+import { loadArchiveFile } from './archive.ts';
 import { openBrowser as launchBrowser, shouldOpenBrowser } from './browser.ts';
 import { HELP, type Options, parseOptions } from './cli.ts';
 import { OrcaDatabase } from './database.ts';
@@ -10,7 +17,8 @@ import { type Candidate, discoveryContext, listCandidates, resolveDatabase } fro
 import { StartupError } from './errors.ts';
 import type { ProcessProbe } from './liveness.ts';
 import type { ReadMounts } from './network-fs.ts';
-import { createServer } from './server.ts';
+import { createReplayServer, createServer } from './server.ts';
+import { toolVersion } from './version.ts';
 
 /**
  * The boot path, from an argv to a listening server — everything `npx orca-viz` does.
@@ -53,12 +61,19 @@ export async function boot(options: BootOptions): Promise<Booted> {
     return null;
   }
   if (cli.version) {
-    print(packageVersion());
+    print(toolVersion());
     return null;
   }
   if (cli.listDbs) {
     for (const line of describeCandidates(listCandidates(context))) print(line);
     return null;
+  }
+
+  // **The fork in the whole tool** (#74). Everything below this line opens a database, discovers
+  // one, polls it and reports how alive it is. A replay does none of those things — so it does
+  // not run any of them, rather than running them against nothing.
+  if (cli.archive !== undefined) {
+    return await replay(cli.archive, cli, { print, openBrowser, isTTY, env, platform });
   }
 
   const dbPath = resolveDatabase(context);
@@ -106,6 +121,67 @@ export async function boot(options: BootOptions): Promise<Booted> {
     database.close();
     throw error;
   }
+}
+
+/**
+ * `--archive <file>` — **the archived replay** (#74, ADR 0001): a saved run, opened offline.
+ *
+ * Everything a live boot does is *absent* here, and the absences are the feature. No discovery,
+ * because there is nothing to find. No `OrcaDatabase`, because a replay reads a file the user
+ * already has. No poll interval, no liveness probe, no process table: nothing about this screen
+ * can change, and the terminal says so in the same words the page will (`wording.ts`).
+ *
+ * The file is read and validated *before* the server is listening, so an archive this build
+ * cannot open is a sentence in the terminal — with what is wrong and what to do — rather than a
+ * blank browser tab pointed at a port (`loadArchiveFile`).
+ */
+async function replay(path: string, cli: Options, terminal: Terminal): Promise<Booted> {
+  const { print, openBrowser, isTTY, env, platform } = terminal;
+  const { artifact, archive, compatibility } = loadArchiveFile(path);
+
+  const { server, close } = createReplayServer({ artifact });
+  await listen(server, cli);
+
+  const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
+
+  print(`orca-viz  replaying ${path}`);
+  print(`          ${describeArchive(archive)}`);
+  // The one sentence a replay owes above all others, and the same one the page shows.
+  print(`          ${archivedSentence(archive.provenance)}`);
+  const incompatible = archiveCompatibilitySentence(compatibility, archive.provenance);
+  if (incompatible !== null) print(`          ${incompatible}`);
+  // What the *source* database's schema cost this evidence, months ago — the same list the live
+  // boot prints, because it is the same fact and the archive is what still remembers it.
+  for (const line of describeSchema(archive.provenance.source)) print(`          ${line}`);
+  print(`          listening on ${url}`);
+
+  if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
+
+  return { url, close };
+}
+
+/**
+ * What the boot path is allowed to say, and where it says it — the terminal, and the browser it
+ * may open. Both boots take the same one, because "tell the user what you are looking at" (SPEC §3)
+ * is owed whether the thing being looked at is a database or a file.
+ */
+type Terminal = {
+  print: (line: string) => void;
+  openBrowser: (url: string) => void;
+  /** Is stdout a terminal? Decides whether a browser was implicitly asked for. */
+  isTTY: boolean;
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+};
+
+/** Which run is in the file, how big it is, and the schema it was read through. */
+function describeArchive({ run, tasks, provenance }: RunArchive): string {
+  return [
+    `run ${run.label}`,
+    `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}`,
+    `exported by ${provenance.tool}`,
+    `source schema v${provenance.source.schemaVersion}`,
+  ].join(' · ');
 }
 
 /**
@@ -164,11 +240,11 @@ function describeHistoryLoss(meta: Meta): string[] {
  * missing and leaves them to hunt the screen for what. So the terminal prints exactly what the
  * page prints — the sentence, and then the feature, and what they get instead of it.
  */
-function describeSchema(meta: Meta): string[] {
-  const sentence = schemaSentence(meta);
+function describeSchema(schema: Pick<Meta, 'schemaSupport' | 'degraded'>): string[] {
+  const sentence = schemaSentence(schema);
   if (sentence === null) return [];
 
-  return [sentence, ...meta.degraded.map((feature) => `  • ${feature}`)];
+  return [sentence, ...schema.degraded.map((feature) => `  • ${feature}`)];
 }
 
 /** `0.0.0.0` is not somewhere a browser can go; `localhost` is. */
@@ -200,14 +276,4 @@ function describeCandidates(candidates: Candidate[]): string[] {
       return `  ${candidate.dbPath}\n    ${candidate.source} · ${state}`;
     }),
   ];
-}
-
-/**
- * The version npm published, read from the package's own manifest — `files: ["dist"]` still
- * ships package.json, and dist/server/ sits two levels under the package root exactly as
- * src/server/ does, so one relative path works both compiled and straight from source.
- */
-function packageVersion(): string {
-  const manifest = new URL('../../package.json', import.meta.url);
-  return (JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }).version;
 }

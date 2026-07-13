@@ -73,7 +73,9 @@ const UNENDED_HATCH =
   'repeating-linear-gradient(135deg, transparent, transparent 3px, color-mix(in oklch, currentColor 22%, transparent) 3px, color-mix(in oklch, currentColor 22%, transparent) 5px)';
 
 export type TimelineProps = {
-  snapshot: RunSnapshot;
+  // `meta` is the live database's, and an archived replay has none (#74) — the timeline never
+  // read it anyway, so it asks for exactly the evidence it draws.
+  snapshot: Omit<RunSnapshot, 'meta'>;
   selectedAgent: string | null;
   selectedTaskId: string | null;
   /** A bar is a node: clicking it again lets go (`App`'s `selectTask`). */

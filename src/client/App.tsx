@@ -1,14 +1,20 @@
-import { ChevronUp, Database, Moon, Sun, Table2, Waypoints } from 'lucide-react';
+import { Archive, ChevronUp, Database, Moon, Sun, Table2, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
-import { Beams } from '@/components/fx/beams';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, StreamEvent, Task, Turn } from '../shared/types.ts';
-import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
+import {
+  archiveCompatibilitySentence,
+  archivedSentence,
+  HISTORY_LOSS_SENTENCES,
+  livenessSentence,
+  schemaSentence,
+} from '../shared/wording.ts';
+import type { ArchiveRead } from './archive.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { type Connection, CONNECTION_WORDING } from './connection.ts';
@@ -20,12 +26,12 @@ import { fetchHistory, type HistoryLoaders, useHistory } from './history.ts';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
-import { relativeTime, useClock } from './relative-time.ts';
+import { localInstant, relativeTime, useClock } from './relative-time.ts';
 import { RunRail } from './rail/RunRail.tsx';
-import { localInstant } from './relative-time.ts';
 import { fetchReport, type ReportLoader } from './report/query.ts';
 import { Report } from './report/Report.tsx';
 import { Scoreboard } from './scoreboard/Scoreboard.tsx';
+import { Splash } from './Splash.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { CentreToggle, type CentreView } from './timeline/CentreToggle.tsx';
@@ -66,6 +72,13 @@ import { useIsMobile } from './viewport.tsx';
  * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
  * rail beside today's and renders through the exact same code path; each row wears its
  * `active | silent | finished` health, and the Orca process has its own pill (SPEC §12).
+ *
+ * **And there is one archived mode, which is this same shell with a file behind it** (#74,
+ * `Replay.tsx`). An `archive` prop swaps the two things that would otherwise be lies — the
+ * liveness bar becomes an *archived* one, and the export link has nothing to export — and changes
+ * nothing else: the rail, the canvas, the gate strip, the conversation and the inspector are the
+ * same components reading the same evidence, because a post-mortem you saved is still a
+ * post-mortem (ADR 0001).
  *
  * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
  * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a
@@ -118,6 +131,17 @@ export type AppProps = {
    * filtered on the server. A prop for the same reason the other two are.
    */
   loadReport?: ReportLoader;
+  /**
+   * **The archived replay** (#74, `Replay.tsx`): the saved run this shell is showing, instead of
+   * a database it is connected to. Null — the default — is the live tool.
+   *
+   * It is a *presentation* difference and deliberately nothing more: the rail, the canvas, the
+   * gates, the conversation and the inspector are the same components reading the same evidence
+   * (ADR 0001 — "archived replay uses the ordinary selected-run presentation wherever possible").
+   * What changes is exactly what would otherwise be a lie — the liveness bar becomes an *archived*
+   * one, there is no stream to pulse a node, and there is nothing to export from an export.
+   */
+  archive?: ArchiveRead | null;
 };
 
 export function App({
@@ -127,12 +151,15 @@ export function App({
   appliedAt = null,
   loadHistory = fetchHistory,
   loadReport = fetchReport,
+  archive = null,
 }: AppProps) {
   // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
-  // selected run's complete evidence, each refetched when `event.affected` names it (#69).
+  // selected run's complete evidence, each refetched when `event.affected` names it (#69). An
+  // archived replay has no doorbell at all — the file is read once, on mount, and nothing polls.
   const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, snapshot } = useHistory(
     event,
-    loadHistory
+    loadHistory,
+    archive === null ? 'live' : 'offline'
   );
 
   // The selected run's complete evidence — tasks, gates and turns already scoped to it by the
@@ -358,7 +385,9 @@ export function App({
 
   // Two things have to land before the shell is worth drawing: the stream's first event (the
   // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
-  if (!event || !ready) return <Connecting />;
+  // A replay has no stream — its bar is the archive's — so it waits only for the file, and it
+  // waits under archived wording: "connecting to the database" is a claim, even for one frame.
+  if ((event === null && archive === null) || !ready) return <Splash archived={archive !== null} />;
 
   return (
     // One switch, at the top, for a reader who has asked their machine to hold still. Every
@@ -367,14 +396,26 @@ export function App({
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar
-          meta={event.meta}
-          connection={connection}
-          appliedAt={appliedAt}
-          onOpenReport={() => setReportOpen(true)}
-        />
+        {/* The bar, and the notices under it: the archive's when there is one, the live database's
+            when there is not. The nested ternary is the type narrowing — the guard above has
+            already ruled out "neither", and an assertion here would be a claim the compiler cannot
+            check on a shell that has two sources of truth. */}
+        {archive !== null ? (
+          <ArchiveBar view={archive} />
+        ) : event !== null ? (
+          <TopBar
+            meta={event.meta}
+            connection={connection}
+            appliedAt={appliedAt}
+            onOpenReport={() => setReportOpen(true)}
+          />
+        ) : null}
 
-        <Notices meta={event.meta} />
+        {archive !== null ? (
+          <ArchiveNotices view={archive} />
+        ) : event !== null ? (
+          <Notices meta={event.meta} />
+        ) : null}
 
         {/* Across every orchestrator, and over all of them (#70). It is not a panel in the row
             below: those three are one run's story, and this is the search that finds the run. */}
@@ -408,8 +449,13 @@ export function App({
             // Live Orca context (#61) — absent unless the server was started with the opt-in.
             // It lands on the cast rows and nowhere else: the canvas never sees it, which is
             // half of how an enrichment push can never remount the DAG.
-            enrichment={event.enrichment}
+            enrichment={event?.enrichment}
             older={{ hasOlder, loadOlder }}
+            // **The export** (#74): one link, on the run the reader has open, and nowhere else —
+            // an archive is of *one selected run*, and the affordance says so by only ever
+            // existing on one. A replay is already an export: there is nothing here to export
+            // from it, so the rail is handed nothing and renders no link at all.
+            exportHref={archive === null ? archiveHref : undefined}
             fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
@@ -536,6 +582,10 @@ export function App({
               {selectedTask ? (
                 <Inspector
                   task={selectedTask}
+                  // An archive holds one run, so a dependency that leaves it cannot be opened:
+                  // the chip names the task and says where it went, rather than offering a click
+                  // that would land on a run this file does not contain (`Inspector`'s `Deps`).
+                  archived={archive !== null}
                   gates={taskGates}
                   // Every task, not the canvas's: a dep chip that could not see across into another
                   // orchestration would call a task sitting right there in the database deleted.
@@ -573,6 +623,154 @@ export function App({
         </div>
       </main>
     </MotionConfig>
+  );
+}
+
+/**
+ * Where the export lives — `GET /api/run/:id/archive` (#74). It is a plain link with `download`
+ * on it, and that is the whole mechanism: the browser saves the file, the server names it, and
+ * nothing in this page holds a copy of an artifact it just handed to the user.
+ */
+function archiveHref(runId: string): string {
+  return `/api/run/${encodeURIComponent(runId)}/archive`;
+}
+
+/**
+ * **The bar an archived replay wears instead of the liveness one** (#74) — and the one thing on
+ * this screen that absolutely may not be mistaken for the live tool.
+ *
+ * So it says the opposite of what the live bar says, in the same place, out of the same sentence
+ * factory (`archivedSentence`, `shared/wording.ts`, printed at boot too): *archived — an offline
+ * export taken on <date>; nothing is running, and nothing here will change.* There is no radar
+ * dot, because a radar dot on this page would mean a process is alive; there is no database path,
+ * because there is no database and the artifact deliberately never carried one; and there is no
+ * "last write", because nothing is writing.
+ *
+ * What it *does* show is the run it holds and the tool that exported it — the provenance a person
+ * needs in order to trust a file somebody sent them.
+ */
+function ArchiveBar({ view }: { view: ArchiveRead }) {
+  const { provenance, run } = view.archive;
+
+  return (
+    <motion.header
+      initial={enter({ opacity: 0, y: -8 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(
+        PANEL_CLASS,
+        'flex h-13 shrink-0 items-center gap-3 px-4',
+        'max-lg:h-auto max-lg:min-h-13 max-lg:py-2 max-lg:landscape:min-h-11 max-lg:landscape:py-1'
+      )}
+    >
+      <span className="flex shrink-0 items-center gap-2">
+        <span className="bg-muted text-muted-foreground flex size-6 items-center justify-center rounded-md">
+          <Archive className="size-3.5" />
+        </span>
+        <b className="text-sm font-semibold tracking-tight whitespace-nowrap max-lg:hidden">orca-viz</b>
+      </span>
+
+      <Separator orientation="vertical" className="!h-5 max-lg:hidden" />
+
+      {/*
+        `role="status"` and `data-state="archived"` where the live bar puts its liveness pill —
+        the same slot, the opposite claim. Muted, and with no dot at all: every animated ring in
+        this tool means "this is not finished" (SPEC §7.9), and everything here is.
+      */}
+      <p
+        role="status"
+        data-state="archived"
+        className="text-muted-foreground bg-muted flex shrink-0 items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1 text-[11px] font-medium max-lg:min-w-0 max-lg:shrink"
+      >
+        <span className="first-letter:uppercase">{archivedSentence(provenance, localInstant)}.</span>
+      </p>
+
+      <dl className="text-muted-foreground ml-auto flex min-w-0 items-center gap-3 text-[11px]">
+        {/* The run in the file — the only thing this page is about, and the answer to "what am I
+            looking at" that `dbPath` gives on the live bar. */}
+        <div className="flex min-w-0 items-center gap-1.5" title={run.handle ?? undefined}>
+          <dt className="sr-only">Archived run</dt>
+          <dd className="m-0 max-w-[26rem] min-w-0 max-lg:max-w-[30vw]">
+            <span className="block truncate font-semibold">{run.label}</span>
+          </dd>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5" title="The Orca schema this evidence was read through">
+          <dt className="sr-only">Source schema</dt>
+          <dd className="m-0">
+            <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px]">
+              v{provenance.source.schemaVersion}
+            </Badge>
+          </dd>
+        </div>
+
+        <div className="hidden shrink-0 items-center gap-1.5 lg:flex" title="The build that exported this archive">
+          <dt className="opacity-70">Exported by</dt>
+          <dd className="m-0 font-mono">{provenance.tool}</dd>
+        </div>
+      </dl>
+
+      <ThemeToggle />
+    </motion.header>
+  );
+}
+
+/**
+ * What is *wrong*, in a replay — the same slot as the live notices, and two different files to be
+ * wrong about.
+ *
+ * **The archive** may be one a newer orca-viz wrote. It is readable and read, and the reader says
+ * so out loud rather than showing a post-mortem that is quietly missing an unknown amount of what
+ * was exported (`archiveCompatibilitySentence`, #74's last acceptance criterion).
+ *
+ * **The database it came from** may have been one *this build* could not fully read — a newer Orca,
+ * or an older one missing a column. That was true at export time, months ago, on a machine this
+ * replay has never seen; the archive is the only thing that still remembers it (`source`). So the
+ * schema banner is the same banner the live tool shows, out of the same sentence (`schemaSentence`,
+ * `shared/wording.ts`) — because it is the same fact about the same kind of database, and an
+ * absence with no explanation would otherwise read as a bug in the replay.
+ */
+function ArchiveNotices({ view: { archive, compatibility } }: { view: ArchiveRead }) {
+  const incompatible = archiveCompatibilitySentence(compatibility, archive.provenance);
+  const { source } = archive.provenance;
+  const schema = schemaSentence(source);
+
+  if (incompatible === null && schema === null) return null;
+
+  return (
+    <motion.div
+      initial={enter({ opacity: 0, y: -6 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(
+        'flex shrink-0 flex-col gap-px overflow-hidden rounded-xl border text-xs shadow-lift-1',
+        'max-lg:max-h-24 max-lg:overflow-y-auto max-lg:landscape:max-h-16',
+        GATE_THEME.surface
+      )}
+    >
+      {incompatible !== null && (
+        <p role="status" data-state="archive-newer" className="px-4 py-2">
+          {incompatible}
+        </p>
+      )}
+
+      {schema !== null && (
+        <section role="status" data-state="archive-schema" className="px-4 py-2">
+          <p>
+            <span className="opacity-70">At export: </span>
+            {schema} <span className="opacity-70">(source schema v{source.schemaVersion})</span>
+          </p>
+
+          {source.degraded.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 opacity-90">
+              {source.degraded.map((feature) => (
+                <li key={feature}>{feature}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </motion.div>
   );
 }
 
@@ -978,59 +1176,6 @@ function LoadingRun() {
         Loading this run’s history…
       </p>
     </section>
-  );
-}
-
-/**
- * Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink.
- *
- * **The one screen in this tool with no data on it**, and therefore the one screen where a purely
- * beautiful thing costs nothing at all: there is nothing here to obscure, no status to compete
- * with, and no number anybody is trying to read. So it gets the beams, the glow and the sweep of
- * light across the word — and it gets them for half a second, once, and then the tool starts.
- */
-function Connecting() {
-  return (
-    <main className="bg-field relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden">
-      <span aria-hidden className="pointer-events-none absolute inset-0" style={FIELD_BACKDROP_STYLE} />
-      <Beams />
-
-      <motion.span
-        initial={enter({ opacity: 0, scale: 0.8 })}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={SPRING}
-        className="bg-primary text-primary-foreground relative flex size-11 items-center justify-center rounded-2xl"
-        style={{ boxShadow: '0 0 60px -10px var(--selection), 0 0 0 1px oklch(1 0 0 / 0.08)' }}
-      >
-        <Waypoints className="size-5.5" />
-      </motion.span>
-
-      <motion.h1
-        initial={enter({ opacity: 0, y: 6 })}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...SPRING, delay: 0.08 }}
-        className="relative text-base font-semibold tracking-tight"
-      >
-        orca-viz
-      </motion.h1>
-
-      {/* A sweep of light across the sentence, rather than a sentence blinking on and off: it is
-          reading a file, and reading is a thing that moves in one direction. */}
-      <motion.p
-        initial={enter({ opacity: 0 })}
-        animate={{ opacity: 1 }}
-        transition={{ ...SPRING, delay: 0.16 }}
-        className="relative bg-clip-text text-xs text-transparent"
-        style={{
-          backgroundImage:
-            'linear-gradient(90deg, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%)',
-          backgroundSize: '200% 100%',
-          animation: 'orca-shimmer 1.8s linear infinite',
-        }}
-      >
-        Connecting to the database…
-      </motion.p>
-    </main>
   );
 }
 

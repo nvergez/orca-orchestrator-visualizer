@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <!--
+      The archived replay's page (#74) — a second Vite entry, and the reason the promise
+      "a replay performs no polling" is structural rather than aspirational: the bundle this
+      document loads does not contain the code that opens a stream. `orca-viz --archive` serves
+      this page where the live one would be, and the live one is unreachable (`server/server.ts`).
+    -->
+    <title>orca-viz — archived replay</title>
+    <script>
+      /*
+       * The theme, before the first paint — the same script `index.html` runs, and deliberately a
+       * copy rather than a shared module: it must execute before anything is fetched, and a page
+       * that mounted light and flipped to dark a frame later would flash white at someone who has
+       * chosen not to be flashed at.
+       */
+      try {
+        var stored = localStorage.getItem('orca-viz-theme');
+        var dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.classList.add('dark');
+      } catch (ignored) {
+        // No storage and no media query is not a reason to fail to render.
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./replay-main.tsx"></script>
+  </body>
+</html>

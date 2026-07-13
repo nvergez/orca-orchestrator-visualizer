@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { TaskBodies } from '../shared/archive.ts';
 import { parsePayload, taskIdOf } from '../shared/payload.ts';
 import { mergeReceipts, receiptOfResult, receiptOfWorkerDone } from '../shared/receipt.ts';
 import type { Dispatch, TaskDetail, WorkerCompletion } from '../shared/types.ts';
@@ -114,6 +115,44 @@ function readCompletions(db: DatabaseSync, columns: Columns, id: string): Worker
 
   return completions;
 }
+
+/**
+ * The same two bodies, for **many** tasks at once — what an export reads (#74, `archive.ts`).
+ *
+ * A run archive is self-contained or it is not an archive: the specs and results a live reader
+ * fetches one at a time (`readTaskDetail`, on a click) all have to be *in the file*, because a
+ * replay has no database to go back to. So they are read here, once, for the run's tasks — and
+ * through the same guarded projection as everything else, so an Orca with no `tasks.result`
+ * exports null results and says why in `provenance.source.degraded`, rather than failing.
+ *
+ * Chunked, because the ids come from a run and a run can be any size: SQLite has a hard ceiling
+ * on bound parameters, and a 1200-task orchestrator must not be the thing that discovers it.
+ */
+export function readBodies(db: DatabaseSync, columns: Columns, ids: string[]): Record<string, TaskBodies> {
+  const bodies: Record<string, TaskBodies> = {};
+
+  for (let from = 0; from < ids.length; from += BODY_CHUNK) {
+    const chunk = ids.slice(from, from + BODY_CHUNK);
+    const rows = selectWhere(
+      db,
+      'tasks',
+      columns.tasks,
+      TASK_BODY_COLUMNS,
+      `WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+      chunk
+    );
+
+    for (const row of rows) {
+      const id = text(row.id);
+      if (id !== null) bodies[id] = { spec: text(row.spec), result: text(row.result) };
+    }
+  }
+
+  return bodies;
+}
+
+/** Well under SQLite's parameter ceiling (999 on the oldest builds), and one query for most runs. */
+const BODY_CHUNK = 500;
 
 /**
  * Every attempt, in `rowid` order — insertion order, which is the order they were made in.

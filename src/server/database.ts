@@ -13,6 +13,8 @@ import type {
   Task,
   TaskDetail,
 } from '../shared/types.ts';
+import type { RunArchive } from '../shared/archive.ts';
+import { assembleArchive } from './archive.ts';
 import { type Attribution, buildAttribution } from './attribution.ts';
 import { conversationOf } from './conversation.ts';
 import { readCoordinatorRuns } from './coordinator-runs.ts';
@@ -30,8 +32,9 @@ import { inspectSchema, type SchemaReport } from './schema.ts';
 import { attachScoreboards } from './scoreboard.ts';
 import { openReadOnly } from './sqlite.ts';
 import type { PushResult } from './stream.ts';
-import { readTaskDetail } from './task-detail.ts';
+import { readBodies, readTaskDetail } from './task-detail.ts';
 import { readTasks } from './tasks.ts';
+import { toolVersion } from './version.ts';
 
 /**
  * The read-only view of Orca's orchestration database.
@@ -170,6 +173,43 @@ export class OrcaDatabase {
     const { liveness, evidence } = this.readEvidence();
 
     return { meta: this.metaOf(liveness), ...buildReport(evidence, query) };
+  }
+
+  /**
+   * **The run archive** — `GET /api/run/:id/archive` (#74, ADR 0001): one selected run's retained
+   * evidence, as a versioned, self-contained file the user asked for. Null when no run has this
+   * id, exactly as `runSnapshot` is: a 404, not an empty archive.
+   *
+   * It is one more *projection of the same read* — the snapshot, the messages and the bodies —
+   * and it is a projection with a boundary: what belongs to this run goes in the file, and what
+   * belongs to the machine does not (`assembleArchive`, `archive.ts`). The read itself is the
+   * ordinary one this class does on every tick: an export starts no watcher, no recorder and no
+   * background job, and the only thing that makes it happen is somebody clicking a link.
+   *
+   * The bodies are the one thing an export reads that nothing else does. Live, they are fetched
+   * one task at a time on a click (SPEC §6.3); a file has nobody to come back to, so it takes
+   * them all — which is the *self-contained* in "self-contained artifact".
+   */
+  archive(runId: string, exportedAt: Date = new Date()): RunArchive | null {
+    const { evidence, messages } = this.readEvidence();
+    const snapshot = snapshotRun(evidence, runId);
+    if (snapshot === null) return null;
+
+    return assembleArchive({
+      snapshot,
+      messages,
+      bodies: readBodies(this.db, this.schema.columns, snapshot.tasks.map((task) => task.id)),
+      // The schema this evidence was read *through*, so a replay can explain an absence the
+      // source database caused. Deliberately not `meta`: a database path is where this file came
+      // from on somebody's laptop, and an archive is not allowed to carry one (SPEC §12.4).
+      source: {
+        schemaVersion: this.schema.version,
+        schemaSupport: this.schema.support,
+        degraded: this.schema.degraded,
+      },
+      exportedAt,
+      tool: `orca-viz ${toolVersion()}`,
+    });
   }
 
   /**

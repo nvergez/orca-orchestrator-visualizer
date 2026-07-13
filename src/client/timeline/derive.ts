@@ -203,7 +203,7 @@ function endInstantOf(extent: BarExtent, axis: TimelineWindow): number {
   return extent.kind === 'open' ? axis.endAt : start;
 }
 
-export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
+export function deriveTimeline(snapshot: Omit<RunSnapshot, 'meta'>): TimelineModel {
   const { run, tasks, attempts, gates, turns } = snapshot;
 
   // One lane per cast member, in the cast's own order — an agent whose every attempt is unplaceable
