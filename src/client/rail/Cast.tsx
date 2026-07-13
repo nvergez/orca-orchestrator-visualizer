@@ -1,8 +1,11 @@
 import { motion } from 'motion/react';
-import { Diamond } from 'lucide-react';
+import { Diamond, Folder } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { CastMember, Run } from '../../shared/types.ts';
+import type { CastMember, EnrichedWorker, Enrichment, Run } from '../../shared/types.ts';
+// No STALE_HEARTBEAT_MS here any more: staleness is decided once by the worker-health model
+// (#47) and arrives already decided as `WorkerHealth`. The cast reads it; it no longer does
+// clock arithmetic of its own, which is why this component no longer takes a `now`.
 import { agentLook, MONOGRAM_CLASS } from '../canvas/theme.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SECTION_IN } from '../motion.ts';
@@ -32,9 +35,16 @@ export type CastProps = {
   healthByAgent: ReadonlyMap<string, WorkerHealth>;
   selectedAgent: string | null;
   onSelectAgent: (handle: string | null) => void;
+  /**
+   * Live Orca context (#61) — where each of these terminals works, and what its agent is
+   * doing right now, joined by the server on exact handles only. Absent unless the user
+   * opted in; empty-handed in every state but `ok`. The cast is the one surface that wears
+   * it, because "what is A2 literally doing" is a question about a *member of the cast*.
+   */
+  enrichment?: Enrichment;
 };
 
-export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent }: CastProps) {
+export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent, enrichment }: CastProps) {
   if (run.cast.length === 0) {
     return (
       <p data-testid="cast-empty" className="text-muted-foreground/70 px-4 pt-1 pb-3 pl-7 text-[11px] text-balance">
@@ -57,6 +67,19 @@ export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent }: CastP
         The cast
       </h3>
 
+      {/*
+        The one honest sentence a failed adapter gets (#61): the CLI timed out, exited, or
+        answered something this build cannot read. Everything around it is SQLite's and is
+        untouched — which is exactly why this is a caption and not a banner. Every other
+        non-`ok` state renders nothing at all: off, pending and suspended are all "there is
+        no live context", and a post-mortem screen must look as it did before #61 existed.
+      */}
+      {enrichment?.state === 'unavailable' && (
+        <p data-testid="enrichment-unavailable" className="text-muted-foreground/70 px-4 pb-1 pl-7 text-[10px]">
+          Live Orca context is unavailable — showing the database alone.
+        </p>
+      )}
+
       {/* The orchestrator itself, at the head of its own cast. It is not a button: there is nothing
           to filter *to* — the whole canvas is already its work, and the conversation already its
           conversation. It is here because a cast with no lead is a list of subordinates. */}
@@ -72,6 +95,7 @@ export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent }: CastP
           <code className="text-muted-foreground block truncate font-mono text-[10px]" title={run.handle ?? undefined}>
             {run.handle ?? '— no handle on record —'}
           </code>
+          <OrcaContext worker={workerOf(enrichment, run.handle)} owner="orchestrator" />
         </span>
 
         {/* The handle is the orchestrator's only identity in the schema, it is a uuid, and the row
@@ -95,6 +119,7 @@ export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent }: CastP
               // Clicking the selected agent lets it go — the way out is where the way in was.
               onSelect={() => onSelectAgent(member.handle === selectedAgent ? null : member.handle)}
               health={healthByAgent.get(member.handle) ?? { state: 'inactive' }}
+              worker={workerOf(enrichment, member.handle)}
             />
 
             <CopyButton
@@ -115,12 +140,15 @@ function Agent({
   selected,
   onSelect,
   health,
+  worker,
 }: {
   member: CastMember;
   cast: CastMember[];
   selected: boolean;
   onSelect: () => void;
   health: WorkerHealth;
+  /** This agent's live Orca context, when the server joined one to it exactly (#61). */
+  worker: EnrichedWorker | null;
 }) {
   const look = agentLook(member.handle, cast);
 
@@ -158,10 +186,76 @@ function Agent({
         <code className="text-muted-foreground block truncate font-mono text-[10px]">
           {shortHandle(member.handle)}
         </code>
+        <OrcaContext worker={worker} owner="agent" />
       </span>
 
       <LastSeen health={health} taskCount={member.taskCount} />
     </button>
+  );
+}
+
+/** Nothing unless the adapter's last good answer placed this handle. Null renders null. */
+function workerOf(enrichment: Enrichment | undefined, handle: string | null): EnrichedWorker | null {
+  if (enrichment?.state !== 'ok' || handle === null) return null;
+  return enrichment.workers.find((worker) => worker.handle === handle) ?? null;
+}
+
+/**
+ * The live context itself (#61): the worktree this terminal works in, and — only when the
+ * server could say so without guessing — what its agent is doing this second. Two quiet
+ * lines under the handle; the full path and the full tool input ride in the `title`, the
+ * way the handle itself does. It never animates: it is a caption, not an event (SPEC §7.9).
+ */
+function OrcaContext({ worker, owner }: { worker: EnrichedWorker | null; owner: 'orchestrator' | 'agent' }) {
+  if (worker === null) return null;
+
+  const { worktree, activity } = worker;
+
+  return (
+    <>
+      <span
+        data-testid={`${owner}-worktree`}
+        className="text-muted-foreground/80 flex min-w-0 items-center gap-1 text-[10px]"
+        title={worktree.path}
+      >
+        <Folder aria-hidden className="size-2.5 shrink-0 opacity-70" />
+        <span className="truncate">
+          {worktree.displayName ?? worktree.path}
+          {worktree.branch !== null && <span className="opacity-70"> · {worktree.branch}</span>}
+        </span>
+      </span>
+
+      {activity !== undefined && (
+        <span
+          data-testid={`${owner}-activity`}
+          className="text-muted-foreground block truncate text-[10px]"
+          // The row shows a glimpse; the hover has the rest — which agent binary, the whole
+          // tool input, and how current the reading is. Same convention as the handle above.
+          title={
+            [
+              activity.agentType,
+              [activity.toolName, activity.toolInput].filter(Boolean).join(' — ') || activity.lastAssistantMessage,
+              activity.updatedAt === null ? null : `as of ${new Date(activity.updatedAt).toLocaleTimeString()}`,
+            ]
+              .filter(Boolean)
+              .join(' · ') || undefined
+          }
+        >
+          {/* The pane's own word for its state, verbatim — `working`, `done`, or whatever a
+              newer Orca says (SPEC §5) — then the most current thing known about it. */}
+          <span className="font-medium">{activity.state}</span>
+          {activity.toolName !== null ? (
+            <>
+              {' · '}
+              {activity.toolName}
+              {activity.toolInput !== null && <span className="font-mono opacity-80"> — {activity.toolInput}</span>}
+            </>
+          ) : (
+            activity.lastAssistantMessage !== null && <> · {activity.lastAssistantMessage}</>
+          )}
+        </span>
+      )}
+    </>
   );
 }
 

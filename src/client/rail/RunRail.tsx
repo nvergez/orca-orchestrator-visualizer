@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import { runHealth, type RunHealth } from '../../shared/run-health.ts';
-import type { CoordinatorRun, Run, Task } from '../../shared/types.ts';
+import type { CoordinatorRun, Enrichment, Run, Task } from '../../shared/types.ts';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
@@ -83,6 +83,8 @@ export type RunRailProps = {
   onSelectAgent: (handle: string | null) => void;
   /** An orchestration that started while the user was reading an older one — announced, never jumped to. */
   newRunId: string | null;
+  /** Live Orca context (#61), when the opt-in is on. The cast is the one surface that wears it. */
+  enrichment?: Enrichment;
   /** Present only on mobile, where the rail is a foldable band. Desktop passes nothing. */
   fold?: RailFold;
 };
@@ -96,6 +98,7 @@ export function RunRail({
   selectedAgent,
   onSelectAgent,
   newRunId,
+  enrichment,
   fold,
 }: RunRailProps) {
   // Which row the pointer is on. The *only* reason this is state: the sliding highlight is one
@@ -290,6 +293,7 @@ export function RunRail({
                       healthByAgent={healthByRun.get(run.id) ?? EMPTY_HEALTH_BY_AGENT}
                       selectedAgent={selectedAgent}
                       onSelectAgent={onSelectAgent}
+                      enrichment={enrichment}
                     />
                   )}
                 </li>

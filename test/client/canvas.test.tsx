@@ -12,9 +12,9 @@ import type { CastMember, Dispatch, Meta, Run, StreamEvent, Task, Wave } from '.
  *
  * What is asserted is the DOM the user reads: the title on the node, the status chip, the
  * assignee, the retry marker, the last-seen badge, and the honest sentence an edgeless task
- * set gets. What is **not** asserted is elkjs coordinates or React Flow internals — the
- * prototype proved the layout at real scale on screen, and testing coordinates is exactly
- * the implementation-detail testing #12 forbids.
+ * set gets. Coordinates, transforms, DOM identity and layout math remain out of scope. Issue #46's
+ * continuity is observed through the public controls and content: a reader zooms to the maximum,
+ * pushes never re-enable that control, and task content never disappears behind a layout state.
  */
 
 const META: Meta = {
@@ -355,6 +355,89 @@ describe('the task DAG on the canvas', () => {
   });
 });
 
+describe('live snapshot updates', () => {
+  async function zoomToMaximum(): Promise<HTMLButtonElement> {
+    const control = screen.getByRole<HTMLButtonElement>('button', { name: /zoom in/i });
+    for (let step = 0; step < 20 && !control.disabled; step += 1) {
+      await userEvent.click(control);
+    }
+    await waitFor(() => expect(control).toBeDisabled());
+    return control;
+  }
+
+  it('keeps the mounted nodes and viewport when a fresh snapshot has the same topology', async () => {
+    const first = [
+      task({ id: 'task_one', title: 'First task' }),
+      task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
+    ];
+    const view = render(<App event={event(first)} />);
+    await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
+
+    await zoomToMaximum();
+
+    // An SSE snapshot reconstructs every object even when placement inputs did not change. Status,
+    // dispatch, heartbeat and cast data still need to refresh immediately, without making that new
+    // object graph a new canvas (issue #46).
+    const second = [
+      task({
+        id: 'task_one',
+        title: 'First task',
+        status: 'dispatched',
+        dispatch: dispatch({ lastHeartbeatAt: '2026-07-08T12:00:12.000Z' }),
+        attemptCount: 1,
+      }),
+      task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
+    ];
+    view.rerender(<App event={event(second)} />);
+
+    expect(screen.queryByText(/Laying out/i)).toBeNull();
+    expect(within(node('task_one')).getByText('dispatched')).toBeVisible();
+    expect(within(node('task_one')).getByTestId('assignee')).toHaveTextContent('A1');
+    expect(screen.getByRole('button', { name: /zoom in/i })).toBeDisabled();
+  });
+
+  it('keeps the previous canvas visible while a genuine topology change is laid out', async () => {
+    const first = [
+      task({ id: 'task_one', title: 'First task' }),
+      task({ id: 'task_two', title: 'Second task', deps: ['task_one'] }),
+    ];
+    const view = render(<App event={event(first)} />);
+    await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
+
+    await zoomToMaximum();
+
+    view.rerender(
+      <App
+        event={event([
+          task({
+            id: 'task_one',
+            title: 'First task',
+            status: 'dispatched',
+            dispatch: dispatch(),
+            attemptCount: 1,
+          }),
+          first[1]!,
+          task({ id: 'task_three', title: 'New task', deps: ['task_two'] }),
+        ])}
+      />
+    );
+
+    // The old placements are the usable canvas until elk has replacement positions. Clearing them
+    // would remount React Flow, replay node entrances and throw away the reader's viewport.
+    expect(screen.queryByText(/Laying out/i)).toBeNull();
+    expect(screen.getAllByTestId('task-node')).toHaveLength(2);
+    expect(within(node('task_one')).getByText('First task')).toBeVisible();
+    // Placement can wait for the new topology; current facts about an existing task cannot.
+    expect(within(node('task_one')).getByText('dispatched')).toBeVisible();
+    expect(within(node('task_one')).getByTestId('assignee')).toHaveTextContent('A1');
+    expect(screen.getByRole('button', { name: /zoom in/i })).toBeDisabled();
+
+    await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(3));
+    expect(within(node('task_three')).getByText('New task')).toBeVisible();
+    expect(screen.getByRole('button', { name: /zoom in/i })).toBeDisabled();
+  });
+});
+
 /**
  * Dependency edges are a **status affordance, never message flow** (SPEC §7.6): an edge into
  * a dispatched task is dashed and animated, which is how the canvas shows where work is
@@ -567,5 +650,27 @@ describe('the waves', () => {
     });
 
     expect(screen.queryAllByTestId('wave-region')).toHaveLength(0);
+  });
+
+  it('replaces the layout when the same tasks move into different wave bounds', async () => {
+    const tasks = [task({ id: 'task_one' }), task({ id: 'task_two' })];
+    const view = render(
+      <App event={event(tasks, { waves: waves([['task_one', 'task_two']], [null]) })} />
+    );
+    await waitFor(() => expect(screen.getAllByTestId('task-node')).toHaveLength(2));
+
+    view.rerender(
+      <App
+        event={event(tasks, {
+          waves: waves([['task_one'], ['task_two']], [null, 14 * 60 * 60 * 1000]),
+        })}
+      />
+    );
+
+    // Membership is the spatial bound: it decides which independently laid-out box owns a task.
+    // Timestamps only caption that box and do not move it.
+    expect(screen.queryByText(/Laying out/i)).toBeNull();
+    await waitFor(() => expect(screen.getAllByTestId('wave-region')).toHaveLength(2));
+    expect(screen.getByTestId('wave-gap')).toHaveTextContent('after 14h idle');
   });
 });

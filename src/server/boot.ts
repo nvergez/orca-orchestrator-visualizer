@@ -69,6 +69,9 @@ export async function boot(options: BootOptions): Promise<Booted> {
       database,
       pollIntervalMs: cli.pollIntervalMs,
       watch: cli.watch ? {} : undefined,
+      // The #61 opt-in, passed as presence: absent means the adapter is never constructed
+      // and no `orca` command can run. `{}` is the real CLI with its defaults.
+      enrichment: cli.orcaEnrichment ? {} : undefined,
     });
     await listen(server, cli);
 
@@ -83,6 +86,9 @@ export async function boot(options: BootOptions): Promise<Booted> {
     for (const line of describeSchema(meta)) print(`          ${line}`);
     // The wording keeps the hierarchy straight: the poll decides, the watch only hurries it.
     if (cli.watch) print(`          watching for changes, to run the ${cli.pollIntervalMs} ms poll early`);
+    // Said out loud because it is the one thing this tool does beyond reading a file: it
+    // will spawn `orca worktree ps` / `orca terminal list` — reads, on their own timer.
+    if (cli.orcaEnrichment) print('          live Orca context: on (orca worktree ps, read-only, while Orca runs)');
     print(`          listening on ${url}`);
 
     if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);

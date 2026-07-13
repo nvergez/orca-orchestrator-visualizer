@@ -38,6 +38,13 @@ export type StreamSource = {
   dataVersion(): number;
   liveness(): Liveness;
   snapshot(since?: number): StreamEvent;
+  /**
+   * The third thing that can change without the database changing (#61): the live Orca
+   * context, refreshed on its own timer off this loop entirely. A moved generation is
+   * treated exactly like a moved `data_version`. Optional because it exists only behind
+   * the `--orca-enrichment` opt-in — a plain database is a complete source.
+   */
+  enrichmentVersion?(): number;
 };
 
 /** One connected browser, as this module sees it: something to push to, and to close. */
@@ -54,6 +61,8 @@ type Subscriber = {
   version: number;
   /** The liveness it was built from. Orca quitting changes this and *nothing else*. */
   liveness: Liveness;
+  /** The enrichment generation it was built from (#61). 0 whenever the source has none. */
+  enrichment: number;
 };
 
 export class EventStream {
@@ -89,9 +98,10 @@ export class EventStream {
    */
   subscribe(client: StreamClient, since = 0): () => void {
     const version = this.source.dataVersion();
+    const enrichment = this.enrichmentVersion();
     const event = this.source.snapshot(since);
 
-    const subscriber: Subscriber = { client, cursor: since, version, liveness: event.meta.liveness };
+    const subscriber: Subscriber = { client, cursor: since, version, liveness: event.meta.liveness, enrichment };
     this.subscribers.add(subscriber);
     this.start();
 
@@ -114,6 +124,7 @@ export class EventStream {
     if (this.subscribers.size === 0) return;
 
     let version: number;
+    let enrichment: number;
     let event: StreamEvent;
     let stale: Subscriber[];
 
@@ -123,19 +134,24 @@ export class EventStream {
     // next tick. Nothing here has touched a subscriber yet, so their `version` is unchanged
     // and a recovery pushes them everything they missed.
     try {
-      // The two things that can have changed under us, and the *only* two reads an idle tick
-      // makes: SQLite's commit counter, and whether Orca is still alive. One pragma, one stat,
-      // one signal-0 — no queries against a single table, and nothing at all sent to the browser.
+      // The things that can have changed under us, and the *only* reads an idle tick makes:
+      // SQLite's commit counter, whether Orca is still alive, and — behind the opt-in — the
+      // enrichment adapter's generation, which is a memory read. One pragma, one stat, one
+      // signal-0 — no queries against a single table, and nothing at all sent to the browser.
       version = this.source.dataVersion();
       const liveness = this.source.liveness();
+      enrichment = this.enrichmentVersion();
 
-      // Those two reads succeeding *is* the recovery: the file is readable again. Reset here
+      // Those reads succeeding *is* the recovery: the file is readable again. Reset here
       // rather than after a successful push, or a database that failed and then came back to
       // an idle orchestration would never re-arm — and the *next* failure would be silent.
       this.failing = false;
 
       stale = [...this.subscribers].filter(
-        (subscriber) => subscriber.version !== version || subscriber.liveness !== liveness
+        (subscriber) =>
+          subscriber.version !== version ||
+          subscriber.liveness !== liveness ||
+          subscriber.enrichment !== enrichment
       );
       if (stale.length === 0) return;
 
@@ -165,8 +181,10 @@ export class EventStream {
       // The version we *read before the snapshot*, never one read after it: a write landing
       // mid-read then leaves us holding the older version, so the next tick sees a change and
       // pushes again. The other order would record a version this snapshot never saw and lose
-      // that change forever — a client silently stale until the next unrelated write.
+      // that change forever — a client silently stale until the next unrelated write. The
+      // enrichment generation follows the same rule for the same race.
       subscriber.version = version;
+      subscriber.enrichment = enrichment;
       // Liveness, though, is taken from the event we actually sent: `snapshot()` re-derives
       // it, and recording the one *we* read a moment earlier would leave the two disagreeing
       // and push a duplicate on the next tick.
@@ -202,6 +220,11 @@ export class EventStream {
     this.subscribers.delete(subscriber);
     // Nobody listening is not a slow loop, it is no loop: the pragma stops being read at all.
     if (this.subscribers.size === 0) this.stopTimer();
+  }
+
+  /** The source's enrichment generation, or 0 for the plain database that has none (#61). */
+  private enrichmentVersion(): number {
+    return this.source.enrichmentVersion?.() ?? 0;
   }
 
   /** A failing database says so once, not every five seconds until the user gives up and quits. */

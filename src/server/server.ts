@@ -4,7 +4,8 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
-import { EventStream, type StreamClient } from './stream.ts';
+import { type EnrichmentOptions, OrcaEnrichment, withEnrichment } from './enrichment.ts';
+import { EventStream, type StreamClient, type StreamSource } from './stream.ts';
 import { type WakeDeps, type WakeWatcher, watchForWakeHints } from './wake.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
@@ -62,6 +63,12 @@ export type ServerOptions = {
    * whether anything is queried or pushed, exactly as it does on the interval.
    */
   watch?: WakeDeps;
+  /**
+   * Live Orca context (#61) — the explicit opt-in behind `--orca-enrichment`. Absent means
+   * **off**: no adapter exists, no `orca` command ever runs, and the wire carries no
+   * `enrichment` field. `{}` turns the real CLI on with its defaults; tests inject `run`.
+   */
+  enrichment?: EnrichmentOptions;
 };
 
 /**
@@ -87,8 +94,17 @@ export function createServer({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   clientDir = CLIENT_DIR,
   watch,
+  enrichment,
 }: ServerOptions): Viz {
-  const stream = new EventStream(database, pollIntervalMs);
+  // The adapter is constructed only behind the opt-in — while it is off, the code that could
+  // spawn an `orca` process does not exist here to be reached (#61). When it is on, *both*
+  // event-shaped routes serve the wrapped source: two views of the enrichment could disagree,
+  // and /api/snapshot is documented as the same event the stream pushes.
+  const adapter = enrichment === undefined ? null : new OrcaEnrichment(() => database.liveness(), enrichment);
+  const source: StreamSource = adapter === null ? database : withEnrichment(database, adapter);
+  adapter?.start();
+
+  const stream = new EventStream(source, pollIntervalMs);
 
   // The watcher may only ever run the tick the interval was going to run anyway — earlier.
   // Its failures are its own: setup or runtime trouble warns once inside `wake.ts` and leaves
@@ -105,7 +121,7 @@ export function createServer({
     }
 
     if (urlPath === '/api/snapshot') {
-      sendSnapshot(database, res);
+      sendSnapshot(source, res);
       return;
     }
 
@@ -143,6 +159,9 @@ export function createServer({
       // harmless — a tick with no subscribers reads nothing — but "harmless" is not a
       // lifecycle, and the caller is about to close the database out from under everything.)
       watcher?.close();
+      // Likewise the enrichment adapter's own timer, and any `orca` child still in flight:
+      // nothing may outlive the server that opted into it.
+      adapter?.stop();
       stream.close();
       await new Promise((resolve) => server.close(resolve));
     },
@@ -199,9 +218,9 @@ function lastEventId(req: IncomingMessage): number {
  * under a read. A 500 with the reason keeps the process up and tells the user which of
  * those it was; a thrown exception here would take the whole tool down mid-poll.
  */
-function sendSnapshot(database: OrcaDatabase, res: ServerResponse): void {
+function sendSnapshot(source: StreamSource, res: ServerResponse): void {
   try {
-    const body = JSON.stringify(database.snapshot());
+    const body = JSON.stringify(source.snapshot());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(body);
   } catch (error) {

@@ -18,6 +18,11 @@ export type Options = {
   watch: boolean;
   /** Auto-open the browser. `--no-open` turns it off; so do a pipe, CI and SSH. */
   open: boolean;
+  /**
+   * `--orca-enrichment` (#61): ask the `orca` CLI for live worktree/activity context.
+   * **Off by default** — while it is off, no Orca command runs, ever.
+   */
+  orcaEnrichment: boolean;
   help: boolean;
   version: boolean;
 };
@@ -42,6 +47,10 @@ Options:
                          when a file changes. A hint, never a source: the poll stays
                          authoritative, and if watching fails orca-viz warns once and
                          carries on polling.
+  --orca-enrichment      Also ask the orca CLI what live workers are doing right now
+                         (worktree, current tool call) — two read-only commands on their own
+                         timer, only while Orca is running. Off by default; failure never
+                         touches the database view.
   --no-open              Do not open a browser. Also suppressed automatically when stdout
                          is not a terminal, or over SSH, or with no display.
   --version              Print the version and exit.
@@ -84,6 +93,7 @@ export function parseOptions(argv: string[]): Options {
         : integerOption('--poll-interval', values['poll-interval'], { min: 100, max: 3_600_000 }),
     watch: values.watch ?? false,
     open: !(values['no-open'] ?? false),
+    orcaEnrichment: values['orca-enrichment'] ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
   };
@@ -96,6 +106,7 @@ const OPTION_SPEC = {
   host: { type: 'string' },
   'poll-interval': { type: 'string' },
   watch: { type: 'boolean' },
+  'orca-enrichment': { type: 'boolean' },
   'no-open': { type: 'boolean' },
   version: { type: 'boolean' },
   help: { type: 'boolean' },

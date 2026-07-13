@@ -436,6 +436,76 @@ export type TaskDetail = {
 };
 
 /**
+ * **Live Orca context, joined to an exact worker identity** (#61 — the live-supervision
+ * roadmap #51; its SPEC §12 chapter lands with #65).
+ *
+ * Everything above this type is SQLite's. This is the one thing on the wire that is not: an
+ * explicitly opt-in adapter asks the `orca` CLI — `worktree ps --json`, plus `terminal list
+ * --json` as the minimum read-only metadata needed to join it — what a live worker is doing
+ * *right now*, which is the single fact the database cannot hold (SPEC §1.4).
+ *
+ * It is a convenience riding on the snapshot, never a second authority: it may add worktree
+ * or current-activity context to a worker, and it may not delay, replace, clear or contradict
+ * the SQLite state it rides on. CLI slowness, failure, malformed output or ambiguity cost
+ * exactly this field — labelled honestly — and nothing else.
+ */
+
+/** The worktree a worker's terminal lives in — `orca worktree ps`, joined by exact handle. */
+export type EnrichedWorktree = {
+  path: string;
+  /** `refs/heads/` stripped: a label, not a ref. */
+  branch: string | null;
+  repo: string | null;
+  displayName: string | null;
+};
+
+/**
+ * What the agent in that worktree is literally doing — attached **only when the joined agent
+ * is unambiguous**: one agent, one terminal, and that terminal is the worker's. A worktree
+ * with several terminals or several agents renders no guessed activity (#61).
+ */
+export type EnrichedActivity = {
+  /** The pane's own word — `working`, `done`, or whatever a newer Orca says. Verbatim (SPEC §5). */
+  state: string;
+  agentType: string | null;
+  lastAssistantMessage: string | null;
+  toolName: string | null;
+  toolInput: string | null;
+  /** ISO — when the CLI last saw this pane change. Null when it gave none. */
+  updatedAt: string | null;
+};
+
+export type EnrichedWorker = {
+  /** The orchestration handle this context joined to — exactly, never by prompt text or timing. */
+  handle: string;
+  worktree: EnrichedWorktree;
+  /** Absent when the join was ambiguous: no activity is better than somebody else's. */
+  activity?: EnrichedActivity;
+};
+
+/**
+ * - `pending` — enabled and live, but the first CLI answer has not landed yet.
+ * - `ok` — `workers` is the last good answer, cached; `fetchedAt` says how old.
+ * - `unavailable` — the last ask failed (timeout, exit code, malformed JSON, schema drift).
+ *   The SQLite snapshot around it is complete and untouched; only this context is missing.
+ * - `suspended` — Orca is not live, so the live-only path is not running and no command runs.
+ */
+export type EnrichmentState = 'pending' | 'ok' | 'unavailable' | 'suspended';
+
+export type Enrichment = {
+  state: EnrichmentState;
+  /**
+   * ISO of the CLI read `workers` came from. Null whenever there is no good answer to date.
+   * On the wire for the `curl` reader `/api/snapshot` exists for (SPEC §6.4): "how old is
+   * this context" is the first honest question about a cache. Deliberately *outside* the
+   * server's change fingerprint — a fresh timestamp on an unchanged answer pushes nobody.
+   */
+  fetchedAt: string | null;
+  /** Only handles the snapshot actually names, and only exact joins. Empty unless `ok`. */
+  workers: EnrichedWorker[];
+};
+
+/**
  * One event type: first connect, normal tick and SSE reconnect all have this shape, so
  * there is no separate resync path to get wrong (SPEC §6.2).
  */
@@ -458,4 +528,10 @@ export type StreamEvent = {
    * snapshot cannot say — *what just arrived* — which is what flashes a node (SPEC §7.6).
    */
   messages: FeedMessage[];
+  /**
+   * Live Orca context (#61) — **absent unless the user opted in** (`--orca-enrichment`).
+   * Optional-absent like a `Turn`'s defaults: a tool that was never asked for enrichment
+   * does not spend wire saying so five times a minute.
+   */
+  enrichment?: Enrichment;
 };

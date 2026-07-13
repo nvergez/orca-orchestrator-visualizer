@@ -32,15 +32,24 @@ export type ServeOptions = DatabaseDeps & {
   pollIntervalMs?: number;
   /** The wake hint (#59) — the same dial `--watch` turns, deps and all. Absent = poll only. */
   watch?: ServerOptions['watch'];
+  /** The #61 opt-in, with a scripted CLI — the same dial `--orca-enrichment` turns. */
+  enrichment?: ServerOptions['enrichment'];
 };
 
 /** Serve a fixture database. `probe` fakes the process table so liveness is testable. */
 export async function serve(
   dbPath: string,
-  { pollIntervalMs = 20, watch, ...deps }: ServeOptions = {}
+  { pollIntervalMs = 20, watch, enrichment, ...deps }: ServeOptions = {}
 ): Promise<Harness> {
   const database = new OrcaDatabase(dbPath, deps);
-  const { server, close } = createServer({ database, pollIntervalMs, watch, clientDir: '/nonexistent-bundle' });
+  const { server, close } = createServer({
+    database,
+    pollIntervalMs,
+    watch,
+    clientDir: '/nonexistent-bundle',
+    // Fast, like the poll interval: a suite must not wait a production cadence out.
+    enrichment: enrichment === undefined ? undefined : { intervalMs: 25, ...enrichment },
+  });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
