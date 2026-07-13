@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { StreamEvent } from '../shared/types.ts';
 import { App } from './App.tsx';
 
@@ -27,23 +27,55 @@ import { App } from './App.tsx';
  */
 
 export function Live() {
-  return <App event={useStreamEvent()} />;
+  const { event, epoch } = useStream();
+
+  return <App event={event} streamEpoch={epoch} />;
 }
 
-/** The latest `StreamEvent` the server has pushed, or null before the first one lands. */
-function useStreamEvent(): StreamEvent | null {
-  const [event, setEvent] = useState<StreamEvent | null>(null);
+/**
+ * The latest `StreamEvent` the server has pushed, and **which connection pushed it**.
+ *
+ * The event is the page. The `epoch` is one fact about the *transport* that one thing on the page
+ * genuinely needs: it counts the connections, so the shell can tell a normal tick from the first
+ * snapshot after a reconnect. That snapshot is a full re-read of everything that happened while
+ * the page was blind (SPEC §6.2 — `EventSource` resumes from `Last-Event-ID` on its own), and a
+ * notifier that mistook it for news would turn a closed laptop lid into a burst of desktop
+ * notifications. It is the baseline instead, announced to nobody (`attention/notify.ts`, #60).
+ *
+ * Nothing else here changed, and in particular the page still **does not blank on a blip**: the
+ * error handler records that the connection dropped and does nothing else at all. `EventSource` is
+ * already retrying, and the honest thing to show meanwhile is the last state we were given.
+ */
+type Stream = { event: StreamEvent | null; epoch: number };
+
+function useStream(): Stream {
+  const [stream, setStream] = useState<Stream>(NOT_YET);
+  /** Set by the drop, read and cleared by the message that comes back after it. */
+  const dropped = useRef(false);
 
   useEffect(() => {
     const source = new EventSource('/api/stream');
 
-    source.onmessage = (message: MessageEvent<string>) => setEvent(JSON.parse(message.data) as StreamEvent);
+    source.onmessage = (message: MessageEvent<string>) => {
+      const event = JSON.parse(message.data) as StreamEvent;
 
-    // No `onerror`: the failure it reports is one `EventSource` is already retrying, and the
-    // honest thing to show meanwhile is the last state we were given — which is what leaving
-    // it alone does. Blanking the page on a blip would be a worse lie than a slightly old one.
+      // Read *outside* the updater, which React may call twice: a reconnect that consumed its own
+      // flag on the first invocation would come back a plain tick on the second, and the burst
+      // this exists to prevent would be back.
+      const reconnected = dropped.current;
+      dropped.current = false;
+
+      setStream((previous) => ({ event, epoch: previous.epoch + (reconnected ? 1 : 0) }));
+    };
+
+    source.onerror = () => {
+      dropped.current = true;
+    };
+
     return () => source.close();
   }, []);
 
-  return event;
+  return stream;
 }
+
+const NOT_YET: Stream = { event: null, epoch: 0 };

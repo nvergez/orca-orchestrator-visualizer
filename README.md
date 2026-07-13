@@ -126,9 +126,20 @@ explanation rather than silently misread.
 - **The inspector** — the spec that was dispatched, the result that came back, **every** dispatch
   attempt (the only place the retry-and-circuit-breaker story is visible), and that task's exchange
   end to end.
+- **Needs attention** — one ranked list, at the top of the rail, of everything that needs you *now*,
+  across **every** orchestrator at once: questions provably blocking work, workers that have gone
+  quiet, tasks one failure from the circuit breaker, escalations nobody has acted on, and fresh
+  failures. Clicking one goes straight to it. It is not there when nothing needs you.
 
 It follows your system's light or dark theme, and the toggle in the top right overrides that and
 is remembered.
+
+**And it can reach you when you are not looking at it.** The tab title counts what needs attention
+and the favicon wears a dot — always, for free, with no permission asked. The bell beside the theme
+toggle additionally opts you in to **one desktop notification per new cause**, and it is off until
+you click it: the browser is only asked for permission from that click, the queue that is already
+there when a page opens or reconnects is treated as history and never announced, and a browser that
+denies or lacks notifications loses nothing but the notification.
 
 ## What it infers, and where that can be wrong
 

@@ -44,6 +44,24 @@ export const ATTENTION_FRESHNESS_MS = STALE_HEARTBEAT_MS;
 
 export type AttentionKind = 'blocking-gate' | 'stale-worker' | 'retry-risk' | 'escalation' | 'fresh-failure';
 
+/**
+ * **What each cause is called** — CONTEXT.md's vocabulary, in the module that derives the causes,
+ * so that every surface which names one names it identically.
+ *
+ * Two of them read it today: the queue's rows label their icon with it (`attention/AttentionQueue`)
+ * and a desktop notification is titled with it (`attention/notify.ts`, #60). A second spelling
+ * would be a second name for one thing, on a screen whose whole discipline is saying exactly what
+ * the evidence proves — and "stale worker" in particular is load-bearing: `quiet` is a *different*
+ * worker-health state (#47), and one this queue deliberately refuses to admit.
+ */
+export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
+  'blocking-gate': 'blocking decision gate',
+  'stale-worker': 'stale worker',
+  'retry-risk': 'retry risk',
+  escalation: 'unresolved escalation',
+  'fresh-failure': 'fresh failure',
+};
+
 type AttentionBase = {
   /** Stable across snapshots — built from the durable row identities behind the evidence. */
   id: string;

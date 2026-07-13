@@ -1,7 +1,7 @@
 import { CircleX, HeartPulse, Megaphone, OctagonAlert, RotateCcw, type LucideIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
-import type { AttentionItem, AttentionKind } from '../attention.ts';
+import { type AttentionItem, ATTENTION_KIND_LABEL, type AttentionKind } from '../attention.ts';
 import { enter, SPRING } from '../motion.ts';
 
 /**
@@ -34,16 +34,17 @@ export type AttentionQueueProps = {
  * existing meanings: gate orange for blocking questions, the amber worker-health already wears
  * for silence and retries, the failed red for escalations and failures — no new colour, because
  * a new colour would be a new claim.
+ *
+ * The *words* are not here: a row's icon is labelled from `ATTENTION_KIND_LABEL`, the one
+ * vocabulary the derivation itself owns (`attention.ts`), so that this row and the desktop
+ * notification of the same cause (#60) cannot come to call it two different things.
  */
-const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string; label: string }> = {
-  'blocking-gate': { icon: OctagonAlert, ink: 'text-gate', label: 'blocking decision gate' },
-  // "Stale", never "quiet": `quiet` is a *different* worker-health state in #47 — dispatched, the
-  // first beat still plausibly in flight — and it is one this tier deliberately refuses to admit.
-  // Naming the row after the state it excludes is the one label that could not be right.
-  'stale-worker': { icon: HeartPulse, ink: 'text-amber-700 dark:text-amber-400', label: 'stale worker' },
-  'retry-risk': { icon: RotateCcw, ink: 'text-amber-700 dark:text-amber-400', label: 'retry risk' },
-  escalation: { icon: Megaphone, ink: 'text-red-700 dark:text-red-400', label: 'unresolved escalation' },
-  'fresh-failure': { icon: CircleX, ink: 'text-red-700 dark:text-red-400', label: 'fresh failure' },
+const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string }> = {
+  'blocking-gate': { icon: OctagonAlert, ink: 'text-gate' },
+  'stale-worker': { icon: HeartPulse, ink: 'text-amber-700 dark:text-amber-400' },
+  'retry-risk': { icon: RotateCcw, ink: 'text-amber-700 dark:text-amber-400' },
+  escalation: { icon: Megaphone, ink: 'text-red-700 dark:text-red-400' },
+  'fresh-failure': { icon: CircleX, ink: 'text-red-700 dark:text-red-400' },
 };
 
 export function AttentionQueue({ items, onAttend }: AttentionQueueProps) {
@@ -130,7 +131,11 @@ function AttentionBody({ item }: { item: AttentionItem }) {
 
   return (
     <>
-      <Icon role="img" aria-label={look.label} className={cn('size-3.5 shrink-0 translate-y-px', look.ink)} />
+      <Icon
+        role="img"
+        aria-label={ATTENTION_KIND_LABEL[item.kind]}
+        className={cn('size-3.5 shrink-0 translate-y-px', look.ink)}
+      />
       <span className="min-w-0">
         <b className="block truncate text-xs font-semibold" title={item.title}>
           {item.title}
