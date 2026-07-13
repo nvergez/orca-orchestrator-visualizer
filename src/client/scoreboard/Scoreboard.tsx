@@ -145,7 +145,14 @@ const METRICS: Metric[] = [
     // Absent ⇒ **unknown**: neither receipt source was readable, so this agent has no measured
     // zero to be sorted by, and it goes last like every other unknown. An empty list *is* a
     // measured zero and sorts as one (`Scorecard.outcomeLinks`).
-    sort: (score) => (score?.outcomeLinks === undefined ? null : score.outcomeLinks.length),
+    //
+    // The sort key is the **total the cell prints**, not the length of the list that reached the
+    // client. `outcomeLinks` is a preview the server capped at `RECEIPT_PREVIEW_FACTS` and the
+    // remainder rides along as a count, so an agent with eight links and an agent with twenty
+    // both arrive carrying eight of them — and sorting on the array would order "most links
+    // first" so that a row reading 8 sits above a row reading 20.
+    sort: (score) =>
+      score?.outcomeLinks === undefined ? null : score.outcomeLinks.length + (score.outcomeLinksOmitted ?? 0),
   },
 ];
 

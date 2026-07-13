@@ -261,6 +261,39 @@ describe('the comparison grid', () => {
     expect(rowOrder(panel)).toEqual(['A2', 'A1', 'A3']);
   });
 
+  it('sorts the outcome column by the total its cell shows, not by the list the cap let through', () => {
+    // The server caps the preview at `RECEIPT_PREVIEW_FACTS` and sends the remainder as a count,
+    // so a member with eight links and a member with twenty reach the client carrying the same
+    // eight-element array. A column that sorted on that array would order "most links first" with
+    // the row reading 8 above the row reading 20 — sorting by a number its own cell never shows.
+    const capped = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `https://github.com/x/y/pull/${n}`);
+    const eight = member('A1', FIRST, { outcomeLinks: capped });
+    const twenty = member('A2', SECOND, { outcomeLinks: capped, outcomeLinksOmitted: 12 });
+
+    render(<CannedApp event={event([run({ cast: [eight, twenty, trio()[2]!] })], [task()])} />);
+    const panel = openScoreboard();
+
+    const cell = (monogram: string): HTMLElement =>
+      within(
+        within(panel)
+          .getAllByTestId('scoreboard-row')
+          .find((row) => row.dataset.agent === monogram)!
+      ).getByTestId('score-outcomes');
+
+    expect(cell('A1')).toHaveTextContent('8');
+    expect(cell('A2')).toHaveTextContent('20');
+
+    const byOutcomes = within(panel).getByRole('button', { name: /sort by outcome links/i });
+
+    // Most links first: the twenty, then the eight — and the unknown last, as ever. A2 is second
+    // in dispatch order, so a tie on the capped length would leave it stranded behind A1.
+    fireEvent.click(byOutcomes);
+    expect(rowOrder(panel)).toEqual(['A2', 'A1', 'A3']);
+
+    fireEvent.click(byOutcomes);
+    expect(rowOrder(panel)).toEqual(['A1', 'A2', 'A3']);
+  });
+
   it('sorts by one metric at a time, and an unknown sorts last in either direction', () => {
     render(<CannedApp event={event([run({ cast: trio() })], [task()])} />);
     const panel = openScoreboard();
