@@ -1,10 +1,10 @@
-import { Archive, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useMemo } from 'react';
-import { Beams } from '@/components/fx/beams';
-import { type ArchiveView, archiveHistory, archiveTaskLoader, fetchArchive, useArchive } from './archive.ts';
+import { type ArchiveRead, archiveHistory, archiveTaskLoader, fetchArchive, useArchive } from './archive.ts';
 import { App } from './App.tsx';
 import { enter, SPRING } from './motion.ts';
+import { Splash } from './Splash.tsx';
 import { FIELD_BACKDROP_STYLE } from './surface.ts';
 
 /**
@@ -30,7 +30,7 @@ export type ReplayProps = {
    * reason `loadTask` and `loadHistory` are (`App.tsx`): the network lives at the edges, and a
    * test drives this page against a file rather than a fake server.
    */
-  load?: () => Promise<ArchiveView>;
+  load?: () => Promise<ArchiveRead>;
 };
 
 export function Replay({ load = fetchArchive }: ReplayProps = {}) {
@@ -41,7 +41,9 @@ export function Replay({ load = fetchArchive }: ReplayProps = {}) {
   const loadTask = useMemo(() => (view === null ? null : archiveTaskLoader(view.archive)), [view]);
 
   if (error !== null) return <BrokenArchive error={error} />;
-  if (view === null || loadHistory === null || loadTask === null) return <OpeningArchive />;
+  // One blink, off a local file — and it waits under *archived* wording, because "connecting to
+  // the database" would be a claim, and this page's whole job is to make no claims (`Splash`).
+  if (view === null || loadHistory === null || loadTask === null) return <Splash archived />;
 
   return <App event={null} archive={view} loadHistory={loadHistory} loadTask={loadTask} />;
 }
@@ -75,43 +77,6 @@ function BrokenArchive({ error }: { error: string }) {
       <p role="alert" className="text-muted-foreground relative max-w-prose text-center text-xs text-balance">
         {error}
       </p>
-    </main>
-  );
-}
-
-/** One blink, off a local file — but an empty canvas would mean "this run had no tasks". */
-function OpeningArchive() {
-  return (
-    <main className="bg-field relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden">
-      <span aria-hidden className="pointer-events-none absolute inset-0" style={FIELD_BACKDROP_STYLE} />
-      <Beams />
-
-      <motion.span
-        initial={enter({ opacity: 0, scale: 0.8 })}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={SPRING}
-        className="bg-muted text-muted-foreground relative flex size-11 items-center justify-center rounded-2xl"
-      >
-        <Archive className="size-5.5" />
-      </motion.span>
-
-      <motion.h1
-        initial={enter({ opacity: 0, y: 6 })}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...SPRING, delay: 0.08 }}
-        className="relative text-base font-semibold tracking-tight"
-      >
-        orca-viz
-      </motion.h1>
-
-      <motion.p
-        initial={enter({ opacity: 0 })}
-        animate={{ opacity: 1 }}
-        transition={{ ...SPRING, delay: 0.16 }}
-        className="text-muted-foreground relative text-xs"
-      >
-        Opening the archive…
-      </motion.p>
     </main>
   );
 }

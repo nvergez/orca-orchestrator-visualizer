@@ -131,6 +131,26 @@ describe('readArchive — what it refuses, and how', () => {
     }
   });
 
+  it('refuses an archive whose provenance is half there — the bar reads it on sight', () => {
+    // The archived/offline sentence, the tool and the source schema are dereferenced by the bar
+    // and the notices the moment a replay renders. A file that got past the reader without them
+    // would throw inside React — the white page the reader exists to make impossible.
+    const raw = minimalArchive();
+    delete (raw.provenance as Record<string, unknown>).exportedAt;
+    delete ((raw.provenance as Record<string, unknown>).source as Record<string, unknown>).degraded;
+
+    const error = refusal(raw);
+    expect(error.message).toContain('provenance is missing exportedAt');
+    expect(error.message).toContain('source.degraded');
+  });
+
+  it('refuses an archive with no source schema at all', () => {
+    const raw = minimalArchive();
+    delete (raw.provenance as Record<string, unknown>).source;
+
+    expect(refusal(raw).message).toContain('provenance is missing source');
+  });
+
   it('names every missing piece of the core at once, not just the first', () => {
     const error = refusal(minimalArchive({ tasks: undefined, turns: 'not a list' }));
 

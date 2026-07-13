@@ -185,6 +185,20 @@ export function readArchive(value: unknown): ArchiveRead {
 function coreProblems(document: Record<string, unknown>): string[] {
   const problems: string[] = [];
 
+  // The provenance is core, not a footnote: the archived/offline bar reads the instant and the
+  // tool out of it, and the compatibility notice reads the source schema. A file that got this
+  // far with half a provenance would have passed the reader and *then* thrown inside React — the
+  // white page this whole function exists to make impossible.
+  const provenance = object(document.provenance)!; // `readArchive` has already refused a missing one.
+  const source = object(provenance.source);
+  const missingProvenance = [
+    ...PROVENANCE_FIELDS.filter(([field, ok]) => !ok(provenance[field])).map(([field]) => field),
+    ...(source === null
+      ? ['source']
+      : SOURCE_FIELDS.filter(([field, ok]) => !ok(source[field])).map(([field]) => `source.${field}`)),
+  ];
+  if (missingProvenance.length > 0) problems.push(`its provenance is missing ${missingProvenance.join(', ')}`);
+
   const run = object(document.run);
   if (run === null) {
     problems.push('it has no run');
@@ -211,6 +225,23 @@ function coreProblems(document: Record<string, unknown>): string[] {
 
   return problems;
 }
+
+/**
+ * What the replay *says about the file itself* — the archived/offline sentence, the tool that
+ * wrote it, and the schema it was read through. `derivation` is deliberately not here: it is a
+ * paragraph for whoever opens the JSON in an editor, and nothing on screen dereferences it.
+ */
+const PROVENANCE_FIELDS: [field: string, ok: (value: unknown) => boolean][] = [
+  ['exportedAt', isString],
+  ['tool', isString],
+];
+
+/** `provenance.source` — the schema the evidence was read through, and what it already cost. */
+const SOURCE_FIELDS: [field: string, ok: (value: unknown) => boolean][] = [
+  ['schemaVersion', isNumber],
+  ['schemaSupport', isString],
+  ['degraded', Array.isArray],
+];
 
 /**
  * The `Run` fields the rail, the canvas and the conversation dereference on sight: a replay that

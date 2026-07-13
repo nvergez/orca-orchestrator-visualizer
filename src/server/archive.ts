@@ -10,7 +10,7 @@ import {
   type RunArchive,
   type TaskBodies,
 } from '../shared/archive.ts';
-import type { FeedMessage, RunSnapshot } from '../shared/types.ts';
+import type { FeedMessage, RunSnapshot, Task } from '../shared/types.ts';
 import { StartupError } from './errors.ts';
 
 /**
@@ -56,6 +56,11 @@ export function assembleArchive({ snapshot, messages, bodies, source, exportedAt
   const runId = snapshot.run.id;
 
   return {
+    // Spread first, override after: a field added to `RunSnapshot` tomorrow lands in the archive
+    // by default rather than being silently dropped from it — which, in a file whose whole claim
+    // is "the selected run, complete" (ADR 0002), is the failure that would go unnoticed longest.
+    ...snapshot,
+
     provenance: {
       format: ARCHIVE_FORMAT,
       version: ARCHIVE_VERSION,
@@ -70,23 +75,51 @@ export function assembleArchive({ snapshot, messages, bodies, source, exportedAt
     // over evidence that is right here in the file.
     run: { ...snapshot.run, live: false },
 
-    tasks: snapshot.tasks,
-    // The append-only retry record, whole: every attempt of every task, not the `MAX(rowid)`
-    // survivor a `Task` carries.
-    attempts: snapshot.attempts,
-    gates: snapshot.gates,
     // This run's conversation. **Not** the turns nothing places: see the module note.
     turns: snapshot.turns.filter((turn) => turn.runId === runId),
-    // The far ends of dependency edges that cross out of this run — titles and status, no bodies,
-    // no attempts, no conversation. They are this run's *edges*, which is why the snapshot carries
-    // them at all: without them the inspector's dep chips would call a task that exists deleted.
-    linkedTasks: snapshot.linkedTasks,
-    coordinatorRuns: snapshot.coordinatorRuns,
+
+    // The far ends of dependency edges that cross out of this run, **as edges and nothing more**.
+    linkedTasks: snapshot.linkedTasks.map(edgeEndpoint),
 
     bodies,
     // The raw rows, attributed to this run at export time — and nothing global, nothing
     // unattributed, nothing another orchestrator said.
     messages: messages.filter((message) => message.runId === runId),
+  };
+}
+
+/**
+ * A task from **another orchestrator**, reduced to the fact that it is the far end of one of this
+ * run's dependency edges (`RunSnapshot.linkedTasks`, #69).
+ *
+ * The snapshot carries these so the inspector's dep chips can *name* the task an edge points at
+ * instead of calling a task that exists deleted. That is all an archive needs them for, and a full
+ * `Task` carries a great deal more: `dispatch` names the other run's agent and every instant of
+ * its attempt, `attemptCount` is its retry history, and `gate` is the question that run was asked
+ * and the answer it was given. Exporting those would be exporting **another run** — the thing the
+ * artifact is forbidden to hold (ADR 0001) — for the sake of a chip that renders a title.
+ *
+ * So the endpoint keeps its identity, its title, its status and its edges, and drops the rest. It
+ * is not a lie by omission: a replay cannot open a task from a run this file does not contain, and
+ * it says so where the chip would otherwise offer a click (`Inspector`'s `Deps`).
+ */
+function edgeEndpoint(task: Task): Task {
+  return {
+    id: task.id,
+    runId: task.runId,
+    parentId: task.parentId,
+    title: task.title,
+    status: task.status,
+    // Kept, because they are *edges*, and the "Blocks" section is the set of tasks whose deps name
+    // this one — a linked task with no deps would silently drop a real back-edge.
+    deps: task.deps,
+    createdAt: task.createdAt,
+    completedAt: task.completedAt,
+    hasSpec: false,
+    hasResult: false,
+    dispatch: null,
+    attemptCount: 0,
+    gate: null,
   };
 }
 

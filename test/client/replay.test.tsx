@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import { type ArchiveView, archiveHistory, archiveTaskLoader } from '../../src/client/archive.ts';
+import { type ArchiveRead, archiveHistory, archiveTaskLoader } from '../../src/client/archive.ts';
 import { Replay } from '../../src/client/Replay.tsx';
 import { ARCHIVE_FORMAT, ARCHIVE_VERSION, ArchiveError, readArchive, type RunArchive } from '../../src/shared/archive.ts';
 import type { Run, Task, Turn } from '../../src/shared/types.ts';
@@ -130,12 +130,12 @@ function archive(over: Partial<RunArchive> = {}): RunArchive {
   };
 }
 
-function view(over: Partial<RunArchive> = {}, compatibility: ArchiveView['compatibility'] = 'supported'): ArchiveView {
+function view(over: Partial<RunArchive> = {}, compatibility: ArchiveRead['compatibility'] = 'supported'): ArchiveRead {
   return { archive: archive(over), compatibility };
 }
 
 /** The replay shell, driven by an archive — exactly what `<Replay>` composes after its one fetch. */
-function replay(archived: ArchiveView = view()) {
+function replay(archived: ArchiveRead = view()) {
   return render(
     <App
       event={null}
@@ -193,6 +193,15 @@ describe('an archived replay says what it is', () => {
     expect(source).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+
+  it('waits under archived wording — "connecting to the database" is a claim, even for one frame', async () => {
+    // A file that has not landed yet. The live shell's splash says it is connecting to a database;
+    // a replay has no database, and must not say so while it opens a file.
+    render(<Replay load={() => new Promise(() => {})} />);
+
+    expect(await screen.findByText(/Opening the archive/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Connecting to the database/i)).not.toBeInTheDocument();
   });
 
   it('says so on the screen when the archive cannot be read, rather than drawing an empty canvas', async () => {
@@ -288,7 +297,25 @@ describe('a newer archive renders, under a warning', () => {
       })
     );
 
-    expect(await screen.findByText(/missing columns this build reads/i)).toBeInTheDocument();
+    // The same sentence the live tool shows for the same fact (`schemaSentence`), and the same
+    // list of what a missing column cost — recorded at export, because nothing else remembers it.
+    expect(await screen.findByText(/older Orca schema/i)).toBeInTheDocument();
     expect(screen.getByText(degraded[0]!)).toBeInTheDocument();
+    expect(screen.getByText(/source schema v4/i)).toBeInTheDocument();
+  });
+
+  it('warns when the *source database* was a newer Orca — where nothing is degraded by name', async () => {
+    // The case a hand-written "these features are reduced" list would have missed entirely: a
+    // newer Orca degrades nothing, and everything it added may still be missing or mislabeled.
+    replay(
+      view({
+        provenance: {
+          ...archive().provenance,
+          source: { schemaVersion: 6, schemaSupport: 'newer', degraded: [] },
+        },
+      })
+    );
+
+    expect(await screen.findByText(/newer Orca schema/i)).toBeInTheDocument();
   });
 });

@@ -1,7 +1,6 @@
 import { Archive, ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
-import { Beams } from '@/components/fx/beams';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,7 +13,7 @@ import {
   livenessSentence,
   schemaSentence,
 } from '../shared/wording.ts';
-import type { ArchiveView } from './archive.ts';
+import type { ArchiveRead } from './archive.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -26,6 +25,7 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
+import { Splash } from './Splash.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { useIsMobile } from './viewport.tsx';
@@ -115,7 +115,7 @@ export type AppProps = {
    * What changes is exactly what would otherwise be a lie — the liveness bar becomes an *archived*
    * one, there is no stream to pulse a node, and there is nothing to export from an export.
    */
-  archive?: ArchiveView | null;
+  archive?: ArchiveRead | null;
 };
 
 export function App({
@@ -308,8 +308,9 @@ export function App({
 
   // Two things have to land before the shell is worth drawing: the stream's first event (the
   // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
-  // A replay has no stream — its bar is the archive's — so it waits only for the file.
-  if ((event === null && archive === null) || !ready) return <Connecting />;
+  // A replay has no stream — its bar is the archive's — so it waits only for the file, and it
+  // waits under archived wording: "connecting to the database" is a claim, even for one frame.
+  if ((event === null && archive === null) || !ready) return <Splash archived={archive !== null} />;
 
   return (
     // One switch, at the top, for a reader who has asked their machine to hold still. Every
@@ -318,9 +319,17 @@ export function App({
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        {archive === null ? <TopBar meta={event!.meta} /> : <ArchiveBar archive={archive} />}
+        {/* The bar, and the notices under it: the archive's when there is one, the live database's
+            when there is not. The nested ternary is the type narrowing — the guard above has
+            already ruled out "neither", and an assertion here would be a claim the compiler cannot
+            check on a shell that has two sources of truth. */}
+        {archive !== null ? <ArchiveBar view={archive} /> : event !== null ? <TopBar meta={event.meta} /> : null}
 
-        {archive === null ? <Notices meta={event!.meta} /> : <ArchiveNotices archive={archive} />}
+        {archive !== null ? (
+          <ArchiveNotices view={archive} />
+        ) : event !== null ? (
+          <Notices meta={event.meta} />
+        ) : null}
 
         {/* `max-lg:flex-col` is the fold itself: DOM order rail → centre → dock becomes
             top → middle → bottom, and nothing else about the row changes. */}
@@ -481,8 +490,8 @@ function archiveHref(runId: string): string {
  * What it *does* show is the run it holds and the tool that exported it — the provenance a person
  * needs in order to trust a file somebody sent them.
  */
-function ArchiveBar({ archive: { archive } }: { archive: ArchiveView }) {
-  const { provenance, run } = archive;
+function ArchiveBar({ view }: { view: ArchiveRead }) {
+  const { provenance, run } = view.archive;
 
   return (
     <motion.header
@@ -548,22 +557,26 @@ function ArchiveBar({ archive: { archive } }: { archive: ArchiveView }) {
 }
 
 /**
- * What is *wrong*, in a replay — the same slot as the live notices, and two things to say.
+ * What is *wrong*, in a replay — the same slot as the live notices, and two different files to be
+ * wrong about.
  *
- * **The compatibility warning** is the ticket's last acceptance criterion made visible: a file a
- * newer orca-viz wrote is readable and read, and the reader says so out loud rather than showing a
- * post-mortem quietly missing an unknown amount of what was exported (`archiveCompatibilitySentence`).
+ * **The archive** may be one a newer orca-viz wrote. It is readable and read, and the reader says
+ * so out loud rather than showing a post-mortem that is quietly missing an unknown amount of what
+ * was exported (`archiveCompatibilitySentence`, #74's last acceptance criterion).
  *
- * **The source's degradation** is the second, and it is why the exporter recorded it: a column the
- * *original database* did not have cost a feature at export time, and an absence with no
- * explanation reads on a replay as a bug in the replay. The archive remembers the reason, so the
- * screen can still give it — months later, on a machine that never had the database.
+ * **The database it came from** may have been one *this build* could not fully read — a newer Orca,
+ * or an older one missing a column. That was true at export time, months ago, on a machine this
+ * replay has never seen; the archive is the only thing that still remembers it (`source`). So the
+ * schema banner is the same banner the live tool shows, out of the same sentence (`schemaSentence`,
+ * `shared/wording.ts`) — because it is the same fact about the same kind of database, and an
+ * absence with no explanation would otherwise read as a bug in the replay.
  */
-function ArchiveNotices({ archive: { archive, compatibility } }: { archive: ArchiveView }) {
+function ArchiveNotices({ view: { archive, compatibility } }: { view: ArchiveRead }) {
   const incompatible = archiveCompatibilitySentence(compatibility, archive.provenance);
-  const { degraded } = archive.provenance.source;
+  const { source } = archive.provenance;
+  const schema = schemaSentence(source);
 
-  if (incompatible === null && degraded.length === 0) return null;
+  if (incompatible === null && schema === null) return null;
 
   return (
     <motion.div
@@ -582,14 +595,20 @@ function ArchiveNotices({ archive: { archive, compatibility } }: { archive: Arch
         </p>
       )}
 
-      {degraded.length > 0 && (
-        <section role="status" data-state="archive-degraded" className="px-4 py-2">
-          <p>The database this run was exported from was missing columns this build reads — these features are reduced:</p>
-          <ul className="mt-1 list-disc pl-5 opacity-90">
-            {degraded.map((feature) => (
-              <li key={feature}>{feature}</li>
-            ))}
-          </ul>
+      {schema !== null && (
+        <section role="status" data-state="archive-schema" className="px-4 py-2">
+          <p>
+            <span className="opacity-70">At export: </span>
+            {schema} <span className="opacity-70">(source schema v{source.schemaVersion})</span>
+          </p>
+
+          {source.degraded.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 opacity-90">
+              {source.degraded.map((feature) => (
+                <li key={feature}>{feature}</li>
+              ))}
+            </ul>
+          )}
         </section>
       )}
     </motion.div>
@@ -871,59 +890,6 @@ function LoadingRun() {
         Loading this run’s history…
       </p>
     </section>
-  );
-}
-
-/**
- * Before the first `StreamEvent` lands (`Live.tsx`) — which, on a local file, is one blink.
- *
- * **The one screen in this tool with no data on it**, and therefore the one screen where a purely
- * beautiful thing costs nothing at all: there is nothing here to obscure, no status to compete
- * with, and no number anybody is trying to read. So it gets the beams, the glow and the sweep of
- * light across the word — and it gets them for half a second, once, and then the tool starts.
- */
-function Connecting() {
-  return (
-    <main className="bg-field relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden">
-      <span aria-hidden className="pointer-events-none absolute inset-0" style={FIELD_BACKDROP_STYLE} />
-      <Beams />
-
-      <motion.span
-        initial={enter({ opacity: 0, scale: 0.8 })}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={SPRING}
-        className="bg-primary text-primary-foreground relative flex size-11 items-center justify-center rounded-2xl"
-        style={{ boxShadow: '0 0 60px -10px var(--selection), 0 0 0 1px oklch(1 0 0 / 0.08)' }}
-      >
-        <Waypoints className="size-5.5" />
-      </motion.span>
-
-      <motion.h1
-        initial={enter({ opacity: 0, y: 6 })}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...SPRING, delay: 0.08 }}
-        className="relative text-base font-semibold tracking-tight"
-      >
-        orca-viz
-      </motion.h1>
-
-      {/* A sweep of light across the sentence, rather than a sentence blinking on and off: it is
-          reading a file, and reading is a thing that moves in one direction. */}
-      <motion.p
-        initial={enter({ opacity: 0 })}
-        animate={{ opacity: 1 }}
-        transition={{ ...SPRING, delay: 0.16 }}
-        className="relative bg-clip-text text-xs text-transparent"
-        style={{
-          backgroundImage:
-            'linear-gradient(90deg, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%)',
-          backgroundSize: '200% 100%',
-          animation: 'orca-shimmer 1.8s linear infinite',
-        }}
-      >
-        Connecting to the database…
-      </motion.p>
-    </main>
   );
 }
 

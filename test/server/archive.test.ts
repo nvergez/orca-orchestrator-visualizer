@@ -147,11 +147,21 @@ describe('the artifact: one selected run, complete', () => {
     harness = await serve(twoOrchestrators().write(tempDbPath()));
 
     const { archive } = await exported();
+    const [linked] = archive.linkedTasks;
 
-    // B's task depends on A's, so it is an *edge* of this run — a title and a status, and nothing
-    // else of orchestrator B: no bodies, no attempts, no messages, no conversation.
+    // B's task depends on A's, so it is an *edge* of this run — and it is exported as an edge.
     expect(archive.linkedTasks.map((task) => task.id)).toEqual([B1]);
     expect(archive.tasks.map((task) => task.id)).toEqual([A1, A2]);
+    expect(linked).toMatchObject({ id: B1, runId: OTHER_RUN, title: 'Ship it', status: 'completed', deps: [A1] });
+
+    // …and as *nothing more*. A `Task` also carries who held it, when they were dispatched, how
+    // many times it was retried and what gate it answered — which is orchestrator B's evidence,
+    // and exporting it would be exporting another run (ADR 0001).
+    expect(linked?.dispatch).toBeNull();
+    expect(linked?.attemptCount).toBe(0);
+    expect(linked?.gate).toBeNull();
+    expect(JSON.stringify(archive.linkedTasks)).not.toContain(OTHER_AGENT);
+
     expect(archive.bodies[B1]).toBeUndefined();
     expect(archive.attempts[B1]).toBeUndefined();
   });

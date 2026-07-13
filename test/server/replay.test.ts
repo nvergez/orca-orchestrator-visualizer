@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { boot, type BootOptions, type Booted } from '../../src/server/boot.ts';
+import { StartupError } from '../../src/server/errors.ts';
 import { ARCHIVE_VERSION, type RunArchive } from '../../src/shared/archive.ts';
 import type { RunSnapshot } from '../../src/shared/types.ts';
 import { createReplayServer, type Viz } from '../../src/server/server.ts';
@@ -188,6 +189,23 @@ describe('a replay opens no database, and cannot poll', () => {
     expect(opened).toEqual([origin]);
   });
 
+  it('prints what the source database’s schema cost this evidence, months after the fact', async () => {
+    // An Orca with no `tasks.result`: the export recorded what that cost, because by replay time
+    // the database is gone and the archive is the only thing that still knows.
+    harness = await serve(
+      new FixtureBuilder({ omitColumns: { tasks: ['result'] } })
+        .task({ id: A1, handle: ORCHESTRATOR, title: 'Read the spec', createdAt: at(0) })
+        .write(tempDbPath())
+    );
+    const { path } = await exportToFile();
+
+    const { lines } = await replay(path);
+    const printed = lines.join('\n');
+
+    expect(printed).toContain('missing columns this build expects');
+    expect(printed).toContain('tasks.result');
+  });
+
   it('has no live routes at all — there is no stream, no index and no task detail to ask for', async () => {
     harness = await serve(database());
     const { path } = await exportToFile();
@@ -264,6 +282,24 @@ describe('a file this build cannot read fails in the terminal, not in the browse
     expect(error.message).toContain('tasks');
     expect(error.message).toContain('run');
     expect(error.toString()).toContain('export the run again');
+  });
+
+  it('refuses a newer archive whose provenance it cannot read, instead of crashing on it', async () => {
+    harness = await serve(database());
+    const { archive } = await exportToFile();
+
+    // The shape a later orca-viz could plausibly ship: a bumped version, and a provenance whose
+    // source moved. It must fail as an *archive error*, not as a TypeError thrown while printing.
+    const path = join(tempDir(), 'v2.json');
+    writeFileSync(
+      path,
+      JSON.stringify({ ...archive, provenance: { format: archive.provenance.format, version: 2 } })
+    );
+
+    const error = await refuse(['--archive', path]);
+    expect(error).toBeInstanceOf(StartupError);
+    expect(error.message).toContain('provenance is missing');
+    expect(error.toString()).toContain('Upgrade orca-viz');
   });
 
   it('opens a *newer* archive anyway, under a compatibility warning', async () => {

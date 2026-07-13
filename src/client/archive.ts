@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { type ArchiveCompatibility, ArchiveError, readArchive, type RunArchive } from '../shared/archive.ts';
-import type { RunSnapshot, TaskDetail } from '../shared/types.ts';
+import { type ArchiveRead, ArchiveError, readArchive, type RunArchive } from '../shared/archive.ts';
+import type { TaskDetail } from '../shared/types.ts';
 import type { HistoryLoaders } from './history.ts';
 import type { TaskLoader } from './inspector/detail.ts';
 
@@ -22,20 +22,22 @@ import type { TaskLoader } from './inspector/detail.ts';
  * (`src/shared/archive.ts`) rather than by a flag the server sent along beside them.
  */
 
-/** What a replay is looking at: the artifact, and how much of it this build understands. */
-export type ArchiveView = {
-  archive: RunArchive;
-  compatibility: ArchiveCompatibility;
-};
+/**
+ * What a replay is looking at: the artifact, and how much of it this build understands — which is
+ * exactly what the reader returns (`ArchiveRead`, `src/shared/archive.ts`). It is re-exported under
+ * the name the client says out loud rather than redeclared: two shapes for one fact are two shapes
+ * that can drift.
+ */
+export type { ArchiveRead };
 
 export type ArchiveState = {
-  view: ArchiveView | null;
+  view: ArchiveRead | null;
   /** Why there is none — written for the screen, because there is no terminal to print it to. */
   error: string | null;
 };
 
 /** The real transport: the one route an archived replay has. */
-export async function fetchArchive(): Promise<ArchiveView> {
+export async function fetchArchive(): Promise<ArchiveRead> {
   const response = await fetch('/api/archive');
   if (!response.ok) throw new Error(`The replay server could not serve this archive (${response.status}).`);
 
@@ -49,7 +51,7 @@ export async function fetchArchive(): Promise<ArchiveView> {
  * under it moves; nothing moves under an archive, so a second read could only ever return the
  * same bytes.
  */
-export function useArchive(load: () => Promise<ArchiveView> = fetchArchive): ArchiveState {
+export function useArchive(load: () => Promise<ArchiveRead> = fetchArchive): ArchiveState {
   const [state, setState] = useState<ArchiveState>({ view: null, error: null });
 
   useEffect(() => {
@@ -87,15 +89,12 @@ export function useArchive(load: () => Promise<ArchiveView> = fetchArchive): Arc
  * gone", which is exactly what a run that is not in this archive is.
  */
 export function archiveHistory(archive: RunArchive): HistoryLoaders {
-  const snapshot: Omit<RunSnapshot, 'meta'> = {
-    run: archive.run,
-    tasks: archive.tasks,
-    attempts: archive.attempts,
-    gates: archive.gates,
-    turns: archive.turns,
-    linkedTasks: archive.linkedTasks,
-    coordinatorRuns: archive.coordinatorRuns,
-  };
+  // The archive **is** the selected-run snapshot, plus the three things a file needs and a live
+  // reader does not. So the snapshot is what is left when those three are taken off — never a
+  // field-by-field copy, which is how a field added to `RunSnapshot` tomorrow would quietly stop
+  // reaching the replay while every type still checked.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the three are being *taken off*
+  const { provenance, bodies, messages, ...snapshot } = archive;
 
   return {
     index: () => ({ runs: [archive.run], nextCursor: null, coordinatorRuns: archive.coordinatorRuns }),

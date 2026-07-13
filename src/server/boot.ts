@@ -121,23 +121,8 @@ export async function boot(options: BootOptions): Promise<Booted> {
  * cannot open is a sentence in the terminal — with what is wrong and what to do — rather than a
  * blank browser tab pointed at a port (`loadArchiveFile`).
  */
-async function replay(
-  path: string,
-  cli: Options,
-  {
-    print,
-    openBrowser,
-    isTTY,
-    env,
-    platform,
-  }: {
-    print: (line: string) => void;
-    openBrowser: (url: string) => void;
-    isTTY: boolean;
-    env: NodeJS.ProcessEnv;
-    platform: NodeJS.Platform;
-  }
-): Promise<Booted> {
+async function replay(path: string, cli: Options, terminal: Terminal): Promise<Booted> {
+  const { print, openBrowser, isTTY, env, platform } = terminal;
   const { artifact, archive, compatibility } = loadArchiveFile(path);
 
   const { server, close } = createReplayServer({ artifact });
@@ -151,12 +136,29 @@ async function replay(
   print(`          ${archivedSentence(archive.provenance)}`);
   const incompatible = archiveCompatibilitySentence(compatibility, archive.provenance);
   if (incompatible !== null) print(`          ${incompatible}`);
+  // What the *source* database's schema cost this evidence, months ago — the same list the live
+  // boot prints, because it is the same fact and the archive is what still remembers it.
+  for (const line of describeSchema(archive.provenance.source)) print(`          ${line}`);
   print(`          listening on ${url}`);
 
   if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
 
   return { url, close };
 }
+
+/**
+ * What the boot path is allowed to say, and where it says it — the terminal, and the browser it
+ * may open. Both boots take the same one, because "tell the user what you are looking at" (SPEC §3)
+ * is owed whether the thing being looked at is a database or a file.
+ */
+type Terminal = {
+  print: (line: string) => void;
+  openBrowser: (url: string) => void;
+  /** Is stdout a terminal? Decides whether a browser was implicitly asked for. */
+  isTTY: boolean;
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+};
 
 /** Which run is in the file, how big it is, and the schema it was read through. */
 function describeArchive({ run, tasks, provenance }: RunArchive): string {
@@ -217,18 +219,17 @@ function describeState(meta: Meta): string {
  * missing and leaves them to hunt the screen for what. So the terminal prints exactly what the
  * page prints — the sentence, and then the feature, and what they get instead of it.
  */
-function describeSchema(meta: Meta): string[] {
-  const sentence = schemaSentence(meta);
+function describeSchema(schema: Pick<Meta, 'schemaSupport' | 'degraded'>): string[] {
+  const sentence = schemaSentence(schema);
   if (sentence === null) return [];
 
-  return [sentence, ...meta.degraded.map((feature) => `  • ${feature}`)];
+  return [sentence, ...schema.degraded.map((feature) => `  • ${feature}`)];
 }
 
 /** `0.0.0.0` is not somewhere a browser can go; `localhost` is. */
 function displayHost(host: string): string {
   return host === '0.0.0.0' || host === '::' ? 'localhost' : host;
 }
-
 
 /**
  * `--list-dbs`: every candidate, with the facts you need to pick between them — and, when
