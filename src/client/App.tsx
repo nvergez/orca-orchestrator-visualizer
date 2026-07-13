@@ -1,4 +1,4 @@
-import { ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
+import { ChevronUp, Database, Moon, Sun, Table2, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
 import { Beams } from '@/components/fx/beams';
@@ -20,6 +20,8 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
+import { fetchReport, type ReportLoader } from './report/query.ts';
+import { Report } from './report/Report.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { useIsMobile } from './viewport.tsx';
@@ -92,9 +94,19 @@ export type AppProps = {
    * `loadTask`'s pattern, grown to the two reads the stream stopped carrying.
    */
   loadHistory?: HistoryLoaders;
+  /**
+   * How the cross-history report is read (#70): `GET /api/report`, one page at a time, sorted and
+   * filtered on the server. A prop for the same reason the other two are.
+   */
+  loadReport?: ReportLoader;
 };
 
-export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHistory }: AppProps) {
+export function App({
+  event,
+  loadTask = fetchTaskDetail,
+  loadHistory = fetchHistory,
+  loadReport = fetchReport,
+}: AppProps) {
   // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
   // selected run's complete evidence, each refetched when `event.affected` names it (#69).
   const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, snapshot } = useHistory(
@@ -131,6 +143,12 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // describes are one task.
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  // The report is the shell's third selection-shaped thing (#70): it reads *across* runs, and a
+  // row it opens moves the run selection, the task selection and the dock — three pieces of state
+  // no panel can see. It is a dialog over the whole tool rather than a fourth panel: it is a place
+  // you go to find one task and then leave, not a thing you read beside the canvas.
+  const [reportOpen, setReportOpen] = useState(false);
 
   // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
   // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
@@ -275,6 +293,27 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
     setSelectedTaskId(taskId);
   }
 
+  /**
+   * A row of the cross-history report (#70). It is `showTask` for a task the client has not
+   * loaded and cannot look up: the report ranks *all* of retained history, and the row names a
+   * run the selected-run snapshot has never seen.
+   *
+   * So the run id comes from the row, and the two selections are set together: `select` fetches
+   * that run whole (`useHistory`), and the task id waits — the inspector opens the moment the
+   * snapshot carrying its task lands. The report's whole job is to be an entry point into the
+   * existing story, and this is the entrance.
+   */
+  function openReportRow(runId: string, taskId: string): void {
+    if (runId !== selected?.id) {
+      if (isMobile) setCrossRunFrom(selected?.label ?? null);
+      select(runId);
+      setSelectedAgent(null); // A different orchestrator's cast — see `selectRun`.
+    }
+    openDock();
+    setSelectedTaskId(taskId);
+    setReportOpen(false);
+  }
+
   // Two things have to land before the shell is worth drawing: the stream's first event (the
   // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
   if (!event || !ready) return <Connecting />;
@@ -286,9 +325,21 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar meta={event.meta} />
+        <TopBar meta={event.meta} onOpenReport={() => setReportOpen(true)} />
 
         <Notices meta={event.meta} />
+
+        {/* Across every orchestrator, and over all of them (#70). It is not a panel in the row
+            below: those three are one run's story, and this is the search that finds the run. */}
+        {reportOpen && (
+          <Report
+            event={event}
+            runs={runs}
+            load={loadReport}
+            onSelectRow={openReportRow}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
 
         {/* `max-lg:flex-col` is the fold itself: DOM order rail → centre → dock becomes
             top → middle → bottom, and nothing else about the row changes. */}
@@ -490,7 +541,7 @@ function Backdrop() {
  * write (SPEC §1.2) — so the only control on it is the one that is about the reader and not the
  * data: the light the page is read in.
  */
-function TopBar({ meta }: { meta: Meta }) {
+function TopBar({ meta, onOpenReport }: { meta: Meta; onOpenReport: () => void }) {
   return (
     <motion.header
       initial={enter({ opacity: 0, y: -8 })}
@@ -523,6 +574,21 @@ function TopBar({ meta }: { meta: Meta }) {
       <Status meta={meta} />
 
       <Source meta={meta} />
+
+      {/* The one thing on this bar that is *about all of history* rather than about the run on
+          screen — which is why it is here, on the bar the whole tool shares, and not in the rail
+          that lists one orchestrator at a time (#70). */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="open-report"
+        onClick={onOpenReport}
+        className="h-7 shrink-0 cursor-pointer gap-1.5 px-2 text-[11px] pointer-coarse:h-10"
+      >
+        <Table2 className="size-3.5" />
+        <span className="max-lg:hidden">Task report</span>
+      </Button>
 
       <ThemeToggle />
     </motion.header>

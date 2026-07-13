@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
 import { CursorError } from './history.ts';
+import { parseReportQuery, ReportQueryError } from './report.ts';
 import { EventStream, type StreamClient } from './stream.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
@@ -101,6 +102,11 @@ export function createServer({
 
     if (urlPath === '/api/runs') {
       sendRunIndex(database, url.searchParams.get('cursor'), res);
+      return;
+    }
+
+    if (urlPath === '/api/report') {
+      sendReport(database, url.searchParams, res);
       return;
     }
 
@@ -235,6 +241,24 @@ function sendSnapshot(database: OrcaDatabase, since: string | null, res: ServerR
 function sendRunIndex(database: OrcaDatabase, cursor: string | null, res: ServerResponse): void {
   read(res, () => sendJson(res, 200, database.runIndex(cursor)), (error) =>
     error instanceof CursorError ? { status: 400, body: { error: error.message } } : null
+  );
+}
+
+/**
+ * `GET /api/report` (#70) — one page of the cross-history dispatch report: one row per retained
+ * task, sorted, filtered and paged on the server.
+ *
+ * Every refusal it can make is a **400**, and they are all the same refusal: a query this build
+ * cannot honour is not quietly replaced with one it can. A sort key it does not know, a range
+ * endpoint that is not an instant, a cursor cut under a different sort — answering any of them
+ * with the default first page would show the reader a slice of history they did not ask for, and
+ * nothing on screen would say so (SPEC §3, the flag-that-does-not-work rule).
+ */
+function sendReport(database: OrcaDatabase, params: URLSearchParams, res: ServerResponse): void {
+  read(
+    res,
+    () => sendJson(res, 200, database.report(parseReportQuery(params))),
+    (error) => (error instanceof ReportQueryError ? { status: 400, body: { error: error.message } } : null)
   );
 }
 

@@ -1,8 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { mergeReceipts, receiptOfWorkerDone } from '../shared/receipt.ts';
 import type {
   FeedMessage,
   Liveness,
   Meta,
+  ReceiptFact,
+  ReportPage,
   Run,
   RunIndexPage,
   RunSnapshot,
@@ -20,6 +23,7 @@ import { digestRuns } from './digests.ts';
 import { pageRuns, type RunEvidence, snapshotRun } from './history.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
+import { buildReport, type ReportQuery } from './report.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
 import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
@@ -133,6 +137,20 @@ export class OrcaDatabase {
   }
 
   /**
+   * One page of the **cross-history dispatch report** — `GET /api/report` (#70): one row per
+   * retained task across every run, sorted, filtered and paged here rather than in a browser
+   * that would have to hold the whole of history to do it.
+   *
+   * It is a fourth projection of the same evidence pass, and it reads nothing the other three do
+   * not: no second task-detail truth, and — deliberately — no graph (SPEC §12.6).
+   */
+  report(query: ReportQuery): ReportPage {
+    const { liveness, evidence } = this.readEvidence();
+
+    return { meta: this.metaOf(liveness), ...buildReport(evidence, query) };
+  }
+
+  /**
    * Everything one read of the database derives, exactly once — the projections above
    * (the stream event, the run index, the selected-run snapshot, the digests) all draw from
    * this one pass, which is what keeps them incapable of disagreeing about what a run holds.
@@ -170,9 +188,51 @@ export class OrcaDatabase {
         turns: conversationOf({ entries, runs: gated.runs, gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
+        // The recognized outcome facts of both evidence columns, per task (#67) — what the
+        // report's compact summary is a cap of, and the inspector's receipt is the whole of.
+        receiptsByTask: this.receiptsOf(entries, messages),
       },
       messages,
     };
+  }
+
+  /**
+   * The whole outcome receipt of every task that has one (#67) — read **once**, for the report
+   * that asks it of every task at once (#70).
+   *
+   * It is the inspector's reading, exactly (`task-detail.ts`): `tasks.result` merged with every
+   * `worker_done` payload that named the task, agreement deduplicating into one fact with two
+   * provenances and conflict staying two facts. The two must be one reading — a row that
+   * summarized an outcome the panel behind it does not show would be the report inventing a
+   * second truth about a task, which is the one thing #70 is not allowed to do.
+   *
+   * The messages are the ones already read for the conversation, so this costs a pass over rows
+   * that are in hand, never a second query — and a per-task scan of the log (O(tasks × messages))
+   * is exactly what building it here avoids.
+   */
+  private receiptsOf(entries: TaskWithHandle[], messages: FeedMessage[]): Map<string, ReceiptFact[]> {
+    const completions = new Map<string, unknown[]>();
+
+    for (const message of messages) {
+      // `taskId` is the attribution the rest of the server already made (SPEC §4.4): a payload
+      // that names no task that still exists names no task, and is not guessed into one here.
+      if (message.type !== 'worker_done' || message.taskId === null) continue;
+      const held = completions.get(message.taskId);
+      if (held) held.push(message.payload);
+      else completions.set(message.taskId, [message.payload]);
+    }
+
+    const receipts = new Map<string, ReceiptFact[]>();
+
+    for (const entry of entries) {
+      const done = completions.get(entry.task.id) ?? [];
+      // The result column was read whole and recognized in `tasks.ts`; the payloads are parsed
+      // already (`readMessages`). Nothing here re-parses either — it merges two readings.
+      const facts = mergeReceipts(entry.resultReceipt, ...done.map((payload) => receiptOfWorkerDone(payload)));
+      if (facts.length > 0) receipts.set(entry.task.id, facts);
+    }
+
+    return receipts;
   }
 
   /** The header every payload carries. Re-derived on every call, never cached (SPEC §6.1). */

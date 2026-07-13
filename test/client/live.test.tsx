@@ -92,6 +92,9 @@ function evidenceOf(current: World): RunEvidence {
     gates: [],
     turns: [],
     coordinatorRuns: [],
+    // This suite is about the *transport* — which URL a push causes, and what a reconnect
+    // recovers. Nothing here reads an outcome receipt, so the world holds none.
+    receiptsByTask: new Map(),
   };
 }
 

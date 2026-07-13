@@ -60,7 +60,12 @@ export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId =
       {facts.map((fact) => (
         <li
           key={keyOf(fact)}
-          className={cn('flex max-w-full items-center gap-1', showSources && 'w-full flex-wrap')}
+          // `min-w-0` is what makes the chip's own `max-w-full` bind: a flex item's automatic
+          // minimum size is its *content*, so without this the row simply grows to fit a 90-character
+          // path and the truncation inside it never comes into play. It cost nothing while the
+          // receipt lived in panels wider than its longest fact; the report's outcome column is
+          // narrower than one, and a chip that painted across the next column was the proof.
+          className={cn('flex min-w-0 max-w-full items-center gap-1', showSources && 'w-full flex-wrap')}
         >
           {fact.kind !== 'link' && KIND_LOOK[fact.kind].captioned && (
             <span className="text-muted-foreground shrink-0 text-[10px]">{KIND_LOOK[fact.kind].label}</span>
@@ -79,7 +84,11 @@ export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId =
               <span className="truncate">{fact.value}</span>
             </a>
           ) : (
-            <CopyId id={fact.value} label={KIND_LOOK[fact.kind].label} />
+            // `min-w-0` for the reason the `<li>` above has it, one level further in: the chip
+            // shares its line with the kind's caption ("completing agent"), and a flex item that
+            // will not shrink below its content pushes a 40-character handle straight through the
+            // next column. The `truncate` inside it has been waiting for a bound to truncate at.
+            <CopyId id={fact.value} label={KIND_LOOK[fact.kind].label} className="min-w-0" />
           )}
 
           {/* The provenance, said out loud — the same small grey truth-telling every turn's

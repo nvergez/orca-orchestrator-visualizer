@@ -520,6 +520,123 @@ export type RunSnapshot = {
 };
 
 /**
+ * **The cross-history dispatch report** — `GET /api/report` (SPEC §12.4, #70).
+ *
+ * One row per retained task, across every run in the database: a *ranking and search
+ * instrument*, and deliberately **not** a second graph. The tool already draws one run's tasks
+ * as a DAG and tells one task's story in the inspector; what it could not do was answer "which
+ * task took longest", "who has the failures", "what did this fortnight produce" without
+ * scanning every rail row by eye.
+ *
+ * Three rules hold it to the truth the rest of the wire tells:
+ *
+ * - **It duplicates no task-detail truth.** Every field on a row is one the server already
+ *   derives for the canvas — the duration observation of #66, the receipt facts of #67, the
+ *   attempts and status a `Task` carries. Selecting a row loads the ordinary selected-run
+ *   snapshot and opens the ordinary inspector; the report has no detail model of its own.
+ * - **A missing value stays visible, and stays filterable.** A task Orca never dispatched has
+ *   no agent and no dispatch instant, and it is *in the report* saying so — stalled work is
+ *   exactly what a search of history is for.
+ * - **The order is total.** Sorting, filtering and paging are the server's, and the id
+ *   tie-break makes the sort a total order — so two reads of an unchanged database tile into
+ *   the same pages, with no row duplicated into two of them and no row dropped from both.
+ */
+
+/** The sort keys the report offers. Each one is a fact already on the row — nothing composite. */
+export const REPORT_SORTS = ['dispatched', 'duration', 'attempts', 'failures', 'title'] as const;
+
+export type ReportSort = (typeof REPORT_SORTS)[number];
+
+export type ReportDirection = 'asc' | 'desc';
+
+/**
+ * A filter over a fact that may not be there: `missing` is a first-class answer, not the absence
+ * of one. "Which tasks were never dispatched" and "which produced nothing we can recognize" are
+ * the two questions a post-mortem asks most, and both are questions *about* an absence.
+ */
+export const REPORT_PRESENCE = ['any', 'present', 'missing'] as const;
+
+export type ReportPresence = (typeof REPORT_PRESENCE)[number];
+
+/** The terminal that held a task last — and what the canvas calls it. */
+export type ReportAgent = {
+  /** The latest attempt's `assignee_handle`. */
+  handle: string;
+  /**
+   * `A1`, `A2` … — the run's own numbering (`cast.ts`), so a row and the canvas name one agent
+   * the same way. **Null when the handle is not in the cast**: an orchestrator that worked its
+   * own task is not one of the agents it spawned (SPEC §4.3a), and inventing an `A0` for it
+   * would put a stranger in the cast.
+   */
+  monogram: string | null;
+};
+
+/** One retained task, as a row of the report. */
+export type ReportRow = {
+  taskId: string;
+  runId: string;
+  /** The rail's own label for the run, so a row names its orchestrator without a second fetch. */
+  runLabel: string;
+  title: string;
+  status: TaskStatus | string;
+  /**
+   * The terminal the **latest** attempt went to. **Null is the explicit missing-dispatch
+   * value** — no `dispatch_contexts` row ever named this task, which `attemptCount: 0` says
+   * again from the other side. Never-dispatched work stays in the report saying so.
+   */
+  agent: ReportAgent | null;
+  /**
+   * The latest attempt's `dispatched_at`. Null when there is no attempt — or when the column
+   * held nothing a clock could read, which `attemptCount` is what tells the two apart.
+   */
+  dispatchedAt: string | null;
+  /** 0 ⇒ never dispatched. */
+  attemptCount: number;
+  /**
+   * **The task's failures, not the sum of its retries' running totals** (SPEC §12.4).
+   * `dispatch_contexts.failure_count` is *cumulative* — the circuit breaker counts up to 3 in
+   * it — so adding it across attempts counts the same failure once per attempt that followed.
+   * The maximum retained value is the count; the sum is the overcount this row refuses.
+   */
+  failureCount: number;
+  /**
+   * How long the work took, on the strongest clock the task retains (#66) — the same
+   * observation the node badge and the inspector show. Absent ⇒ the evidence supports no
+   * number, and the row says so rather than showing a zero.
+   */
+  duration?: DurationObservation;
+  /**
+   * The compact outcome summary (#67): the recognized facts of `tasks.result` and this task's
+   * `worker_done` payloads, merged with provenance and **capped at `REPORT_OUTCOME_FACTS`** —
+   * a row is a row. Absent ⇒ nothing was recognized, which is what the `outcome=missing` filter
+   * selects. The inspector holds the uncapped receipt and the raw evidence beside it.
+   */
+  outcome?: ReceiptFact[];
+  /** How many recognized facts the cap cut. Absent when it cut none. */
+  outcomeOmitted?: number;
+};
+
+/**
+ * One page of the report — `GET /api/report` (#70).
+ *
+ * Paginated on the server, independently of the run index (SPEC §12.4): the report ranks *tasks*
+ * across history, and a database that is never pruned would otherwise make it grow without bound.
+ */
+export type ReportPage = {
+  meta: Meta;
+  /** This page's rows, in the requested order. The first page is the newest `REPORT_PAGE_SIZE`. */
+  rows: ReportRow[];
+  /**
+   * The opaque keyset cursor the next page follows — the ordering position after this page's
+   * last row. Null ⇒ the filtered history ends here. A cursor is minted for one sort and one
+   * direction, and a request that changes either is refused rather than silently re-anchored.
+   */
+  nextCursor: string | null;
+  /** How many rows the filters matched, across every page — the count the header reports. */
+  total: number;
+};
+
+/**
  * What clicking a node fetches — `GET /api/task/:id`, and the only payload in this tool that
  * is not a `StreamEvent` (SPEC §6.4, §7.8).
  *

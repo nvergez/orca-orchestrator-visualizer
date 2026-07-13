@@ -1,4 +1,14 @@
-import type { CoordinatorRun, Dispatch, Gate, Run, RunIndexPage, RunSnapshot, Task, Turn } from '../shared/types.ts';
+import type {
+  CoordinatorRun,
+  Dispatch,
+  Gate,
+  ReceiptFact,
+  Run,
+  RunIndexPage,
+  RunSnapshot,
+  Task,
+  Turn,
+} from '../shared/types.ts';
 import { byInstant } from './time.ts';
 
 /**
@@ -71,6 +81,14 @@ export type RunEvidence = {
   /** The whole conversation, in its one chronological order (`conversation.ts`). */
   turns: Turn[];
   coordinatorRuns: CoordinatorRun[];
+  /**
+   * The whole outcome receipt of every task that has one (#67), merged across both evidence
+   * columns with provenance — the reading the report's rows summarize (#70) and the inspector
+   * shows in full. Absent from the map ⇒ nothing was recognized, which is an ordinary shape and
+   * never schema drift. Built once per read, beside everything else here, because the report
+   * asks it of every task at once (`database.ts`).
+   */
+  receiptsByTask: ReadonlyMap<string, ReceiptFact[]>;
 };
 
 /** One page of the run index — `RunIndexPage` minus the header the connection adds. */
