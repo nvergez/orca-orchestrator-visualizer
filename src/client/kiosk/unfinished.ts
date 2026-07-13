@@ -1,5 +1,7 @@
 import { runHealth } from '../../shared/run-health.ts';
 import type { Gate, Run, StreamEvent } from '../../shared/types.ts';
+import { blockingGates } from '../attention.ts';
+import { elapsedSince } from '../relative-time.ts';
 import { type RunWorkerSummary, runWorkerSummary, workerHealthByAgent } from '../worker-health.ts';
 
 /**
@@ -60,6 +62,10 @@ export type KioskTile = {
 type Snapshot = StreamEvent['snapshot'];
 
 export function unfinishedRuns(snapshot: Snapshot, now: number): KioskTile[] {
+  // Ranked once, for the whole wall: the queue's own oldest-first list of every question provably
+  // pausing work (#45/#56). Each tile takes the first one that names its run.
+  const blocking = blockingGates(snapshot.gates);
+
   return snapshot.runs
     .flatMap((run): KioskTile[] => {
       const health = runHealth(run, now);
@@ -71,9 +77,9 @@ export function unfinishedRuns(snapshot: Snapshot, now: number): KioskTile[] {
         {
           run,
           health,
-          silenceMs: elapsed(run.lastActivityAt, now),
+          silenceMs: elapsedSince(run.lastActivityAt, now),
           workers: runWorkerSummary(run.cast, workerHealthByAgent(tasks, now)),
-          gate: oldestBlockingGate(snapshot.gates, run.id, now),
+          gate: oldestBlockingGate(blocking, run.id, now),
         },
       ];
     })
@@ -104,36 +110,23 @@ function bySilenceThenFreshness(a: KioskTile, b: KioskTile): number {
 }
 
 /**
- * The oldest gate this run is provably paused on — `blocking` alone, exactly as the strip, the
- * rail flag and the attention queue's first tier read it (#45).
+ * The oldest gate this run is provably paused on — and it is the attention queue's own list, taken
+ * off the front (`blockingGates`, #56/#45).
  *
- * Oldest *that can prove its age*: a blocking gate with an unreadable ask instant is still shown
- * when it is all the run has, but it never outranks one that can say how long it has waited.
+ * Not a second `.filter(blocking).sort(oldest)` — that is the one thing this file must not contain.
+ * The queue already ranks every blocking question in the database oldest-first, with an unreadable
+ * ask instant queued behind everything that can prove its age; the first one that belongs to this
+ * run is, by construction, the oldest question stopping it. So the tile and the queue standing
+ * beside it cannot name different questions, and cannot disagree about which came first.
  */
-function oldestBlockingGate(gates: Gate[], runId: string, now: number): BlockingGateAge | null {
-  const blocking = gates
-    .filter((gate) => gate.runId === runId && gate.blocking)
-    .map((gate) => ({ gate, waitedMs: elapsed(gate.createdAt, now) }))
-    .sort((a, b) => {
-      if (a.waitedMs === b.waitedMs) return a.gate.id < b.gate.id ? -1 : 1;
-      if (a.waitedMs === null) return 1;
-      if (b.waitedMs === null) return -1;
-      return b.waitedMs - a.waitedMs;
-    });
-
-  const oldest = blocking[0];
+function oldestBlockingGate(ranked: Gate[], runId: string, now: number): BlockingGateAge | null {
+  const oldest = ranked.find((gate) => gate.runId === runId);
   if (!oldest) return null;
 
   return {
-    question: oldest.gate.question,
-    at: oldest.gate.createdAt,
-    taskId: oldest.gate.taskId,
-    waitedMs: oldest.waitedMs,
+    question: oldest.question,
+    at: oldest.createdAt,
+    taskId: oldest.taskId,
+    waitedMs: elapsedSince(oldest.createdAt, now),
   };
-}
-
-/** How long ago an instant was — null when the wire's string is not one (SPEC §5). */
-function elapsed(at: string, now: number): number | null {
-  const instant = Date.parse(at);
-  return Number.isNaN(instant) ? null : Math.max(0, now - instant);
 }

@@ -2,18 +2,19 @@ import { OctagonAlert } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import type { StreamEvent, Task } from '../../shared/types.ts';
+import type { StreamEvent } from '../../shared/types.ts';
 import { SessionActivity } from '../activity/SessionActivity.tsx';
 import { type AttentionItem, deriveAttention } from '../attention.ts';
-import { AttentionQueue } from '../attention/AttentionQueue.tsx';
+import { AttentionQueue, KIND_LOOK } from '../attention/AttentionQueue.tsx';
 import { GATE_THEME } from '../canvas/theme.ts';
 import type { Connection } from '../connection.ts';
-import { HealthDot } from '../health-dot.tsx';
+import { HealthDot, HEALTH_WORDS } from '../health-dot.tsx';
 import { enter, SPRING } from '../motion.ts';
 import { statusBreakdown } from '../rail/summary.ts';
 import { relativeTime, useNow } from '../relative-time.ts';
 import { Backdrop, Connecting, Notices, TopBar } from '../shell/chrome.tsx';
 import { FIELD_CLASS, PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
+import { STALE_WORKER_INK } from '../worker-health.ts';
 import { type KioskTile, unfinishedRuns } from './unfinished.ts';
 
 /**
@@ -42,7 +43,18 @@ import { type KioskTile, unfinishedRuns } from './unfinished.ts';
 
 const NO_TILES: KioskTile[] = [];
 const NO_ATTENTION: AttentionItem[] = [];
-const NO_TASKS: Task[] = [];
+
+/**
+ * What an empty queue *means*, spelled out — named from the queue's own table (`KIND_LOOK`), so
+ * the sentence is a list of the causes actually looked for and not a list somebody typed once.
+ *
+ * A sixth cause added to `attention.ts` cannot compile without an entry in that table, and the
+ * moment it has one this sentence names it too. Hard-coded prose would instead go on quietly
+ * promising a wall that five things had been checked while six were being derived.
+ */
+const NOTHING_FOUND = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(
+  Object.values(KIND_LOOK).map((look) => `no ${look.label}`)
+);
 
 export type KioskProps = {
   event: StreamEvent | null;
@@ -118,14 +130,13 @@ export function Kiosk({ event, connection = 'connected', appliedAt = null }: Kio
               // rail, where the orchestrator list stands underneath and the absence speaks for
               // itself. On a wall an empty column says nothing at all, and "is it broken, or is it
               // fine?" is the one question a kiosk exists never to leave hanging. So the panel says
-              // it, and names the five causes it looked for, so the silence is *evidence*.
+              // it, and names every cause it looked for, so the silence reads as *evidence*.
               <>
                 <div className={PANEL_HEADER_CLASS}>
                   <h2 className={PANEL_TITLE_CLASS}>Needs attention</h2>
                 </div>
                 <p data-testid="kiosk-attention-empty" className="text-muted-foreground px-4 py-3 text-xs">
-                  Nothing needs attention: no blocking gate, no stale worker, no retry risk, no
-                  unresolved escalation and no recent failure.
+                  Nothing needs attention: {NOTHING_FOUND}.
                 </p>
               </>
             ) : (
@@ -150,7 +161,7 @@ export function Kiosk({ event, connection = 'connected', appliedAt = null }: Kio
           from across the room, that this display is *still receiving* rather than showing a frozen
           picture of ten minutes ago.
         */}
-        <SessionActivity event={event} tasks={event.snapshot.tasks ?? NO_TASKS} />
+        <SessionActivity event={event} tasks={event.snapshot.tasks} />
       </main>
     </MotionConfig>
   );
@@ -201,18 +212,20 @@ function Tile({ tile }: { tile: KioskTile }) {
           {run.handle ?? '— no handle on record —'}
         </code>
 
-        {/* The health, in the glossary's words and never sharpened: "silent" is what the evidence
-            supports, and how long it has been silent is the number that makes it actionable. */}
+        {/*
+          The health, in the words the dot says it in — `HEALTH_WORDS`, the one table both screens
+          read, so a wall cannot sharpen "silent" into something the evidence does not support
+          (CONTEXT.md: never dead, never ended, never stuck). What the tile adds is the *measure*:
+          how long the silence has lasted, which is the number that decides whether to walk over.
+        */}
         <p data-testid="kiosk-tile-health" className="pl-4.5 text-xs">
-          {health === 'active' ? (
-            <span className="text-muted-foreground">active — recent activity</span>
-          ) : (
-            <span className="text-status-dispatched-ink font-medium">
-              {silenceMs === null
-                ? 'silent — unfinished, and no readable activity instant'
-                : `silent — unfinished, nothing recorded for ${relativeTime(silenceMs)}`}
-            </span>
-          )}
+          <span className={health === 'silent' ? 'text-run-silent-ink font-medium' : 'text-muted-foreground'}>
+            {HEALTH_WORDS[health]}
+            {health === 'silent' &&
+              (silenceMs === null
+                ? ' · no readable activity instant'
+                : ` · nothing recorded for ${relativeTime(silenceMs)}`)}
+          </span>
         </p>
 
         {/* The worst worker in the cast (#47), in the rail's own sentence (`runWorkerSummary`). */}
@@ -221,12 +234,17 @@ function Tile({ tile }: { tile: KioskTile }) {
           data-health={workers?.state ?? 'none'}
           className={cn(
             'pl-4.5 text-xs tabular-nums',
-            workers?.state === 'stale' ? 'font-semibold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+            workers?.state === 'stale' ? cn('font-semibold', STALE_WORKER_INK) : 'text-muted-foreground'
           )}
         >
-          {/* The rail draws nothing here; a wall says it, because "how are the workers" is a
-              question this screen exists to answer and silence would read as an empty answer. */}
-          {workers === null ? 'no worker running right now' : workers.parts.join(' · ')}
+          {/*
+            The rail draws nothing here; a wall says it, because "how are the workers" is a
+            question this screen exists to answer and a blank would read as an empty answer.
+            `null` is *no current attempt on record* — never "nobody is running", which is a claim
+            about a process the database cannot make (CONTEXT.md, ADR 0001). An attempt whose
+            instants will not parse says so under its own name (`unknown`, SPEC §5).
+          */}
+          {workers === null ? 'no current dispatch attempt on record' : workers.parts.join(' · ')}
         </p>
 
         {gate !== null && (

@@ -206,6 +206,27 @@ describe('the kiosk tiles', () => {
     expect(tiles[0]?.workers).toEqual({ state: 'stale', parts: ['1 stale', '1 active'] });
   });
 
+  it('separates an attempt it cannot read from an attempt that is not there', () => {
+    // Two different facts, and folding them together would be the wall inventing the one the
+    // column failed to record: a dispatched attempt whose instants will not parse is `unknown`
+    // (SPEC §5, render-what-parses), and only a cast with no current attempt at all is `null`.
+    const tiles = unfinishedRuns(
+      snapshot({
+        runs: [run({ id: 'broken', cast: [member({ handle: 'term_agent_1' })] })],
+        tasks: [
+          task({
+            id: 'task_unreadable',
+            runId: 'broken',
+            dispatch: dispatch({ dispatchedAt: 'when the moon was high', lastHeartbeatAt: null }),
+          }),
+        ],
+      }),
+      NOW
+    );
+
+    expect(tiles[0]?.workers).toEqual({ state: 'unknown', parts: ['1 with no readable dispatch evidence'] });
+  });
+
   it('claims no worker health at all when no attempt is currently running', () => {
     // A run whose every attempt has settled has no *current* worker health, and the honest tile
     // says nothing rather than inventing a colour for it.

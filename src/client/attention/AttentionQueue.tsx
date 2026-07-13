@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
 import type { AttentionItem, AttentionKind } from '../attention.ts';
 import { enter, SPRING } from '../motion.ts';
+import { STALE_WORKER_INK } from '../worker-health.ts';
 
 /**
  * **The attention queue** — one ranked answer to "does anything need intervention now?",
@@ -49,14 +50,19 @@ export type AttentionQueueProps = {
  * existing meanings: gate orange for blocking questions, the amber worker-health already wears
  * for silence and retries, the failed red for escalations and failures — no new colour, because
  * a new colour would be a new claim.
+ *
+ * **Exported, and a total `Record`** — which is what makes it the list of *what this queue looks
+ * for*. The kiosk names the five out loud when it finds none of them (#62), and it names them
+ * from here: a sixth tier added to `attention.ts` cannot compile without an entry, so the sentence
+ * on the wall cannot go on quietly promising it checked five things.
  */
-const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string; label: string }> = {
+export const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string; label: string }> = {
   'blocking-gate': { icon: OctagonAlert, ink: 'text-gate', label: 'blocking decision gate' },
   // "Stale", never "quiet": `quiet` is a *different* worker-health state in #47 — dispatched, the
   // first beat still plausibly in flight — and it is one this tier deliberately refuses to admit.
   // Naming the row after the state it excludes is the one label that could not be right.
-  'stale-worker': { icon: HeartPulse, ink: 'text-amber-700 dark:text-amber-400', label: 'stale worker' },
-  'retry-risk': { icon: RotateCcw, ink: 'text-amber-700 dark:text-amber-400', label: 'retry risk' },
+  'stale-worker': { icon: HeartPulse, ink: STALE_WORKER_INK, label: 'stale worker' },
+  'retry-risk': { icon: RotateCcw, ink: STALE_WORKER_INK, label: 'retry risk' },
   escalation: { icon: Megaphone, ink: 'text-red-700 dark:text-red-400', label: 'unresolved escalation' },
   'fresh-failure': { icon: CircleX, ink: 'text-red-700 dark:text-red-400', label: 'fresh failure' },
 };

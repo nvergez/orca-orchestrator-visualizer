@@ -1,11 +1,13 @@
+import { KIOSK_PATH } from '../shared/routes.ts';
+
 /**
  * Which screen the URL names — the whole of this application's routing (#62).
  *
  * Two screens, one bundle, one server: `/` is the shell a supervisor works in, `/kiosk` is the
  * same data with nothing on it you could click by accident. The server serves the identical
- * document at both (`APP_ROUTES`, `server/server.ts`), so nothing about the route reaches the
- * back end — a kiosk is not a mode, and there is no flag, no second process and no second build
- * that turns one on.
+ * document at both, from the same list this file reads (`shared/routes.ts`), so nothing about the
+ * route reaches the back end — a kiosk is not a mode, and there is no flag, no second process and
+ * no second build that turns one on.
  *
  * **There is no router, and no history.** A router is for an application whose screens link to
  * each other, and these two do not: the kiosk deliberately has nothing to navigate *from* — it
@@ -19,9 +21,6 @@
  */
 
 export type Route = 'main' | 'kiosk';
-
-/** The kiosk's path, in one place — the client's half of the server's `APP_ROUTES`. */
-export const KIOSK_PATH = '/kiosk';
 
 export function routeOf(pathname: string): Route {
   return pathname === KIOSK_PATH || pathname === `${KIOSK_PATH}/` ? 'kiosk' : 'main';

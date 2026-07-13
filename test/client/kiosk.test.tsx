@@ -141,7 +141,16 @@ function afternoon(): StreamEvent {
         lastActivityAt: ago(STALE_HEARTBEAT_MS + 4 * MINUTE),
         endedAt: ago(STALE_HEARTBEAT_MS + 4 * MINUTE),
       }),
-      run({ id: 'run_blocked', label: 'Cut the release', hasBlockingGates: true }),
+      // Explicitly older than `run_active`, so the active tier's freshest-first order is a fact of
+      // the fixture and not of how fast the machine built it: two runs both stamped `ago(MINUTE)`
+      // would straddle a millisecond under load and swap places.
+      run({
+        id: 'run_blocked',
+        label: 'Cut the release',
+        hasBlockingGates: true,
+        lastActivityAt: ago(2 * MINUTE),
+        endedAt: ago(2 * MINUTE),
+      }),
       run({
         id: 'run_done',
         label: 'Yesterday, finished',
@@ -230,7 +239,7 @@ describe('<Kiosk>', () => {
     expect(tile('run_silent').dataset.health).toBe('silent');
     // The glossary's word and the glossary's claim: unfinished, no recent evidence. Never "dead".
     expect(within(tile('run_silent')).getByTestId('kiosk-tile-health')).toHaveTextContent(
-      /silent — unfinished, nothing recorded for 14m/i
+      'silent — unfinished, no recent activity · nothing recorded for 14m'
     );
   });
 
@@ -253,10 +262,43 @@ describe('<Kiosk>', () => {
     expect(workers).toHaveTextContent('1 stale · 1 active');
   });
 
-  it('says out loud when no worker is running, instead of leaving a blank where health goes', () => {
+  it('says there is no dispatch attempt on record — never that nobody is running', () => {
+    // The database can prove the *absence of a record*. It cannot prove the absence of a process,
+    // and the wall must not say it does (CONTEXT.md; ADR 0001, run health vs process liveness).
     render(<Kiosk event={afternoon()} />);
 
-    expect(within(tile('run_silent')).getByTestId('kiosk-tile-workers')).toHaveTextContent('no worker running right now');
+    const workers = within(tile('run_silent')).getByTestId('kiosk-tile-workers');
+
+    expect(workers).toHaveTextContent('no current dispatch attempt on record');
+    expect(workers.textContent).not.toMatch(/running|dead|hung|stuck/i);
+  });
+
+  it('says "no readable dispatch evidence" rather than reporting an unreadable attempt as no attempt', () => {
+    // A dispatched attempt whose instants will not parse is *unknown*, and unknown is not absent.
+    // Reporting it as "no attempt on record" would invent the fact the column failed to record
+    // (SPEC §5, render-what-parses).
+    const base = afternoon();
+    render(
+      <Kiosk
+        event={event({
+          ...base.snapshot,
+          runs: [run({ id: 'run_broken', cast: [member({ handle: AGENT_A })] })],
+          tasks: [
+            task({
+              id: 'task_unreadable',
+              runId: 'run_broken',
+              dispatch: dispatch({ dispatchedAt: 'when the moon was high', lastHeartbeatAt: null }),
+            }),
+          ],
+          gates: [],
+        })}
+      />
+    );
+
+    const workers = within(tile('run_broken')).getByTestId('kiosk-tile-workers');
+
+    expect(workers.dataset.health).toBe('unknown');
+    expect(workers).toHaveTextContent('1 with no readable dispatch evidence');
   });
 
   it('shows the oldest *blocking* gate and how long it has held the work', () => {
@@ -412,7 +454,15 @@ describe('<Kiosk> in the states a wall display actually spends its night in', ()
   it('says outright that nothing needs attention, rather than leaving an empty column', () => {
     render(<Kiosk event={event({ runs: [run({ id: 'run_calm' })] })} />);
 
-    expect(screen.getByTestId('kiosk-attention-empty')).toHaveTextContent(/nothing needs attention/i);
+    // The five causes it looked for, named from the queue's own table — an empty column that says
+    // *what it checked* is evidence; one that says nothing is just an empty column.
+    const empty = screen.getByTestId('kiosk-attention-empty');
+    expect(empty).toHaveTextContent(/nothing needs attention/i);
+    expect(empty).toHaveTextContent('no blocking decision gate');
+    expect(empty).toHaveTextContent('no stale worker');
+    expect(empty).toHaveTextContent('no retry risk');
+    expect(empty).toHaveTextContent('no unresolved escalation');
+    expect(empty).toHaveTextContent('no fresh failure');
   });
 });
 
@@ -519,6 +569,30 @@ describe('the kiosk and the main screen do not drift', () => {
     expect(fromWall.size).toBeGreaterThan(0);
     for (const [runId, health] of fromWall) expect(health).toBe(fromRail.get(runId));
     expect([...fromWall.values()]).not.toContain('finished');
+  });
+
+  it('names the same blocking question the attention queue puts first for that run', () => {
+    // The tile's gate is not a second read of #45 — it is the queue's own oldest-first list of
+    // blocking questions (`blockingGates`), taken off the front for this run. So the wall cannot
+    // name one question while the column beside it names another, and cannot disagree about which
+    // one came first.
+    const both = noisy();
+
+    const main = render(<App event={both} loadTask={NO_DETAIL} />);
+    const queued = screen
+      .getAllByTestId('attention-item')
+      .filter((item) => item.dataset.kind === 'blocking-gate')
+      .map((item) => item.textContent ?? '');
+    main.unmount();
+
+    render(<Kiosk event={both} />);
+    const gate = within(tile('run_blocked')).getByTestId('kiosk-tile-gate');
+
+    expect(queued[0]).toContain('Tag v1.0 and publish?');
+    expect(queued[0]).toContain('asked 20m ago — blocking');
+    // The same question, and the same age: both measure `createdAt` against the same wall clock.
+    expect(gate).toHaveTextContent('Tag v1.0 and publish?');
+    expect(gate).toHaveTextContent('blocked for 20m');
   });
 
   it('says the same sentence about a run’s workers as the rail row does', () => {

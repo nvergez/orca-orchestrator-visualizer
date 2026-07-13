@@ -16,7 +16,7 @@ import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
-import { runWorkerSummary, type WorkerHealth, workerHealthByAgent } from '../worker-health.ts';
+import { runWorkerSummary, STALE_WORKER_INK, type WorkerHealth, workerHealthByAgent } from '../worker-health.ts';
 import { Cast } from './Cast.tsx';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
@@ -454,7 +454,7 @@ function RunWorkerHealth({
       data-health={summary.state}
       className={cn(
         'relative mt-1 ml-4 block text-[10px] tabular-nums',
-        summary.state === 'stale' ? 'font-bold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+        summary.state === 'stale' ? cn('font-bold', STALE_WORKER_INK) : 'text-muted-foreground'
       )}
     >
       {summary.parts.join(' · ')}

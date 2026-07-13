@@ -5,6 +5,16 @@ import type { CastMember, DispatchStatus, Task } from '../shared/types.ts';
 // "is this recent?" question against the same constant, defined once in `shared/run-health.ts`.
 export { STALE_HEARTBEAT_MS };
 
+/**
+ * The one ink for **a worker that has gone quiet** — the rail row wears it, and so does the kiosk
+ * tile (#62). One string, in one place, for the same reason `chip.ts` is one string: two surfaces
+ * making the same claim must not be able to make it in two different colours.
+ *
+ * Amber, and never red: the evidence says *nothing has been recorded for a while*, which is a
+ * thing to go and look at, not a verdict that anything died (CONTEXT.md, *Stale Worker*).
+ */
+export const STALE_WORKER_INK = 'text-amber-700 dark:text-amber-400';
+
 export type WorkerHealth =
   | { state: 'inactive' }
   | { state: 'unknown' }
@@ -144,17 +154,22 @@ export function workerHealthByAgent(tasks: Task[], now: number): ReadonlyMap<str
  * of five is the fact a supervisor is scanning for and an average would bury it. The two rules
  * are opposite on purpose, and they are the same two rules the rail has always applied.
  *
- * It is `null` exactly when no attempt is currently active — a run whose work has all settled has
- * no *current* worker health, and inventing one for it would be the tile claiming evidence the
- * database does not hold. Callers say that in their own words: the rail row draws nothing, the
- * kiosk tile says so out loud (#62).
+ * It is `null` exactly when the cast has **no current dispatch attempt at all** — a run whose work
+ * has all settled has no *current* worker health, and inventing one for it would be the tile
+ * claiming evidence the database does not hold. Callers say that in their own words: the rail row
+ * draws nothing, the kiosk tile says so out loud (#62). An attempt that *is* current but whose
+ * instants will not parse is `unknown`, and never `null`: those are two different facts.
  *
  * Shared because it is the one sentence both screens make about a run's workers, and two copies
  * of it would eventually disagree — which is exactly the drift #62's tests exist to forbid.
  */
 export type RunWorkerSummary = {
-  /** The worst current state in the cast: `stale` over `quiet` over `working`. */
-  state: 'working' | 'quiet' | 'stale';
+  /**
+   * The worst current state in the cast: `stale` over `quiet` over `working` — and `unknown`
+   * when the only current attempts carry instants nothing can parse, which is a different fact
+   * from having no attempt at all and must never be reported as one (SPEC §5).
+   */
+  state: 'working' | 'quiet' | 'stale' | 'unknown';
   /** The tally behind it, worst first: `['1 stale without heartbeat', '2 active']`. */
   parts: string[];
 };
@@ -163,10 +178,19 @@ export function runWorkerSummary(
   cast: CastMember[],
   healthByAgent: ReadonlyMap<string, WorkerHealth>
 ): RunWorkerSummary | null {
-  const active = cast
-    .map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const })
-    .filter(isActiveWorkerHealth);
-  if (active.length === 0) return null;
+  const crew = cast.map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const });
+  const active = crew.filter(isActiveWorkerHealth);
+
+  if (active.length === 0) {
+    // A worker whose attempt is dispatched but whose evidence instant will not parse is not a
+    // worker who is *absent*. Reporting "nothing is running" over an unreadable timestamp would
+    // be inventing the one fact the column failed to record — render what parses, and say plainly
+    // when a thing did not (SPEC §5). Only a cast with no current attempt at all is `null`.
+    const unknown = crew.filter((worker) => worker.state === 'unknown').length;
+    if (unknown === 0) return null;
+
+    return { state: 'unknown', parts: [`${unknown} with no readable dispatch evidence`] };
+  }
 
   // A worker that never sent a beat is counted apart from one that sent some and stopped: both
   // are stale, and only the second has ever proved it could talk. The distinction is #47's, and

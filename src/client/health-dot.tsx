@@ -17,10 +17,16 @@ import type { RunHealth } from '../shared/run-health.ts';
  * be lost first — "silent" is a tempting word to sharpen when it is ten feet away and red would
  * carry — so the wall and the rail say it with the same table, and neither can sharpen it alone.
  */
-const HEALTH_LOOK: Record<RunHealth, { pulses: boolean; dot: string | false; words: string }> = {
-  active: { pulses: true, dot: false, words: 'active — recent activity' },
-  silent: { pulses: false, dot: 'bg-run-silent/70', words: 'silent — unfinished, no recent activity' },
-  finished: { pulses: false, dot: false, words: 'finished' },
+export const HEALTH_WORDS: Record<RunHealth, string> = {
+  active: 'active — recent activity',
+  silent: 'silent — unfinished, no recent activity',
+  finished: 'finished',
+};
+
+const HEALTH_LOOK: Record<RunHealth, { pulses: boolean; dot: string | false }> = {
+  active: { pulses: true, dot: false },
+  silent: { pulses: false, dot: 'bg-run-silent/70' },
+  finished: { pulses: false, dot: false },
 };
 
 /**
@@ -56,7 +62,7 @@ export function HealthDot({
         // everyone.
       />
       <span data-testid="health-dot" data-health={health} aria-hidden={!announce} className="sr-only">
-        {look.words}
+        {HEALTH_WORDS[health]}
       </span>
     </>
   );
