@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CannedApp, type CannedEvent } from './canned.tsx';
 import { formatDurationMs } from '../../src/client/duration.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
 import type { Dispatch, DurationObservation, Meta, Run, Task, TaskDetail } from '../../src/shared/types.ts';
+import { CannedApp, type CannedEvent } from './canned.tsx';
 
 /**
  * Honest durations, on screen (#66). The server sends a `DurationObservation` — a clock, two

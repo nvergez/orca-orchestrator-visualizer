@@ -27,6 +27,8 @@ import { fetchReport, type ReportLoader } from './report/query.ts';
 import { Report } from './report/Report.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
+import { CentreToggle, type CentreView } from './timeline/CentreToggle.tsx';
+import { Timeline } from './timeline/Timeline.tsx';
 import { useIsMobile } from './viewport.tsx';
 
 /**
@@ -167,6 +169,16 @@ export function App({
   // no panel can see. It is a dialog over the whole tool rather than a fourth panel: it is a place
   // you go to find one task and then leave, not a thing you read beside the canvas.
   const [reportOpen, setReportOpen] = useState(false);
+
+  // **The centre's view, and it is not a fourth selection** (#72). The DAG is the default and the
+  // timeline is a lens on the *same* selected run — so this state sits deliberately apart from the
+  // selections above and no handler below ever writes it. That separation is the acceptance
+  // criterion: pressing the toggle must not move the run, the agent or the task, and the surest
+  // way to guarantee that is to leave it nothing to move them with.
+  //
+  // It survives a change of run, because it is a *preference* about how this reader reads. Dropping
+  // it on every rail click would be the tool overruling a choice the reader had just made.
+  const [centre, setCentre] = useState<CentreView>('dag');
 
   // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
   // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
@@ -404,6 +416,15 @@ export function App({
             */}
             <GateStrip gates={blockingGates} tasks={tasks} onSelectTask={showTask} />
 
+            {/*
+              The centre's two views (#72). The toggle sits above the thing it toggles, on the side
+              the eye leaves the canvas on — and it changes what is *drawn*, never what is
+              *selected*: `setCentre` is the whole of its reach.
+            */}
+            <div className="flex shrink-0 justify-end">
+              <CentreToggle view={centre} onChange={setCentre} />
+            </div>
+
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
@@ -412,6 +433,30 @@ export function App({
                 // but an empty canvas would read as "this run has no tasks", which is a claim,
                 // and not one anybody has verified yet.
                 <LoadingRun />
+              ) : centre === 'timeline' ? (
+                // Every attempt, on the clock. It reads the selected-run snapshot and nothing else:
+                // ADR 0002 made that snapshot complete, which is *why* every retained attempt can be
+                // its own bar (SPEC §12.4). No second endpoint, and no second copy of the evidence.
+                //
+                // **The tab decides the view, and nothing else may.** Falling back to the canvas when
+                // there is no run to draw would leave the timeline tab lit above a DAG — the toggle
+                // claiming a view the centre is not showing, which is the one thing a toggle must
+                // never do. With no run selected there is nothing for *either* view to draw, so this
+                // one says so in its own voice.
+                snapshot === null ? (
+                  <NoRun />
+                ) : (
+                  <Timeline
+                    snapshot={snapshot}
+                    selectedAgent={selectedAgent}
+                    selectedTaskId={selectedTask?.id ?? null}
+                    // A bar is a node: clicking it again lets go. A marker or an untimed row *names*
+                    // a task, and naming is never a toggle — the same distinction the gate strip and
+                    // the conversation already draw (`selectTask` vs `showTask`).
+                    onSelectTask={selectTask}
+                    onShowTask={showTask}
+                  />
+                )
               ) : (
                 <Canvas
                   // Continuity belongs to one orchestrator's stream updates. Picking another one
@@ -879,6 +924,22 @@ function Notices({ meta }: { meta: Meta }) {
         </p>
       ))}
     </motion.div>
+  );
+}
+
+/**
+ * The timeline, with no run to draw. The rail is empty — a fresh database, or one an
+ * `orchestration reset` emptied — so there is no selected run and no evidence to lay against a
+ * clock. It stands where the timeline would, because the tab above it says *timeline*, and a tab
+ * that lit a view the centre was not showing would be the toggle telling a small lie.
+ */
+function NoRun() {
+  return (
+    <section aria-label="No run selected" className={cn(PANEL_CLASS, 'flex h-full items-center justify-center')}>
+      <p data-testid="timeline-no-run" className="text-muted-foreground text-xs">
+        Select an orchestrator to see its dispatch timeline.
+      </p>
+    </section>
   );
 }
 

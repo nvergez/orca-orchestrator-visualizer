@@ -133,19 +133,25 @@ const NO_REPORT: ReportLoader = () => {
   throw new Error('no event has arrived — nothing should be fetching the report yet');
 };
 
+/** A run whose tasks were never dispatched — the shape most presentation suites want. */
+const NO_ATTEMPTS: Record<string, Dispatch[]> = {};
+
 export function CannedApp({
   event,
   loadTask,
-  attempts,
+  attempts = NO_ATTEMPTS,
   connection,
   appliedAt,
 }: {
   event: CannedEvent | null;
   loadTask?: TaskLoader;
   /**
-   * Every dispatch attempt per task — the retry record a `Task` folds down to its latest
-   * (`RunSnapshot.attempts`). The report's failure count reads them, so a suite that is *about*
-   * failures writes them here; every other suite leaves them out, as the wire does.
+   * Every retained attempt of every task, as the selected-run snapshot carries them
+   * (`RunSnapshot.attempts`) — the retry record a `Task` folds down to its latest. Most suites
+   * need none: a canvas node shows the *latest* dispatch, which rides on the `Task`. Two panels
+   * read the attempt rows themselves — the report's failure count (#70), and the timeline (#72),
+   * where a retry is one task and several rows and the bar per attempt is the whole feature. A
+   * suite about either writes them here; every other suite leaves them out, as the wire does.
    */
   attempts?: Record<string, Dispatch[]>;
   /**

@@ -86,6 +86,25 @@ export function useClock(everyMs: number): number {
 }
 
 /**
+ * **The instant a wire string names — or null when it names none.**
+ *
+ * The server's own rule (`server/time.ts`), client-side, and in one place for the reason this module
+ * exists: `isoInstant` passes an unreadable column through *verbatim* rather than dropping the row,
+ * so every instant on this wire is ISO **or** whatever nonsense the column actually held. Null is
+ * how that nonsense stays honest — an unknown instant is not the epoch, and quietly reading it as
+ * `0` is what mints a 1970 ghost at the far left of every timeline.
+ *
+ * This is the single parse rule the module's other readers are built from: `localInstant` renders
+ * it, `ageOf` measures against it.
+ */
+export function instantOf(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
+}
+
+/**
  * "12s", "3m", "2h", "4d" — how long ago, coarsely.
  *
  * Coarse on purpose. Both the things that use it are answering *is this recent?* — the node's
@@ -126,23 +145,25 @@ export type Age = {
  * make it differently: a turn's age, and the inspector's dispatch timestamps.
  */
 export function ageOf(at: string, now: number): Age {
-  const instant = Date.parse(at);
+  const instant = instantOf(at);
 
-  if (Number.isNaN(instant)) return { label: at, title: at, readable: false };
+  if (instant === null) return { label: at, title: at, readable: false };
 
   return { label: `${relativeTime(now - instant)} ago`, title: localInstant(at), readable: true };
 }
 
 /**
  * **An instant, in the reader's own timezone** — and the one rendering of one, for the whole
- * client: the age tooltip above, the duration tooltip (`duration.tsx`), the top bar's last-write
- * and the report's dispatch column all say a date the same way, or the tool says it four ways.
+ * client: the age tooltip above, the duration tooltip (`duration.tsx`), the timeline's axis and
+ * bar tooltips, the top bar's last-write and the report's dispatch column all say a date the same
+ * way, or the tool says it five ways. The wire is UTC, and nobody reads a post-mortem in UTC.
  *
  * An unparseable string comes back **verbatim**, for the reason `ageOf` refuses "NaN ago": a
  * timestamp this tool could not normalize reaches the client as it was written (`server/time.ts`,
- * SPEC §5), and showing it as it was written is the only honest thing left to do with it.
+ * SPEC §5), and showing it as it was written is the only honest thing left to do with it — a
+ * tooltip reading "Invalid Date" would be worse than one holding what the column actually held.
  */
 export function localInstant(iso: string): string {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? iso : new Date(at).toLocaleString();
+  const at = instantOf(iso);
+  return at === null ? iso : new Date(at).toLocaleString();
 }

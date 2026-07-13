@@ -340,7 +340,11 @@ describe('durations degrade by name, clock by clock', () => {
     // birth. A weakened feature degrades by name exactly like a lost one (SPEC §5) — this is the
     // silent-shortfall case the list exists to prevent.
     expect(matching(meta.degraded, /^run span ends/i)).toHaveLength(1);
-    expect(meta.degraded).toHaveLength(2);
+    // And the timeline's completion markers (#72), which read this column and no other: the attempt
+    // bars still draw — their clock is in the *dispatch* table — but the instant a task was
+    // *recorded* done is gone, and a reader watching the markers vanish is owed the third sentence.
+    expect(matching(meta.degraded, /^timeline completion markers/i)).toHaveLength(1);
+    expect(meta.degraded).toHaveLength(3);
 
     // The preferred clock never read the missing column, so the task still has its duration…
     expect(byId(snapshot.tasks, CHARTED).duration).toMatchObject({ clock: 'dispatch', complete: true });
@@ -359,6 +363,58 @@ describe('durations degrade by name, clock by clock', () => {
     expect(snapshot.runs[0]!.duration).toBeUndefined();
     // The dispatch clock reads its own table, and is untouched by any of it.
     expect(byId(snapshot.tasks, CHARTED).duration).toMatchObject({ clock: 'dispatch', complete: true });
+  });
+});
+
+/**
+ * The dispatch timeline (#72) reads columns outside the DAG core, so it owes the list its own
+ * sentences — and they are *its* sentences, not the cast's or the durations' borrowed. A feature
+ * with no entry degrades silently, which is the one failure this list exists to prevent (SPEC §5).
+ *
+ * The timeline loses two different things in two different ways, and the difference is the point:
+ * without a dispatch **instant** it keeps its lanes and can place nothing in them; without the
+ * dispatch **link to a task and an agent** there are no lanes at all.
+ */
+describe('the timeline degrades by name', () => {
+  function timedOrchestration(schema: SchemaOptions): FixtureBuilder {
+    return new FixtureBuilder(schema)
+      .task({ id: CHARTED, handle: CODER, title: 'Chart the map', status: 'completed', createdAt: AT, completedAt: LATER })
+      .dispatch({
+        taskId: CHARTED,
+        assigneeHandle: WORKER,
+        status: 'completed',
+        dispatchedAt: new Date(AT.getTime() + 5 * 60 * 1000),
+        completedAt: new Date(AT.getTime() + 25 * 60 * 1000),
+      });
+  }
+
+  it('costs every bar its place on the clock when no column says when an attempt began', async () => {
+    // `dispatched_at` falls back to the row's `created_at` (`toDispatch`), so only losing **both**
+    // leaves an attempt with no instant to stand at.
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { dispatch_contexts: ['dispatched_at', 'created_at'] } })
+    );
+
+    expect(matching(meta.degraded, /^the dispatch timeline/i)).toHaveLength(1);
+
+    // The attempt survives on the wire — a dropped row is the worse lie — and carries no instant
+    // the timeline could place it by, which is exactly what the sentence promises the reader.
+    expect(byId(snapshot.tasks, CHARTED).dispatch?.dispatchedAt).toBe('');
+  });
+
+  it('costs the lanes themselves when no attempt names its task or its agent', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      timedOrchestration({ omitColumns: { dispatch_contexts: ['task_id', 'assignee_handle'] } })
+    );
+
+    // Its own sentence, beside the cast's: the cast losing its agents costs the rail a list and a
+    // node its stripe; the timeline losing them costs it the entire shape of the view.
+    expect(matching(meta.degraded, /^timeline lanes/i)).toHaveLength(1);
+    expect(matching(meta.degraded, /^the cast/i)).toHaveLength(1);
+
+    // No attempt can be tied to a task, so there is nothing to lane and nothing to draw.
+    expect(byId(snapshot.tasks, CHARTED).dispatch).toBeNull();
+    expect(snapshot.runs[0]!.cast).toHaveLength(0);
   });
 });
 

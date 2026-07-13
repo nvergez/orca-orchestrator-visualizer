@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { DurationClock, DurationObservation } from '../shared/types.ts';
-import { localInstant } from './relative-time.ts';
+import { instantOf, localInstant } from './relative-time.ts';
 
 /**
  * Honest durations, rendered (#66). The server sends a `DurationObservation` — a clock, its
@@ -64,7 +64,7 @@ export function readDuration(observation: DurationObservation, now: number): Dur
   const clock = CLOCK_NAMES[observation.clock];
 
   if (!observation.complete) {
-    const start = instant(observation.startAt);
+    const start = instantOf(observation.startAt);
     if (start === null) return null;
 
     // The clamp inside `formatDurationMs` is for exactly this reading: an open interval is the
@@ -88,17 +88,10 @@ export function readDuration(observation: DurationObservation, now: number): Dur
 }
 
 function spanOf({ startAt, endAt }: DurationObservation): number | null {
-  const start = instant(startAt);
-  const end = instant(endAt ?? '');
+  const start = instantOf(startAt);
+  const end = instantOf(endAt);
   return start === null || end === null ? null : end - start;
 }
-
-/** One reading of one string as an instant — or null, said once instead of three times. */
-function instant(iso: string): number | null {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? null : at;
-}
-
 
 /**
  * The reader's clock, re-read every second — but **only while something open is on screen**.
