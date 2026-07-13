@@ -565,6 +565,15 @@ describe('a query this report cannot honour is refused, never quietly replaced',
 
     expect(await refused('cursor=%7Bnot-json')).toMatch(/not a report cursor/i);
 
+    // Every JSON *value* is a cursor the endpoint has to refuse, not only the ones that fail to
+    // parse: `null` parses, and reading a position out of it without proving its shape first
+    // throws a `TypeError` the edge cannot recognize — a 500 blaming the server for a cursor the
+    // client made up. Each of these is a 400 with the same name on it, and `null` leads because
+    // it is the one that is not merely the wrong shape, it is the one with no shape at all.
+    for (const cursor of ['null', 'true', '123', '"abc"', '[1,2]']) {
+      expect(await refused(`cursor=${encodeURIComponent(cursor)}`)).toMatch(/not a report cursor/i);
+    }
+
     const page = await report('sort=dispatched&dir=desc');
     // A keyset position means nothing in an order it was not measured in: honouring it would
     // hand back rows from the middle of a ranking the reader is no longer looking at.

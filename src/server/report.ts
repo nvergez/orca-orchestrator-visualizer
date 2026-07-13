@@ -394,20 +394,26 @@ function encodeCursor(position: Position, query: ReportQuery): string {
 }
 
 function decodeCursor(cursor: string, query: ReportQuery): Position {
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(cursor) as Record<string, unknown>;
+    parsed = JSON.parse(cursor);
   } catch {
-    throw new ReportQueryError(`Not a report cursor: ${JSON.stringify(cursor)}. Follow the nextCursor a previous page returned.`);
+    throw notACursor(cursor);
   }
 
-  const { sort, dir, key, id } = parsed;
+  // `JSON.parse` answers every JSON *value*, not only the object `encodeCursor` mints, and a bare
+  // `null` is the one that bites: it parses, and then destructuring it throws a `TypeError` on the
+  // way out of this function — which `sendReport` cannot recognize, so a cursor the reader simply
+  // cannot follow would be answered as a 500 about the server. The shape is proved before it is
+  // read, so `null`, `123`, `"abc"` and `[1,2]` all land on the one named refusal the edge turns
+  // into the 400 they are.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw notACursor(cursor);
+
+  const { sort, dir, key, id } = parsed as Record<string, unknown>;
   const readable =
     typeof id === 'string' && (typeof key === 'string' || typeof key === 'number' || key === null);
 
-  if (!readable) {
-    throw new ReportQueryError(`Not a report cursor: ${JSON.stringify(cursor)}. Follow the nextCursor a previous page returned.`);
-  }
+  if (!readable) throw notACursor(cursor);
 
   if (sort !== query.sort || dir !== query.dir) {
     throw new ReportQueryError(
@@ -418,5 +424,17 @@ function decodeCursor(cursor: string, query: ReportQuery): Position {
   }
 
   return { key, id };
+}
+
+/**
+ * One refusal for every cursor that cannot be followed, whatever is wrong with it. A reader has
+ * nothing to do differently about a cursor that is not JSON than about one that is JSON of the
+ * wrong shape — in both cases the position they held is not one this report can place them at,
+ * and the only move is back to a page it minted.
+ */
+function notACursor(cursor: string): ReportQueryError {
+  return new ReportQueryError(
+    `Not a report cursor: ${JSON.stringify(cursor)}. Follow the nextCursor a previous page returned.`
+  );
 }
 
