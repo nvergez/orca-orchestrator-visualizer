@@ -22,6 +22,8 @@ import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
+import { CentreToggle, type CentreView } from './timeline/CentreToggle.tsx';
+import { Timeline } from './timeline/Timeline.tsx';
 import { useIsMobile } from './viewport.tsx';
 
 /**
@@ -131,6 +133,16 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // describes are one task.
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  // **The centre's view, and it is not a third selection** (#72). The DAG is the default and the
+  // timeline is a lens on the *same* selected run — so this state sits deliberately apart from the
+  // two above and no handler below ever writes it. That separation is the acceptance criterion:
+  // pressing the toggle must not move the run, the agent or the task, and the surest way to
+  // guarantee that is to leave it nothing to move them with.
+  //
+  // It survives a change of run, because it is a *preference* about how this reader reads. Dropping
+  // it on every rail click would be the tool overruling a choice the reader had just made.
+  const [centre, setCentre] = useState<CentreView>('dag');
 
   // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
   // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
@@ -314,6 +326,15 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
             */}
             <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
 
+            {/*
+              The centre's two views (#72). The toggle sits above the thing it toggles, on the side
+              the eye leaves the canvas on — and it changes what is *drawn*, never what is
+              *selected*: `setCentre` is the whole of its reach.
+            */}
+            <div className="flex shrink-0 justify-end">
+              <CentreToggle view={centre} onChange={setCentre} />
+            </div>
+
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
@@ -322,6 +343,20 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
                 // but an empty canvas would read as "this run has no tasks", which is a claim,
                 // and not one anybody has verified yet.
                 <LoadingRun />
+              ) : centre === 'timeline' && snapshot !== null ? (
+                // Every attempt, on the clock. It reads the selected-run snapshot and nothing else:
+                // ADR 0002 made that snapshot complete, which is *why* every retained attempt can be
+                // its own bar (SPEC §12.4). No second endpoint, and no second copy of the evidence.
+                <Timeline
+                  snapshot={snapshot}
+                  selectedAgent={selectedAgent}
+                  selectedTaskId={selectedTask?.id ?? null}
+                  // A bar is a node: clicking it again lets go. A marker or an untimed row *names* a
+                  // task, and naming is never a toggle — the same distinction the gate strip and the
+                  // conversation already draw (`selectTask` vs `showTask`).
+                  onSelectTask={selectTask}
+                  onShowTask={showTask}
+                />
               ) : (
                 <Canvas
                   tasks={tasks}

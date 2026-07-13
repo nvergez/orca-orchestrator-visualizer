@@ -238,6 +238,34 @@ const FEATURES: Feature[] = [
     degraded:
       'Run span ends — this Orca has no tasks.completed_at column, so a finished run’s span can end only on its latest task creation, and understates any run whose work outlived it.',
   },
+  {
+    // The dispatch timeline (#72), and the column that *places* a bar. An attempt with no readable
+    // instant to stand at cannot be drawn anywhere on a clock — the only number available is zero,
+    // and a 1970 bar at the far left of every run is the ghost `instantOf` returns null to prevent.
+    // It costs the attempt its position, never its existence: the untimed list keeps it, and the
+    // sentence says so, because a reader looking at an empty axis is owed the reason (SPEC §5).
+    anyOf: ['dispatch_contexts.dispatched_at', 'dispatch_contexts.created_at'],
+    degraded:
+      'The dispatch timeline — this Orca records no instant an attempt was dispatched at (neither dispatch_contexts.dispatched_at nor created_at), so no bar can be placed on a clock: every task falls into the timeline’s untimed list.',
+  },
+  {
+    // The same columns as the cast, and a *different* feature — the pattern `MESSAGE_PAYLOAD` and
+    // `tasks.spec` already set. Losing the cast costs the rail its agents and a node its stripe;
+    // it costs the timeline the **lanes themselves**, which is the whole shape of the view and not
+    // a badge on it. A reader owed one sentence is owed both.
+    allOf: CAST_COLUMNS,
+    degraded:
+      'Timeline lanes — this Orca is missing dispatch_contexts.task_id or assignee_handle, so no attempt can be tied to the task it was made for or the agent that held it: the timeline draws no lanes and no bars.',
+  },
+  {
+    // The timeline's completion marker reads `tasks.completed_at` — a *different* column from the
+    // attempt's own end, written by a different writer (SPEC §4.2, trap 5), which is exactly why
+    // the marker is not the bar's right edge repeated. Without it the bars still draw; what goes is
+    // the instant the work was *recorded* done.
+    anyOf: ['tasks.completed_at'],
+    degraded:
+      'Timeline completion markers — this Orca has no tasks.completed_at column, so nothing records when a task was marked complete, and the timeline marks no completions.',
+  },
 ];
 
 /** The DAG itself. Without these there is no graph to draw, and no honest way to fake one. */

@@ -87,9 +87,26 @@ const NO_HISTORY: HistoryLoaders = {
   },
 };
 
-export function CannedApp({ event, loadTask }: { event: CannedEvent | null; loadTask?: TaskLoader }) {
+/** A run whose tasks were never dispatched — the shape most presentation suites want. */
+const NO_ATTEMPTS: Record<string, Dispatch[]> = {};
+
+export function CannedApp({
+  event,
+  loadTask,
+  /**
+   * Every retained attempt of every task, as the selected-run snapshot carries them (`RunSnapshot`).
+   * Most suites need none — a canvas node shows the *latest* dispatch, which rides on the `Task`.
+   * The timeline (#72) is the panel that reads the attempt rows themselves, because a retry is one
+   * task and several rows, and the bar per attempt is the whole feature.
+   */
+  attempts = NO_ATTEMPTS,
+}: {
+  event: CannedEvent | null;
+  loadTask?: TaskLoader;
+  attempts?: Record<string, Dispatch[]>;
+}) {
   // Rebuilt when the event is: a rerender with a new world is a new database state, and the
   // event's `affected.all` is what makes `useHistory` re-read it — exactly a real reconnect.
-  const loadHistory = useMemo(() => (event === null ? NO_HISTORY : historyOf(event)), [event]);
+  const loadHistory = useMemo(() => (event === null ? NO_HISTORY : historyOf(event, attempts)), [event, attempts]);
   return <App event={event} loadTask={loadTask} loadHistory={loadHistory} />;
 }
