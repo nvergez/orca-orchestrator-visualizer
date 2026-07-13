@@ -31,7 +31,7 @@ const META: Meta = {
   liveness: 'live',
   orcaPid: 4242,
   dbMtime: '2026-07-11T20:54:00.000Z',
-  resetDetected: false,
+  historyLoss: [],
 };
 
 const RUN: Run = {

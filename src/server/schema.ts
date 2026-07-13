@@ -23,8 +23,22 @@ export const TABLES = ['tasks', 'dispatch_contexts', 'messages', 'decision_gates
 export type TableName = (typeof TABLES)[number];
 
 /**
+ * The four graph-owned tables: where task graph history lives (CONTEXT.md), and exactly what
+ * a tasks-only reset deletes — `messages` is deliberately not among them (#50). Named once,
+ * here, because the history-loss detector (`history-loss.ts`) and the fixture that models
+ * the reset (`test/fixtures/builder.ts`) must mean the same four tables or the test proves
+ * nothing.
+ */
+export const GRAPH_OWNED_TABLES = [
+  'tasks',
+  'dispatch_contexts',
+  'decision_gates',
+  'coordinator_runs',
+] as const satisfies readonly TableName[];
+
+/**
  * The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
- * It spots an `orchestration reset` (`detectReset`), and it is what the message log resumes
+ * It spots lost message history (`detectHistoryLoss`), and it is what the message log resumes
  * from (`highWaterMark`, and the SSE event id) — three call sites for one column, so it is
  * named once and guarded by that name.
  */
@@ -53,6 +67,21 @@ export const GATE_MESSAGE_COLUMNS = ['messages.type', 'messages.id', 'messages.t
  * features, and `FEATURES` names them separately because a user is owed both.
  */
 export const MESSAGE_PAYLOAD = 'messages.payload';
+
+/**
+ * What it takes to recognize the empty-graph shape a tasks-only reset leaves (#50, SPEC §5.1):
+ * `messages.payload` for the retained task reference, and the identity column of every other
+ * graph-owned table — not because counting rows reads `id`, but because a table has to be
+ * *verified through introspection* before its emptiness can be observed at all: an absent
+ * table introspects to the same empty column set a renamed one does, and asking SQLite to
+ * count a table that is not there throws. Derived from `GRAPH_OWNED_TABLES` minus `tasks`,
+ * whose columns are the DAG core and the one legal hard-fail (`inspectSchema`) — a database
+ * without them never reaches this question.
+ */
+export const TASK_GRAPH_EVIDENCE_COLUMNS: readonly string[] = [
+  MESSAGE_PAYLOAD,
+  ...GRAPH_OWNED_TABLES.filter((table) => table !== 'tasks').map((table) => `${table}.id`),
+];
 
 /** What ties a dispatch attempt to the task it was made for — the whole retry history hangs on it. */
 export const DISPATCH_TASK_ID = 'dispatch_contexts.task_id';
@@ -128,7 +157,16 @@ const FEATURES: Feature[] = [
   {
     anyOf: [MESSAGE_SEQUENCE],
     degraded:
-      'Reset detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
+      'Message history-loss detection — this Orca has no messages.sequence column, so a history wiped by `orchestration reset` cannot be spotted.',
+  },
+  {
+    // The other history-loss signal (#50, SPEC §5.1), degrading whole for the same reason the
+    // gates do: with one requirement unverifiable, "the graph is empty and messages still point
+    // into it" is a claim this build cannot check — and a suppressed signal explained here is
+    // honest where a guessed one would not be. The sentence is the spec's, verbatim.
+    allOf: TASK_GRAPH_EVIDENCE_COLUMNS,
+    degraded:
+      'Task graph history-loss detection — this Orca is missing message payloads or a graph-table identity, so the visualizer cannot safely recognize the empty-graph shape left by a tasks-only reset.',
   },
   {
     // Gates come from *messages*, never from the `decision_gates` table (SPEC §4.2, trap 1) —
@@ -283,38 +321,4 @@ export function inspectSchema(db: DatabaseSync): SchemaReport {
     degraded: FEATURES.filter((feature) => !satisfied(feature, has)).map((feature) => feature.degraded),
     columns,
   };
-}
-
-/**
- * Did someone run `orchestration reset`?
- *
- * `messages.sequence` is AUTOINCREMENT, so `sqlite_sequence` remembers the highest id ever
- * handed out even after the rows are deleted. A counter that has run ahead of the rows
- * that survive is the fingerprint of a reset — and it is the difference between a
- * mysteriously empty history and an explained one (SPEC §5).
- *
- * The detector is itself a *feature*, and so it degrades like one: an Orca with no
- * `messages.sequence` gets no reset detection and is told so (`FEATURES`), rather than being
- * asked a question SQLite would answer by throwing.
- */
-export function detectReset(db: DatabaseSync, columns: SchemaReport['columns']): boolean {
-  if (!hasColumn(columns, MESSAGE_SEQUENCE)) return false;
-
-  let counter: number;
-  try {
-    const row = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'messages'").get() as
-      | { seq: number }
-      | undefined;
-    if (!row) return false; // No message has ever been written: nothing to have reset.
-    counter = row.seq;
-  } catch {
-    return false; // No sqlite_sequence at all — not a database that can tell us.
-  }
-
-  const { n, lowest, highest } = db
-    .prepare('SELECT COUNT(*) AS n, MIN(sequence) AS lowest, MAX(sequence) AS highest FROM messages')
-    .get() as { n: number; lowest: number | null; highest: number | null };
-
-  if (n === 0) return counter > 0; // Every message deleted, but the counter remembers them.
-  return lowest! > 1 || counter > highest!;
 }

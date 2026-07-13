@@ -38,7 +38,7 @@ const META: Meta = {
   liveness: 'live',
   orcaPid: 4242,
   dbMtime: '2026-07-11T20:54:00.000Z',
-  resetDetected: false,
+  historyLoss: [],
 };
 
 /** Selecting a task swaps the dock to the inspector, and the inspector fetches. */

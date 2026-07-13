@@ -191,6 +191,59 @@ describe('booting', () => {
     expect(lines.join('\n')).not.toMatch(/degraded|mislabeled/i);
   });
 
+  /**
+   * The history-loss sentences (#50, SPEC §5.1), asserted as literals here and in
+   * `app.test.tsx` — the terminal and the page are pinned to the same evidence-first words
+   * by the tests, not merely by sharing `shared/wording.ts`.
+   */
+  it('explains lost message history with the exact sentence the page shows', async () => {
+    const dbPath = new FixtureBuilder()
+      .task({ createdAt: AT })
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'after the reset', sequence: 401, createdAt: AT })
+      .write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    expect(lines.join('\n')).toContain(
+      'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.'
+    );
+  });
+
+  it('explains lost task graph history with the exact sentence the page shows', async () => {
+    const dbPath = new FixtureBuilder().tasksOnlyReset(AT).write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    expect(lines.join('\n')).toContain(
+      'Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.'
+    );
+  });
+
+  it('prints both full notices, message history first, when both shapes are present', async () => {
+    const dbPath = new FixtureBuilder()
+      .message({ fromHandle: 'a', toHandle: 'b', subject: 'survivor', sequence: 400, createdAt: AT })
+      .tasksOnlyReset(AT)
+      .write(tempDbPath());
+
+    const { lines } = await run(['--db', dbPath, '--port', '0']);
+
+    const message =
+      'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.';
+    const graph =
+      'Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.';
+    const printed = lines.join('\n');
+    expect(printed).toContain(message);
+    expect(printed).toContain(graph);
+    // The stable order (SPEC §5.1), as printed and not merely in the array.
+    expect(printed.indexOf(message)).toBeLessThan(printed.indexOf(graph));
+  });
+
+  it('says nothing about lost history when there is none to report', async () => {
+    const { lines } = await run(['--db', fixtureDb(), '--port', '0']);
+
+    expect(lines.join('\n')).not.toMatch(/history is (incomplete|missing)/i);
+  });
+
   it('refuses a port that is taken rather than silently hopping to another one', async () => {
     const blocker = createServer();
     await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));

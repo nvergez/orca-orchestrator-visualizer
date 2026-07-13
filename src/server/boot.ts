@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Meta } from '../shared/types.ts';
-import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { openBrowser as launchBrowser, shouldOpenBrowser } from './browser.ts';
 import { HELP, type Options, parseOptions } from './cli.ts';
 import { OrcaDatabase } from './database.ts';
@@ -75,6 +75,7 @@ export async function boot(options: BootOptions): Promise<Booted> {
     const meta = database.snapshot().meta;
     print(`orca-viz  reading ${dbPath}`);
     print(`          ${describeState(meta)}`);
+    for (const line of describeHistoryLoss(meta)) print(`          ${line}`);
     for (const line of describeSchema(meta)) print(`          ${line}`);
     print(`          listening on ${url}`);
 
@@ -131,10 +132,17 @@ function describeState(meta: Meta): string {
     // it lives in `wording.ts`, and `describeSchema` prints that one rather than paraphrasing it.
     livenessSentence(meta),
     `schema v${meta.schemaVersion}`,
-    meta.resetDetected ? 'a reset has wiped part of the history' : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  ].join(' · ');
+}
+
+/**
+ * What retained history is observably missing (#50) — one notice per lost surface, in the
+ * stable order `meta.historyLoss` carries, and in the page's exact words (SPEC §5.1): the
+ * sentence lives once in `shared/wording.ts` precisely so the terminal cannot drift into a
+ * different claim about what the evidence proves.
+ */
+function describeHistoryLoss(meta: Meta): string[] {
+  return meta.historyLoss.map((surface) => HISTORY_LOSS_SENTENCES[surface]);
 }
 
 /**

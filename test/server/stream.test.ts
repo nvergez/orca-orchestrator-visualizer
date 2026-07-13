@@ -305,7 +305,7 @@ class CountingSource implements StreamSource {
         liveness: this.liveOrca,
         orcaPid: 4242,
         dbMtime: AT.toISOString(),
-        resetDetected: false,
+        historyLoss: [],
       },
       snapshot: { runs: [], tasks: [], gates: [], turns: [], coordinatorRuns: [] },
       messages: [],

@@ -21,7 +21,7 @@ const META: Meta = {
   liveness: 'live',
   orcaPid: 4242,
   dbMtime: '2026-07-11T20:54:00.000Z',
-  resetDetected: false,
+  historyLoss: [],
 };
 
 function event(meta: Partial<Meta> = {}): StreamEvent {
@@ -118,16 +118,50 @@ describe('<App>', () => {
     expect(screen.queryByText(/older Orca schema/i)).toBeNull();
   });
 
-  it('explains a history that a reset wiped, rather than leaving it a mystery', () => {
-    render(<App event={event({ resetDetected: true })} />);
+  // The history-loss sentences are asserted as literals here and in `boot.test.ts`, so the
+  // two surfaces are pinned to the same evidence-first words (SPEC §5.1) by the tests and
+  // not merely by sharing `shared/wording.ts`.
+  it('explains lost message history with the exact evidence-first sentence', () => {
+    render(<App event={event({ historyLoss: ['message-history'] })} />);
 
-    expect(screen.getByText(/reset/i)).toBeVisible();
+    expect(
+      screen.getByText(
+        'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.'
+      )
+    ).toBeVisible();
   });
 
-  it('says nothing about resets, schemas or staleness when there is nothing to say', () => {
+  it('explains lost task graph history with the exact evidence-first sentence', () => {
+    render(<App event={event({ historyLoss: ['task-graph-history'] })} />);
+
+    expect(
+      screen.getByText(
+        'Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.'
+      )
+    ).toBeVisible();
+  });
+
+  it('raises both full notices, message history first, when both loss shapes are present', () => {
+    render(<App event={event({ historyLoss: ['message-history', 'task-graph-history'] })} />);
+
+    const message = screen.getByText(
+      'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.'
+    );
+    const graph = screen.getByText(
+      'Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.'
+    );
+
+    expect(message).toBeVisible();
+    expect(graph).toBeVisible();
+    // The stable order (SPEC §5.1), on screen and not merely in the array.
+    expect(message.compareDocumentPosition(graph) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('says nothing about lost history, schemas or staleness when there is nothing to say', () => {
     render(<App event={event()} />);
 
     expect(screen.queryByText(/reset/i)).toBeNull();
+    expect(screen.queryByText(/history/i)).toBeNull();
     expect(screen.queryByText(/newer Orca schema/i)).toBeNull();
     expect(screen.queryByText(/isn't running/i)).toBeNull();
   });

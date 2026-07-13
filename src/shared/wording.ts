@@ -1,4 +1,4 @@
-import type { Meta } from './types.ts';
+import type { HistoryLoss, Meta } from './types.ts';
 
 /**
  * The sentences the spec writes for us, in one place.
@@ -24,6 +24,21 @@ export function livenessSentence(
   }
   return `connected to a running Orca${orcaPid === null ? '' : ` (pid ${orcaPid})`}`;
 }
+
+/**
+ * One notice per lost history surface, in the order `Meta.historyLoss` already promises
+ * (SPEC §5.1) — and in these exact words, spec'd like the liveness sentence above. Each
+ * names the evidence first and then says the shape **matches** a reset: "matches" is
+ * load-bearing, because the database proves the loss shape and never its cause (ADR 0001).
+ * Rendered verbatim on both surfaces — backticks and all, like the `meta.degraded` entries —
+ * because a paraphrase on either side is the drift this module exists to prevent.
+ */
+export const HISTORY_LOSS_SENTENCES: Record<HistoryLoss, string> = {
+  'message-history':
+    'Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.',
+  'task-graph-history':
+    'Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.',
+};
 
 /**
  * What this Orca's schema costs you — the banner (#21), and the same sentence in the terminal.

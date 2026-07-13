@@ -42,6 +42,14 @@ export type SchemaSupport = 'supported' | 'newer' | 'older';
  */
 export type Liveness = 'live' | 'stale' | 'unknown';
 
+/**
+ * A history surface the retained database observably lost (SPEC §5.1): message rows a
+ * sequence gap proves were removed, or a task graph whose emptiness the retained messages
+ * still refer into. Each value is a conservative history-loss signal — evidence of a shape
+ * that *matches* a reset, never a claim about which command or actor caused it (CONTEXT.md).
+ */
+export type HistoryLoss = 'message-history' | 'task-graph-history';
+
 export type Meta = {
   dbPath: string;
   /** `PRAGMA user_version`. */
@@ -53,8 +61,11 @@ export type Meta = {
   orcaPid: number | null;
   /** ISO — powers the "showing last-known state from …" wording. */
   dbMtime: string;
-  /** A `sqlite_sequence` gap: someone ran `orchestration reset` (SPEC §5). */
-  resetDetected: boolean;
+  /**
+   * The history surfaces this database observably lost, in stable order: message history,
+   * then task graph history (SPEC §5.1). Empty means there is no safe history-loss claim.
+   */
+  historyLoss: HistoryLoss[];
 };
 
 /**

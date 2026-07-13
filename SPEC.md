@@ -357,7 +357,64 @@ Then:
 | Unknown enum value (a new status / message type) | **Rendered in a neutral "unknown" style — never dropped, never crashed on.** An unknown `TaskStatus` gets the neutral grey node treatment and its raw string as the chip label. |
 | The DAG core (`tasks.id` / `status` / `deps`) is unreadable | **Hard-fail** with an actionable message. This is the *only* hard-fail. |
 
-Additionally, `sqlite_sequence.seq` vs `COUNT(messages)` / `MIN(sequence)` is a cheap **reset detector** (#2 §4): a gap means someone ran `orchestration reset`. Worth a one-line note in the UI when detected, so a suddenly-empty history is explained rather than mysterious.
+### 5.1 History-loss signals (#50)
+
+The visualizer reports **what retained history is observably missing**, not that it witnessed a reset command. A reset is not an event in this database, and several external actions can produce the same rows. The wire contract is therefore an ordered list of affected history surfaces:
+
+```ts
+type HistoryLoss = 'message-history' | 'task-graph-history'
+
+type Meta = {
+  // ...the other metadata fields...
+  historyLoss: HistoryLoss[] // stable order: message history, then task graph history
+}
+```
+
+This replaces the ambiguous `resetDetected: boolean`. An empty list means there is no safe history-loss claim to make. Separate values let the terminal and browser use evidence-specific wording, and leave room for both signals when a database has experienced the two reset shapes at different times.
+
+**Message history.** Preserve the existing detector: `sqlite_sequence.seq` ahead of the surviving `messages.sequence` range, or a surviving range whose minimum is greater than 1, emits `message-history`. This is evidence that message rows once held by this database were removed.
+
+**Task graph history.** Emit `task-graph-history` only when one coherent SQLite read observes both halves of this exact shape:
+
+1. `tasks`, `dispatch_contexts`, `decision_gates`, and `coordinator_runs` all contain zero rows; and
+2. at least one retained `messages.payload` parses as an object with a non-empty string `taskId`.
+
+The four emptiness checks and the retained payloads must belong to the same read snapshot. Combining counts and references observed on different poll ticks could briefly announce loss while Orca is creating new work.
+
+This is deliberately narrower than “many message task ids do not resolve.” Orphaned task references are already a normal, supported shape after an earlier reset, and a ratio threshold would keep warning forever after new work began. The task-graph signal therefore stays quiet when:
+
+- any row remains in any of the four graph-owned tables;
+- messages remain but none contains a readable, non-empty string `taskId`;
+- payload JSON is malformed or its `taskId` has another shape; or
+- a required table/column cannot be verified through schema introspection.
+
+The first boundary accepts a false negative as soon as any new graph work exists. That is intentional: this signal explains the otherwise-mysterious **empty canvas beside a retained conversation**; it is not a forensic classifier for every historical reset.
+
+Task-graph detection requires the readable DAG core, `messages.payload`, `dispatch_contexts.id`, `decision_gates.id`, and `coordinator_runs.id`. If any non-core requirement is missing, do not guess: omit `task-graph-history` and add a dedicated `meta.degraded` entry:
+
+> Task graph history-loss detection — this Orca is missing message payloads or a graph-table identity, so the visualizer cannot safely recognize the empty-graph shape left by a tasks-only reset.
+
+Render one notice per emitted value, using these exact evidence-first sentences in both the browser and terminal:
+
+- `message-history`: **“Message history is incomplete: sequence gaps show that this database once held messages which are now missing. This matches an orchestration reset.”**
+- `task-graph-history`: **“Task graph history is missing: the graph is empty, but retained messages still refer to tasks. This matches `orchestration reset --tasks`.”**
+
+“Matches” is load-bearing: the database proves the loss shape, not its cause.
+
+**Deterministic fixtures.** Extend the SQL fixture builder with a semantic tasks-only reset operation. It first writes a complete synthetic orchestration containing tasks, a dispatch attempt, a gate row, a coordinator run, and task-bearing messages; after those deterministic rows are inserted, it deletes the four graph-owned tables in the same fixture transaction and preserves `messages` and its sequence state. The primary positive fixture must start message sequences at 1 so only `task-graph-history` fires—reusing the existing sequence-gap fixture would hide a detector coupled incorrectly to message loss.
+
+The fixture/test matrix must also pin the conservative boundary:
+
+- an untouched orchestration emits `[]`;
+- a message-sequence gap with a non-empty graph emits `['message-history']`;
+- the tasks-only reset fixture emits `['task-graph-history']`;
+- a sequence gap followed by the tasks-only shape emits both values in the specified order;
+- an empty graph with messages but no readable task reference emits `[]`;
+- any surviving row in any graph-owned table suppresses `task-graph-history`, even if every readable message reference is orphaned;
+- malformed payload JSON never throws and is not evidence; and
+- a fixture missing any required non-core column suppresses the signal and names the degraded detector.
+
+Client and boot-output tests assert the exact sentence for each value and both sentences when both values are present. These fixtures model rows and operations; they never depend on wall-clock time, random identifiers, or a committed copy of a real database.
 
 ---
 
@@ -433,7 +490,7 @@ type Meta = {
   liveness: 'live' | 'stale' | 'unknown'
   orcaPid: number | null
   dbMtime: string                            // ISO — powers the "last-known state from …" wording
-  resetDetected: boolean                     // sqlite_sequence gap (§5)
+  historyLoss: HistoryLoss[]                 // evidence-specific, stable order (§5.1)
 }
 
 type Run = {                                 // AN ORCHESTRATOR, and everything it dispatched — §4.3
@@ -793,6 +850,7 @@ The MVP ships when, against a real `orchestration.db`:
 7. A run with an open gate shows the gate strip — **populated from `decision_gate` messages**.
 8. Closing Orca flips the badge to **stale** with an honest "last-known state from …" line, and **everything else keeps working**.
 9. Pointing it at a DB with a different `user_version` does not crash it — and a missing column costs **exactly** the feature that needed it, by name (§5): the cast, the orchestrator's side of the conversation and the waves each have their own entry in the degradation contract.
+10. A tasks-only reset that preserves task-bearing messages reports `task-graph-history` and explains the empty graph without relying on a message-sequence gap; ordinary orphaned task references in a non-empty graph do not trigger it (§5.1).
 
 ---
 

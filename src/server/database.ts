@@ -7,9 +7,10 @@ import { databaseMtime } from './db-files.ts';
 import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
+import { detectHistoryLoss } from './history-loss.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
-import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
+import { hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTaskDetail } from './task-detail.ts';
 import { readTasks } from './tasks.ts';
@@ -99,7 +100,7 @@ export class OrcaDatabase {
         // under us when the user quits Orca (SPEC §6.1).
         ...liveness,
         dbMtime: (databaseMtime(this.path) ?? new Date(0)).toISOString(),
-        resetDetected: detectReset(this.db, this.schema.columns),
+        historyLoss: detectHistoryLoss(this.db, this.schema.columns),
       },
       snapshot: {
         runs: gated.runs,

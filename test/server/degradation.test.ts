@@ -285,15 +285,49 @@ describe('the only legal hard-fail', () => {
     expect(byId(snapshot.tasks, BUILDING).deps).toEqual([CHARTED]);
     expect(snapshot.runs[0]!.handle).toBe(CODER);
 
-    // The reset detector says nothing rather than guessing, and the user is told which
-    // feature that cost them.
-    expect(meta.resetDetected).toBe(false);
-    expect(matching(meta.degraded, /reset detection/i)).toHaveLength(1);
+    // The history-loss detector says nothing rather than guessing, and the user is told
+    // which feature that cost them.
+    expect(meta.historyLoss).toEqual([]);
+    expect(matching(meta.degraded, /message history-loss detection/i)).toHaveLength(1);
   });
 
   it('reports a zero cursor rather than crashing when there is no sequence to read', async () => {
     const { seq } = await snapshotOf(orchestration({ omitColumns: { messages: ['sequence'] } }));
 
     expect(seq).toBe(0);
+  });
+});
+
+/**
+ * The task-graph history-loss detector degrades like a feature (#50, SPEC §5.1). Each case
+ * below is the tasks-only reset shape itself, written at a schema missing exactly one of the
+ * detector's requirements — the loss is really there, and the tool suppresses the claim it
+ * can no longer verify rather than guessing, while the rest of the snapshot still renders.
+ */
+describe('task graph history-loss detection degrades like a feature', () => {
+  const DETECTOR = /task graph history-loss detection/i;
+
+  it.each([
+    ['messages', 'payload'],
+    ['dispatch_contexts', 'id'],
+    ['decision_gates', 'id'],
+    ['coordinator_runs', 'id'],
+  ] as const)('suppresses the signal and names the detector when %s.%s is missing', async (table, column) => {
+    const { meta, messages } = await snapshotOf(
+      new FixtureBuilder({ omitColumns: { [table]: [column] } }).tasksOnlyReset(AT)
+    );
+
+    expect(meta.historyLoss).toEqual([]);
+    expect(matching(meta.degraded, DETECTOR)).toHaveLength(1);
+    // The retained conversation is still served: suppressing one detector costs exactly
+    // that detector, never the messages it would have read.
+    expect(messages).toHaveLength(2);
+  });
+
+  it('keeps detecting on a database that is missing nothing', async () => {
+    const { meta } = await snapshotOf(new FixtureBuilder().tasksOnlyReset(AT));
+
+    expect(matching(meta.degraded, DETECTOR)).toHaveLength(0);
+    expect(meta.historyLoss).toEqual(['task-graph-history']);
   });
 });

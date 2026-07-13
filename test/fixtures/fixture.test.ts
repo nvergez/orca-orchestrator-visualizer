@@ -173,6 +173,50 @@ describe('the traps (SPEC §4.2)', () => {
   });
 });
 
+/**
+ * The semantic tasks-only reset (SPEC §5.1, #50): a complete synthetic orchestration is
+ * really inserted and its four graph-owned tables really deleted, in the same fixture
+ * transaction — so the file carries exactly what `orchestration reset --tasks` leaves, with
+ * nothing about the shape asserted into existence by hand.
+ */
+describe('the tasks-only reset', () => {
+  it('empties every graph-owned table while preserving the task-bearing messages', () => {
+    const db = openFixture(new FixtureBuilder().tasksOnlyReset(AT));
+
+    for (const table of ['tasks', 'dispatch_contexts', 'decision_gates', 'coordinator_runs']) {
+      expect(count(db, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+    }
+
+    // The retained messages still point into the graph that is gone — every payload names a
+    // task, in the id shape the builder gives tasks, and no such task survives anywhere.
+    const references = rows(db, `SELECT DISTINCT json_extract(payload, '$.taskId') AS task_id FROM messages`);
+    expect(references.length).toBeGreaterThan(0);
+    for (const { task_id } of references) {
+      expect(task_id).toMatch(/^task_[0-9a-f]{12}$/);
+    }
+  });
+
+  it('preserves the message sequence state: rows from 1, and a counter with no gap in it', () => {
+    // The primary positive fixture must start message sequences at 1 (SPEC §5.1): a fixture
+    // that reused the sequence-gap shape would hide a detector coupled incorrectly to
+    // message loss.
+    const db = openFixture(new FixtureBuilder().tasksOnlyReset(AT));
+
+    const messages = count(db, 'SELECT COUNT(*) AS n FROM messages');
+    expect(messages).toBeGreaterThan(0);
+    expect(count(db, 'SELECT MIN(sequence) AS n FROM messages')).toBe(1);
+    expect(count(db, 'SELECT MAX(sequence) AS n FROM messages')).toBe(messages);
+    expect(count(db, `SELECT seq AS n FROM sqlite_sequence WHERE name = 'messages'`)).toBe(messages);
+  });
+
+  it('is deterministic: built twice, the surviving rows are identical', () => {
+    const first = rows(openFixture(new FixtureBuilder().tasksOnlyReset(AT)), 'SELECT * FROM messages');
+    const second = rows(openFixture(new FixtureBuilder().tasksOnlyReset(AT)), 'SELECT * FROM messages');
+
+    expect(first).toEqual(second);
+  });
+});
+
 describe('schema drift (SPEC §5)', () => {
   it('user_version 4: task_title and display_name are genuinely absent', () => {
     const db = openFixture(
