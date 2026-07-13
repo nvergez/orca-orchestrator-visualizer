@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { DurationClock, DurationObservation } from '../shared/types.ts';
+import { instantOf, localInstant } from './relative-time.ts';
 
 /**
  * Honest durations, rendered (#66). The server sends a `DurationObservation` — a clock, its
@@ -63,7 +64,7 @@ export function readDuration(observation: DurationObservation, now: number): Dur
   const clock = CLOCK_NAMES[observation.clock];
 
   if (!observation.complete) {
-    const start = instant(observation.startAt);
+    const start = instantOf(observation.startAt);
     if (start === null) return null;
 
     // The clamp inside `formatDurationMs` is for exactly this reading: an open interval is the
@@ -71,7 +72,7 @@ export function readDuration(observation: DurationObservation, now: number): Dur
     // reads as a start, not a debt.
     return {
       text: `${formatDurationMs(now - start)} so far`,
-      title: `${clock} — started ${local(observation.startAt)}, not finished per retained evidence; measured against your clock`,
+      title: `${clock} — started ${localInstant(observation.startAt)}, not finished per retained evidence; measured against your clock`,
     };
   }
 
@@ -83,25 +84,13 @@ export function readDuration(observation: DurationObservation, now: number): Dur
   if (ms === null || ms < 0) return null;
 
   const label = observation.clock === 'task-span' ? `${formatDurationMs(ms)} task span` : formatDurationMs(ms);
-  return { text: label, title: `${clock} · ${local(observation.startAt)} → ${local(observation.endAt ?? '')}` };
+  return { text: label, title: `${clock} · ${localInstant(observation.startAt)} → ${localInstant(observation.endAt ?? '')}` };
 }
 
 function spanOf({ startAt, endAt }: DurationObservation): number | null {
-  const start = instant(startAt);
-  const end = instant(endAt ?? '');
+  const start = instantOf(startAt);
+  const end = instantOf(endAt);
   return start === null || end === null ? null : end - start;
-}
-
-/** One reading of one string as an instant — or null, said once instead of three times. */
-function instant(iso: string): number | null {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? null : at;
-}
-
-/** The exact instant, in the reader's own timezone — the same rendering `ageOf` gives one. */
-function local(iso: string): string {
-  const at = instant(iso);
-  return at === null ? iso : new Date(at).toLocaleString();
 }
 
 /**

@@ -343,20 +343,30 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
                 // but an empty canvas would read as "this run has no tasks", which is a claim,
                 // and not one anybody has verified yet.
                 <LoadingRun />
-              ) : centre === 'timeline' && snapshot !== null ? (
+              ) : centre === 'timeline' ? (
                 // Every attempt, on the clock. It reads the selected-run snapshot and nothing else:
                 // ADR 0002 made that snapshot complete, which is *why* every retained attempt can be
                 // its own bar (SPEC §12.4). No second endpoint, and no second copy of the evidence.
-                <Timeline
-                  snapshot={snapshot}
-                  selectedAgent={selectedAgent}
-                  selectedTaskId={selectedTask?.id ?? null}
-                  // A bar is a node: clicking it again lets go. A marker or an untimed row *names* a
-                  // task, and naming is never a toggle — the same distinction the gate strip and the
-                  // conversation already draw (`selectTask` vs `showTask`).
-                  onSelectTask={selectTask}
-                  onShowTask={showTask}
-                />
+                //
+                // **The tab decides the view, and nothing else may.** Falling back to the canvas when
+                // there is no run to draw would leave the timeline tab lit above a DAG — the toggle
+                // claiming a view the centre is not showing, which is the one thing a toggle must
+                // never do. With no run selected there is nothing for *either* view to draw, so this
+                // one says so in its own voice.
+                snapshot === null ? (
+                  <NoRun />
+                ) : (
+                  <Timeline
+                    snapshot={snapshot}
+                    selectedAgent={selectedAgent}
+                    selectedTaskId={selectedTask?.id ?? null}
+                    // A bar is a node: clicking it again lets go. A marker or an untimed row *names*
+                    // a task, and naming is never a toggle — the same distinction the gate strip and
+                    // the conversation already draw (`selectTask` vs `showTask`).
+                    onSelectTask={selectTask}
+                    onShowTask={showTask}
+                  />
+                )
               ) : (
                 <Canvas
                   tasks={tasks}
@@ -711,6 +721,22 @@ function Notices({ meta }: { meta: Meta }) {
         </p>
       )}
     </motion.div>
+  );
+}
+
+/**
+ * The timeline, with no run to draw. The rail is empty — a fresh database, or one an
+ * `orchestration reset` emptied — so there is no selected run and no evidence to lay against a
+ * clock. It stands where the timeline would, because the tab above it says *timeline*, and a tab
+ * that lit a view the centre was not showing would be the toggle telling a small lie.
+ */
+function NoRun() {
+  return (
+    <section aria-label="No run selected" className={cn(PANEL_CLASS, 'flex h-full items-center justify-center')}>
+      <p data-testid="timeline-no-run" className="text-muted-foreground text-xs">
+        Select an orchestrator to see its dispatch timeline.
+      </p>
+    </section>
   );
 }
 

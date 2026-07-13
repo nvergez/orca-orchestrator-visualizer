@@ -33,6 +33,32 @@ export function useNow(pushed: unknown): number {
  * Shared between the canvas and the conversation, because two of these would eventually round
  * differently and the same message would then be two different ages on one screen.
  */
+/**
+ * **The instant a wire string names — or null when it names none.**
+ *
+ * The server's own rule (`server/time.ts`), client-side, and in one place for the reason this module
+ * exists: `isoInstant` passes an unreadable column through *verbatim* rather than dropping the row,
+ * so every instant on this wire is ISO **or** whatever nonsense the column actually held. Null is
+ * how that nonsense stays honest — an unknown instant is not the epoch, and quietly reading it as
+ * `0` is what mints a 1970 ghost at the far left of every timeline.
+ */
+export function instantOf(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
+}
+
+/**
+ * The exact instant, in the reader's own timezone — the wire is UTC and nobody reads a post-mortem
+ * in UTC. Unreadable in, unreadable out: a tooltip that showed "Invalid Date" would be worse than
+ * one that showed the string the database actually holds.
+ */
+export function localInstant(iso: string): string {
+  const at = instantOf(iso);
+  return at === null ? iso : new Date(at).toLocaleString();
+}
+
 export function relativeTime(elapsedMs: number): string {
   const seconds = Math.max(0, Math.round(elapsedMs / 1000));
   if (seconds < 60) return `${seconds}s`;

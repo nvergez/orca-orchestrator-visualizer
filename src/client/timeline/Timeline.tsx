@@ -5,9 +5,9 @@ import { cn } from '@/lib/utils';
 import type { RunSnapshot } from '../../shared/types.ts';
 import { agentLook, MONOGRAM_CLASS, SELECTED_RING, themeOf } from '../canvas/theme.ts';
 import { Duration } from '../duration.tsx';
+import { localInstant } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import {
-  type BarExtent,
   deriveTimeline,
   placeBar,
   placeInstant,
@@ -97,20 +97,20 @@ export function Timeline({ snapshot, selectedAgent, selectedTaskId, onSelectTask
         <Empty />
       ) : (
         <>
-          <Axis window={axis} />
+          <Axis axis={axis} />
 
           <ScrollArea className="min-h-0 flex-1">
             <div className="relative" style={{ height: layout.height }}>
-              <Links model={model} layout={layout} window={axis} selectedTaskId={selectedTaskId} />
+              <Links model={model} layout={layout} axis={axis} selectedTaskId={selectedTaskId} />
 
-              {lanes.map((lane, index) => (
+              {layout.placed.map(({ lane, top, height }) => (
                 <Lane
                   key={lane.key}
                   lane={lane}
                   cast={snapshot.run.cast}
-                  window={axis}
-                  top={layout.tops[index]!}
-                  height={layout.heights[index]!}
+                  axis={axis}
+                  top={top}
+                  height={height}
                   dimmed={selectedAgent !== null && lane.key !== selectedAgent}
                   selectedTaskId={selectedTaskId}
                   onSelectTask={onSelectTask}
@@ -127,13 +127,20 @@ export function Timeline({ snapshot, selectedAgent, selectedTaskId, onSelectTask
   );
 }
 
-/** Every lane's vertical extent, and every bar's — one arithmetic, read by two renderers. */
-type Layout = { tops: number[]; heights: number[]; height: number; barTops: Map<string, number> };
+/**
+ * Every lane's vertical extent, and every bar's — **one arithmetic, read by two renderers.** The
+ * lanes lay themselves out and the link overlay draws across all of them, and if those two did their
+ * own sums a connector would land a few pixels off the bar it names.
+ *
+ * The box travels *with* its lane rather than in a parallel array beside it: two lists indexed in
+ * lockstep are two lists that can fall out of step.
+ */
+type PlacedLane = { lane: TimelineLane; top: number; height: number };
+type Layout = { placed: PlacedLane[]; height: number; barCentres: Map<string, number> };
 
 function layoutOf(lanes: TimelineLane[]): Layout {
-  const tops: number[] = [];
-  const heights: number[] = [];
-  const barTops = new Map<string, number>();
+  const placed: PlacedLane[] = [];
+  const barCentres = new Map<string, number>();
   let offset = 0;
 
   for (const lane of lanes) {
@@ -142,29 +149,28 @@ function layoutOf(lanes: TimelineLane[]): Layout {
 
     for (const bar of lane.bars) {
       // The centre of the bar, in the scroller's own coordinates: what a link has to land on.
-      barTops.set(bar.id, offset + LANE_PADDING + bar.row * ROW_HEIGHT + BAR_HEIGHT / 2);
+      barCentres.set(bar.id, offset + LANE_PADDING + bar.row * ROW_HEIGHT + BAR_HEIGHT / 2);
     }
 
-    tops.push(offset);
-    heights.push(height);
+    placed.push({ lane, top: offset, height });
     offset += height;
   }
 
-  return { tops, heights, height: offset, barTops };
+  return { placed, height: offset, barCentres };
 }
 
 /**
  * The clock across the top. Five ticks, in the reader's own timezone — the axis is UTC on the wire
  * and nobody reads a post-mortem in UTC.
  */
-function Axis({ window }: { window: TimelineWindow }) {
+function Axis({ axis }: { axis: TimelineWindow }) {
   const ticks = useMemo(() => {
-    const span = window.endAt - window.startAt;
+    const span = axis.endAt - axis.startAt;
     return Array.from({ length: 5 }, (_, index) => {
-      const at = window.startAt + (span * index) / 4;
+      const at = axis.startAt + (span * index) / 4;
       return { at, left: (index / 4) * 100 };
     });
-  }, [window]);
+  }, [axis]);
 
   return (
     <header
@@ -200,7 +206,7 @@ function Axis({ window }: { window: TimelineWindow }) {
 function Lane({
   lane,
   cast,
-  window,
+  axis,
   top,
   height,
   dimmed,
@@ -210,7 +216,7 @@ function Lane({
 }: {
   lane: TimelineLane;
   cast: RunSnapshot['run']['cast'];
-  window: TimelineWindow;
+  axis: TimelineWindow;
   top: number;
   height: number;
   dimmed: boolean;
@@ -254,7 +260,7 @@ function Lane({
           <Bar
             key={bar.id}
             bar={bar}
-            window={window}
+            axis={axis}
             selected={bar.taskId === selectedTaskId}
             onSelect={() => onSelectTask(bar.taskId)}
           />
@@ -264,7 +270,7 @@ function Lane({
           <Marker
             key={marker.id}
             marker={marker}
-            window={window}
+            axis={axis}
             top={LANE_PADDING + lane.rows * ROW_HEIGHT}
             onShow={marker.taskId === null ? undefined : () => onShowTask(marker.taskId!)}
           />
@@ -287,18 +293,19 @@ function Lane({
  */
 function Bar({
   bar,
-  window,
+  axis,
   selected,
   onSelect,
 }: {
   bar: TimelineBar;
-  window: TimelineWindow;
+  axis: TimelineWindow;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const theme = themeOf(bar.status);
-  const { left, width } = placeBar(bar.extent, window);
+  const theme = themeOf(paletteStatus(bar.status));
+  const { left, width } = placeBar(bar.extent, axis);
   const unended = bar.extent.kind === 'unended';
+  const sentence = describe(bar);
 
   return (
     <button
@@ -308,8 +315,10 @@ function Bar({
       data-task={bar.taskId}
       data-extent={bar.extent.kind}
       onClick={onSelect}
-      title={titleOf(bar)}
-      aria-label={`${bar.title} — attempt ${bar.attemptIndex} of ${bar.attemptCount}. ${describe(bar.extent)}`}
+      // One sentence, said once: a tooltip and a label that composed the same facts in two orders
+      // would eventually disagree about one of them.
+      title={sentence}
+      aria-label={sentence}
       className={cn(
         'absolute flex cursor-pointer items-center gap-1 overflow-hidden rounded border px-1.5 text-[10px] whitespace-nowrap',
         theme.surface,
@@ -357,18 +366,32 @@ function Bar({
   );
 }
 
-/** What the bar says in full, where a 40px rectangle cannot. */
-function titleOf(bar: TimelineBar): string {
-  const attempt = `attempt ${bar.attemptIndex} of ${bar.attemptCount}`;
-  const when = describe(bar.extent);
-  return `${bar.title} — ${attempt} · ${when}`;
+/**
+ * What the bar says in full, where a 52px rectangle cannot — and it is the **only** place those
+ * facts are composed, so the tooltip and the accessible name cannot drift apart.
+ *
+ * It names the attempt's own status, because that is what the fill is now saying and a colour is not
+ * a word: `circuit_broken` and `failed` are two different things that wear one red.
+ */
+function describe(bar: TimelineBar): string {
+  const who = `${bar.title} — attempt ${bar.attemptIndex} of ${bar.attemptCount} (${bar.status})`;
+  const from = `dispatched ${localInstant(bar.extent.startAt)}`;
+
+  if (bar.extent.kind === 'closed') return `${who} · ${from}, completed ${localInstant(bar.extent.endAt)}`;
+  if (bar.extent.kind === 'open') return `${who} · ${from}, still out per retained evidence`;
+  return `${who} · ${from}; the row never recorded when it stopped`;
 }
 
-function describe(extent: BarExtent): string {
-  const from = `dispatched ${local(extent.startAt)}`;
-  if (extent.kind === 'closed') return `${from}, completed ${local(extent.endAt)}`;
-  if (extent.kind === 'open') return `${from}, still out per retained evidence`;
-  return `${from}; the row never recorded when it stopped`;
+/**
+ * An attempt's `DispatchStatus`, on the six-status palette (`canvas/theme.ts`).
+ *
+ * Four of the five land on it by name. `circuit_broken` does not exist as a *task* status, and it is
+ * emphatically not an *unknown* one — it is the breaker tripping after three failures (HANDOFF.md),
+ * which is a failure and must look like one. Neutral grey for the loudest thing a dispatch row can
+ * say would be the one degradation SPEC §5 never meant: the raw string is still in the tooltip.
+ */
+function paletteStatus(status: string): string {
+  return status === 'circuit_broken' ? 'failed' : status;
 }
 
 /** How each marker reads, and what it is *for*: a recorded instant, and nothing more. */
@@ -391,17 +414,17 @@ const MARKERS = {
  */
 function Marker({
   marker,
-  window,
+  axis,
   top,
   onShow,
 }: {
   marker: TimelineMarker;
-  window: TimelineWindow;
+  axis: TimelineWindow;
   top: number;
   onShow?: () => void;
 }) {
   const { icon: Icon, className, noun } = MARKERS[marker.kind];
-  const label = `${noun} · ${local(marker.at)}${marker.label === '' ? '' : ` · ${marker.label}`}`;
+  const label = `${noun} · ${localInstant(marker.at)}${marker.label === '' ? '' : ` · ${marker.label}`}`;
 
   return (
     <button
@@ -418,7 +441,7 @@ function Marker({
         className,
         onShow === undefined ? 'cursor-default' : 'cursor-pointer'
       )}
-      style={{ left: `${placeInstant(marker.at, window)}%`, top }}
+      style={{ left: `${placeInstant(marker.at, axis)}%`, top }}
     >
       <Icon className="size-3" />
     </button>
@@ -442,12 +465,12 @@ function Marker({
 function Links({
   model,
   layout,
-  window,
+  axis,
   selectedTaskId,
 }: {
   model: TimelineModel;
   layout: Layout;
-  window: TimelineWindow;
+  axis: TimelineWindow;
   selectedTaskId: string | null;
 }) {
   if (model.links.length === 0) return null;
@@ -462,8 +485,8 @@ function Links({
       preserveAspectRatio="none"
     >
       {model.links.map((link) => {
-        const fromY = layout.barTops.get(link.fromBar);
-        const toY = layout.barTops.get(link.toBar);
+        const fromY = layout.barCentres.get(link.fromBar);
+        const toY = layout.barCentres.get(link.toBar);
         if (fromY === undefined || toY === undefined) return null;
 
         return (
@@ -471,9 +494,9 @@ function Links({
             key={`${link.fromBar}->${link.toBar}`}
             data-testid="attempt-link"
             data-task={link.taskId}
-            x1={placeInstant(link.fromAt, window)}
+            x1={placeInstant(link.fromAt, axis)}
             y1={fromY}
-            x2={placeInstant(link.toAt, window)}
+            x2={placeInstant(link.toAt, axis)}
             y2={toY}
             stroke="var(--muted-foreground)"
             strokeWidth={1}
@@ -536,8 +559,9 @@ function Untimed({ model, onShowTask }: { model: TimelineModel; onShowTask: (tas
 
       {unplacedAttempts > 0 && (
         <p data-testid="unplaced-attempts" className="text-muted-foreground/80 mt-1.5 text-[11px]">
-          {unplacedAttempts} {unplacedAttempts === 1 ? 'further attempt' : 'further attempts'} of the tasks above could
-          not be placed — no readable dispatch instant. The inspector lists them.
+          {unplacedAttempts} {unplacedAttempts === 1 ? 'attempt' : 'attempts'} of{' '}
+          {unplacedAttempts === 1 ? 'a task' : 'tasks'} drawn above could not be placed — no readable dispatch instant.
+          The inspector lists {unplacedAttempts === 1 ? 'it' : 'them'}.
         </p>
       )}
     </section>
@@ -560,12 +584,7 @@ function Empty() {
   );
 }
 
-/** An instant, in the reader's own timezone — the axis is UTC and nobody reads a post-mortem in it. */
+/** A tick on the axis, in the reader's own timezone — the wire is UTC and nobody reads one in UTC. */
 function timeOf(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function local(iso: string): string {
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? iso : new Date(at).toLocaleString();
 }

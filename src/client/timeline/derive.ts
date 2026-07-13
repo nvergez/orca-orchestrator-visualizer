@@ -1,4 +1,5 @@
 import { agentOfTurn, type DurationObservation, type RunSnapshot, type Task } from '../../shared/types.ts';
+import { instantOf } from '../relative-time.ts';
 
 /**
  * **The dispatch timeline** (#72, SPEC §12.4) — one selected run, read along the clock.
@@ -73,7 +74,18 @@ export type TimelineBar = {
   id: string;
   taskId: string;
   title: string;
-  /** The **task's** status, so a bar is the colour its node is (`canvas/theme.ts`). */
+  /**
+   * **The attempt's own `DispatchStatus`** — not the task's.
+   *
+   * A bar *is* an attempt, and the retry is the story it exists to tell: a task that failed once and
+   * succeeded on the second try is `completed`, and painting its first bar green would hide the very
+   * evidence the timeline was built to show. So the fill answers "how did *this attempt* go", and
+   * the node on the canvas keeps answering "where did the *task* end up".
+   *
+   * The four common values (`pending`, `dispatched`, `completed`, `failed`) are the six-status
+   * palette's own names, so they land on it exactly (`canvas/theme.ts`); anything else — including
+   * an Orca that invents a status — falls through to the neutral unknown treatment (SPEC §5).
+   */
   status: string;
   /** 1-based, over **every** retained attempt — not over the ones that could be placed. */
   attemptIndex: number;
@@ -151,13 +163,6 @@ export type TimelineModel = {
   unplacedAttempts: number;
 };
 
-/** The instant a normalized wire string names, or null — `server/time.ts`'s rule, client-side. */
-function instantOf(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const at = Date.parse(iso);
-  return Number.isNaN(at) ? null : at;
-}
-
 /**
  * The extent an attempt's retained evidence can carry.
  *
@@ -184,14 +189,26 @@ function endsAt(extent: BarExtent): string {
   return extent.kind === 'closed' ? extent.endAt : extent.startAt;
 }
 
-type LaneDraft = TimelineLane & { key: string };
+/**
+ * How far a bar reaches **in time**, said once — because the same three-way reading, written out at
+ * each of the four places that needed it, is four chances for one of them to disagree about what an
+ * open bar means.
+ *
+ * `closed` ends where the row says. `open` has not ended, so it runs to the end of the axis.
+ * `unended` occupies the single instant it was dispatched at, which is all the file retains of it.
+ */
+function endInstantOf(extent: BarExtent, axis: TimelineWindow): number {
+  const start = instantOf(extent.startAt)!;
+  if (extent.kind === 'closed') return instantOf(extent.endAt)!;
+  return extent.kind === 'open' ? axis.endAt : start;
+}
 
 export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
   const { run, tasks, attempts, gates, turns } = snapshot;
 
   // One lane per cast member, in the cast's own order — an agent whose every attempt is unplaceable
   // still has a lane, because the cast is a fact about the *run* and not about the axis.
-  const lanes = new Map<string, LaneDraft>(
+  const lanes = new Map<string, TimelineLane>(
     run.cast.map((member) => [
       member.handle,
       {
@@ -216,11 +233,11 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
    * Standing it up empty would be furniture: a row on screen asserting a distinction the run does
    * not have.
    */
-  function unassigned(): LaneDraft {
+  function unassigned(): TimelineLane {
     const existing = lanes.get(UNASSIGNED_LANE);
     if (existing) return existing;
 
-    const lane: LaneDraft = {
+    const lane: TimelineLane = {
       key: UNASSIGNED_LANE,
       kind: 'unassigned',
       label: UNASSIGNED_LABEL,
@@ -235,7 +252,7 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
   }
 
   /** An agent's lane if the cast knows the handle; otherwise the lane for work no agent holds. */
-  function laneFor(handle: string | null | undefined): LaneDraft {
+  function laneFor(handle: string | null | undefined): TimelineLane {
     const lane = handle ? lanes.get(handle) : undefined;
     return lane ?? unassigned();
   }
@@ -251,18 +268,19 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
    * that is the same row seen twice (`MAX(rowid)` of the very list above), and a marker that laned
    * itself off the second copy could contradict the bar it is sitting on. One reading, one lane.
    */
-  const laneOfTask = new Map<string, LaneDraft>();
+  const laneOfTask = new Map<string, TimelineLane>();
 
   for (const task of tasks) {
     const retained = attempts[task.id] ?? [];
     const placed: { bar: TimelineBar; lane: string }[] = [];
+    let unplaced = 0;
 
     retained.forEach((attempt, index) => {
       // The whole of placement: an instant to stand at. `dispatched_at` falls back to the row's
       // `created_at` at the query boundary (`server/tasks.ts`), so this is already the strongest
       // start the row has.
       if (instantOf(attempt.dispatchedAt) === null) {
-        unplacedAttempts++;
+        unplaced++;
         return;
       }
 
@@ -271,7 +289,7 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
         id: attempt.id,
         taskId: task.id,
         title: task.title,
-        status: task.status,
+        status: attempt.status,
         attemptIndex: index + 1,
         attemptCount: retained.length,
         assigneeHandle: attempt.assigneeHandle === '' ? null : attempt.assigneeHandle,
@@ -290,12 +308,20 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
       // It loses its place on the axis, and nothing else. The reason is the difference between a
       // task nobody ever handed out and one whose dispatch row is unreadable — and a reader owed an
       // empty lane is owed which of the two it was.
+      //
+      // Its unplaced attempts are **not** counted below: the whole task is named in the untimed list,
+      // and counting them again would tell the reader twice about one absence — and, worse, the
+      // footnote says the attempts belong to tasks that *are* on the axis, which this one is not.
       untimed.push({
         task,
         reason: retained.length === 0 ? 'never dispatched' : 'no readable dispatch instant',
       });
       continue;
     }
+
+    // The mixed case, and the only one the footnote is for: the task is drawn — its other attempts
+    // could be placed — so nothing above would otherwise say that one of its retries is missing.
+    unplacedAttempts += unplaced;
 
     // The retry, drawn: attempt 1 ended (or, failing that, began) *here*, and attempt 2 was
     // dispatched *there*. Two instants the rows actually carry, and a line between them.
@@ -322,7 +348,7 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
    * agent. Nothing in the schema says whose work it was, so it goes where the run's own unowned
    * evidence goes rather than into an agent's lane on a guess.
    */
-  function laneOfMarker(taskId: string | null): LaneDraft {
+  function laneOfMarker(taskId: string | null): TimelineLane {
     const lane = taskId === null ? undefined : laneOfTask.get(taskId);
     return lane ?? unassigned();
   }
@@ -378,10 +404,10 @@ export function deriveTimeline(snapshot: RunSnapshot): TimelineModel {
     lane.markers.sort((left, right) => instantOf(left.at)! - instantOf(right.at)!);
   }
 
-  const window = windowOf(ordered);
-  for (const lane of ordered) lane.rows = pack(lane.bars, window);
+  const axis = windowOf(ordered);
+  for (const lane of ordered) lane.rows = pack(lane.bars, axis);
 
-  return { lanes: ordered, untimed, links, window, unplacedAttempts };
+  return { lanes: ordered, untimed, links, window: axis, unplacedAttempts };
 }
 
 /**
@@ -424,19 +450,31 @@ const MIN_WINDOW_MS = 60_000;
 /**
  * Greedy sub-row packing inside one lane. An agent can hold two tasks at once, and two bars drawn
  * over each other is one bar you can read and one you cannot — so the lane grows a row rather than
- * hiding the work.
+ * hiding the work. Bars arrive sorted by start.
  *
- * An `open` bar reaches the end of the axis (it has not finished), and an `unended` one occupies
- * only the instant it was dispatched at (the file says nothing else). Bars arrive sorted by start.
+ * **It packs what is *drawn*, not what *elapsed*, and the difference is the bug it exists to not
+ * have.** A bar is never narrower than its minimum on screen — a two-second attempt would otherwise
+ * be an invisible hairline, and an `unended` one has *no width at all* by construction — so two
+ * attempts that do not overlap by a single millisecond of retained evidence can still be drawn on
+ * top of each other. Packing by the retained instants alone would put them in the same sub-row and
+ * congratulate itself.
+ *
+ * So each bar reserves at least `MIN_FOOTPRINT` of the axis (and an `unended` one, which is all
+ * minimum and no evidence, reserves `UNENDED_FOOTPRINT`) — the same ratios the renderer floors its
+ * pixels at. The reservation is a **layout** fact and never an evidence one: it moves a bar *down*,
+ * never sideways, and nothing about where a bar starts or how far its own extent reaches is
+ * touched by it.
  */
-function pack(bars: TimelineBar[], window: TimelineWindow | null): number {
-  if (window === null || bars.length === 0) return 1;
+function pack(bars: TimelineBar[], axis: TimelineWindow | null): number {
+  if (axis === null || bars.length === 0) return 1;
 
+  const span = axis.endAt - axis.startAt;
   const rowEnds: number[] = [];
 
   for (const bar of bars) {
     const start = instantOf(bar.extent.startAt)!;
-    const end = bar.extent.kind === 'closed' ? instantOf(bar.extent.endAt)! : bar.extent.kind === 'open' ? window.endAt : start;
+    const floor = start + span * (bar.extent.kind === 'unended' ? UNENDED_FOOTPRINT : MIN_FOOTPRINT);
+    const end = Math.max(endInstantOf(bar.extent, axis), floor);
 
     const row = rowEnds.findIndex((occupied) => occupied <= start);
     if (row === -1) {
@@ -451,20 +489,29 @@ function pack(bars: TimelineBar[], window: TimelineWindow | null): number {
   return Math.max(1, rowEnds.length);
 }
 
+/**
+ * The share of the axis a bar occupies **on screen** however little time it took — the ratios that
+ * keep `pack` honest about overlap. They mirror `MIN_BAR_WIDTH` and `UNENDED_WIDTH` (`Timeline.tsx`)
+ * against a track a few hundred pixels wide; they are deliberately generous, because the cost of
+ * over-reserving is one extra sub-row and the cost of under-reserving is a bar drawn over another.
+ */
+const MIN_FOOTPRINT = 0.01;
+const UNENDED_FOOTPRINT = 0.07;
+
 /** Where a bar sits on the axis, as percentages — the one piece of geometry, said once. */
-export function placeBar(extent: BarExtent, window: TimelineWindow): { left: number; width: number } {
-  const span = window.endAt - window.startAt;
+export function placeBar(extent: BarExtent, axis: TimelineWindow): { left: number; width: number } {
+  const span = axis.endAt - axis.startAt;
   const start = instantOf(extent.startAt)!;
-  const end = extent.kind === 'closed' ? instantOf(extent.endAt)! : extent.kind === 'open' ? window.endAt : start;
+  const end = endInstantOf(extent, axis);
 
   return {
-    left: ((start - window.startAt) / span) * 100,
+    left: ((start - axis.startAt) / span) * 100,
     width: ((end - start) / span) * 100,
   };
 }
 
 /** Where an instant sits on the axis, as a percentage — a marker, and a link's two ends. */
-export function placeInstant(at: string, window: TimelineWindow): number {
-  const span = window.endAt - window.startAt;
-  return ((instantOf(at)! - window.startAt) / span) * 100;
+export function placeInstant(at: string, axis: TimelineWindow): number {
+  const span = axis.endAt - axis.startAt;
+  return ((instantOf(at)! - axis.startAt) / span) * 100;
 }

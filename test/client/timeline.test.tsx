@@ -220,6 +220,25 @@ describe('the lanes: who held the work', () => {
     expect(lanes.some((lane) => lane.kind === 'unassigned')).toBe(false);
   });
 
+  it('packs by what is drawn, not by what elapsed — a minimum-width bar still needs its own row', () => {
+    // The trap: these two do not overlap by a single millisecond of *retained evidence* — the first
+    // has no end at all, and the second starts a minute later. But an `unended` bar has zero width
+    // by construction and is floored to 52px on screen, so packing on the instants alone would put
+    // them in one row and draw the hatched stub straight over its neighbour (issue #72 AC 3).
+    const snapshot = snapshotOf({
+      tasks: [task({ id: 'task_a' }), task({ id: 'task_b' })],
+      attempts: {
+        task_a: [attemptAt('ctx_a', FIRST, 5, undefined, { status: 'failed', duration: undefined })],
+        task_b: [attemptAt('ctx_b', FIRST, 6, 60)],
+      },
+    });
+
+    const lane = deriveTimeline(snapshot).lanes[0]!;
+
+    expect(lane.bars.map((bar) => bar.row)).toEqual([0, 1]);
+    expect(lane.rows).toBe(2);
+  });
+
   it('packs attempts that overlap inside one lane onto their own sub-rows', () => {
     // One agent can hold two tasks at once. Two bars drawn over each other is one bar you can read
     // and one you cannot — so the lane grows a row rather than hiding the work.
@@ -258,6 +277,26 @@ describe('the bars: one per retained attempt', () => {
     expect(lanes[0]!.bars).toHaveLength(1);
     expect(lanes[0]!.bars[0]).toMatchObject({ id: 'ctx_first', attemptIndex: 1, attemptCount: 2 });
     expect(lanes[1]!.bars[0]).toMatchObject({ id: 'ctx_second', attemptIndex: 2, attemptCount: 2 });
+  });
+
+  it('paints a bar with its own attempt’s status — never with how the task turned out', () => {
+    // The retry is the story the bars exist to tell, and this is where a timeline quietly loses it:
+    // the task *completed*, so a fill taken from the task would draw the attempt that FAILED in
+    // green — hiding the failure in the very view built to show it.
+    const snapshot = snapshotOf({
+      tasks: [task({ status: 'completed', attemptCount: 2 })],
+      attempts: {
+        task_alpha: [
+          attemptAt('ctx_first', FIRST, 5, 12, { status: 'failed' }),
+          attemptAt('ctx_second', SECOND, 20, 45, { status: 'completed' }),
+        ],
+      },
+    });
+
+    const { lanes } = deriveTimeline(snapshot);
+
+    expect(lanes[0]!.bars[0]!.status).toBe('failed');
+    expect(lanes[1]!.bars[0]!.status).toBe('completed');
   });
 
   it('relates one task’s attempts to each other, across the lanes they were dispatched into', () => {
@@ -393,6 +432,28 @@ describe('the untimed: what an axis cannot hold, a list still can', () => {
 
     expect(untimed).toHaveLength(0);
     expect(unplacedAttempts).toBe(1);
+  });
+
+  it('does not also count the attempts of a task it already listed as untimed', () => {
+    // The footnote's whole job is to name a loss nothing else names. A task whose *every* attempt is
+    // unreadable is already named — in the untimed list, by title — so counting its attempts again
+    // would report one absence twice, and the sentence ("attempts of tasks drawn above") would be
+    // false about a task that is not drawn at all.
+    const snapshot = snapshotOf({
+      attempts: {
+        task_alpha: [
+          attemptAt('ctx_first', FIRST, 5, 30, { dispatchedAt: '', duration: undefined }),
+          attemptAt('ctx_second', FIRST, 20, 45, { dispatchedAt: 'whenever', duration: undefined }),
+        ],
+      },
+    });
+
+    const { untimed, unplacedAttempts } = deriveTimeline(snapshot);
+
+    expect(untimed).toEqual([
+      { task: expect.objectContaining({ id: 'task_alpha' }), reason: 'no readable dispatch instant' },
+    ]);
+    expect(unplacedAttempts).toBe(0);
   });
 });
 
@@ -568,6 +629,20 @@ describe('the centre’s two views', () => {
     expect(screen.getByRole('tab', { name: /timeline/i })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('never lights the timeline tab above a DAG — with no run, the timeline says so itself', () => {
+    // The toggle's one duty is that the tab and the centre agree. A fallback to the canvas when
+    // there is nothing to draw would leave "Timeline" selected above a dependency graph.
+    render(<CannedApp event={{ ...TIMELINE_EVENT, snapshot: { ...TIMELINE_EVENT.snapshot, runs: [], tasks: [] } }} />);
+
+    // Not `showTimeline()`: there is no run, so there is no timeline panel to wait for — which is
+    // precisely the state under test.
+    fireEvent.click(screen.getByRole('tab', { name: /timeline/i }));
+
+    expect(screen.getByRole('tab', { name: /timeline/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('canvas')).toBeNull();
+    expect(screen.getByTestId('timeline-no-run')).toBeInTheDocument();
+  });
+
   it('keeps the run, the agent and the task exactly where they were across a toggle', async () => {
     // The toggle is a *view*, and a view that moved the reader's scope would be a navigation
     // pretending to be a lens (issue #72 AC 1).
@@ -617,6 +692,18 @@ describe('the timeline on screen', () => {
 
     // …and the line that says they are one task's story, drawn across the lanes it crossed.
     expect(within(timeline).getByTestId('attempt-link')).toHaveAttribute('data-task', 'task_alpha');
+  });
+
+  it('draws the failed attempt of a completed task in failure’s colour, not the task’s', () => {
+    // The screen half of the retry story: `task_alpha` completed, and its first attempt did not.
+    render(<CannedApp event={TIMELINE_EVENT} attempts={TIMELINE_ATTEMPTS} />);
+    showTimeline();
+
+    // The six-status palette, keyed by the *attempt's* status (`canvas/theme.ts`).
+    expect(bar('ctx_first').className).toContain('status-failed');
+    expect(bar('ctx_second').className).toContain('status-completed');
+    // …and the word beside the colour, because red is not a sentence.
+    expect(bar('ctx_first').getAttribute('aria-label')).toMatch(/attempt 1 of 2 \(failed\)/i);
   });
 
   it('says “so far” on a bar the evidence never closed', () => {
