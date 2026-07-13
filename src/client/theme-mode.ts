@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
+import { readPreference, writePreference } from './preference.ts';
 
 /**
- * Light or dark — the one preference this tool has, and the only state in it that is about the
- * *reader* rather than about the database.
+ * Light or dark — one of the two things this page remembers about the *reader* rather than about
+ * the database (the other is the notification opt-in, #60; they share `preference.ts`).
  *
  * It lives on `<html class="dark">`, which is what every colour on the page keys off
  * (`index.css`), so flipping it is one class and never a re-render of anything that matters.
  *
- * The system's preference is the default, and a choice overrides it — for ever, in
- * `localStorage`, because a post-mortem at midnight is a thing you come back to. The read is
- * defensive on purpose: `matchMedia` is missing in jsdom and `localStorage` throws outright in a
- * private-mode Safari, and neither is a reason for a visualizer to fail to render.
+ * The system's preference is the default, and a choice overrides it — for ever, because a
+ * post-mortem at midnight is a thing you come back to. The read is defensive on purpose:
+ * `matchMedia` is missing in jsdom and storage can be missing outright, and neither is a reason
+ * for a visualizer to fail to render.
  */
 
 export type ThemeMode = 'light' | 'dark';
@@ -27,11 +28,7 @@ export function useThemeMode(): { mode: ThemeMode; toggle: () => void } {
   const toggle = useCallback(() => {
     setMode((current) => {
       const next: ThemeMode = current === 'dark' ? 'light' : 'dark';
-      try {
-        localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        // A browser that will not remember is still a browser that can render.
-      }
+      writePreference(STORAGE_KEY, next);
       return next;
     });
   }, []);
@@ -41,12 +38,8 @@ export function useThemeMode(): { mode: ThemeMode; toggle: () => void } {
 
 /** What the reader last chose — or, failing that, what their system already says they like. */
 export function preferredMode(): ThemeMode {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark') return stored;
-  } catch {
-    // No storage, no memory. The system preference is still an answer.
-  }
+  const stored = readPreference(STORAGE_KEY);
+  if (stored === 'light' || stored === 'dark') return stored;
 
   return globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }

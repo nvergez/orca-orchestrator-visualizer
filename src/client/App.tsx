@@ -10,6 +10,9 @@ import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { type AttentionItem, deriveAttention } from './attention.ts';
+import { type AttentionNotifications, useAttentionNotifications } from './attention/notify.ts';
+import { NotifyToggle } from './attention/NotifyToggle.tsx';
+import { useAttentionTab } from './attention/tab.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -85,6 +88,17 @@ const NO_ATTENTION: AttentionItem[] = [];
 export type AppProps = {
   event: StreamEvent | null;
   /**
+   * The connection generation (`Live.tsx`, #60). It advances when the `EventSource` dropped and
+   * came back, and the shell needs the fact for exactly one reason: the queue that lands on a
+   * reconnect is *history* — everything that happened while the page was blind — and announcing it
+   * would turn a closed laptop lid into a burst of desktop notifications (`attention/notify.ts`).
+   *
+   * A prop, and not something the shell reaches for itself, for the reason every other fact here
+   * is one: `<App>` renders what it is given, and the network lives at the edges. It defaults to
+   * the first generation so a canned event needs no ceremony.
+   */
+  streamEpoch?: number;
+  /**
    * How the inspector fetches a task's bodies (#20). It defaults to the real `GET /api/task/:id`
    * and is a *prop* so the shell can be driven against a canned detail — the same reason
    * `StreamEvent` arrives as one: everything the client renders comes in through its props, and
@@ -93,7 +107,7 @@ export type AppProps = {
   loadTask?: TaskLoader;
 };
 
-export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
+export function App({ event, streamEpoch = 0, loadTask = fetchTaskDetail }: AppProps) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
   const { selected, select, newRunId } = useRunSelection(runs);
 
@@ -120,6 +134,24 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
     () => (event ? deriveAttention(event.snapshot, attentionNow) : NO_ATTENTION),
     [event, attentionNow]
   );
+
+  // …and the two ways that queue reaches a supervisor who is *not looking at this page* (#60),
+  // both of them derived from it and from nothing else — there is one urgency model in this tool
+  // and it is #56's.
+  //
+  // The tab is the floor: it needs no permission, cannot be refused, and counts the same causes
+  // the rail lists. The desktop notification is the extra, off until asked for, and it announces a
+  // cause **once** — never the queue a page opened or reconnected on, which is history by the time
+  // anyone sees it (`attention/notify.ts`).
+  useAttentionTab(attention);
+  const notifications = useAttentionNotifications({
+    items: attention,
+    connected: event !== null,
+    epoch: streamEpoch,
+    // The same seam the queue's own rows click through: a notification that landed somewhere else
+    // than its row would be two answers to "where is this cause?".
+    onAttend: attend,
+  });
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -317,7 +349,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar meta={event.meta} />
+        <TopBar meta={event.meta} notifications={notifications} />
 
         <Notices meta={event.meta} />
 
@@ -513,10 +545,11 @@ function Backdrop() {
  * at*: which database, how old it is, and whether anything is still writing to it.
  *
  * It is not a toolbar. There is nothing to do to an Orca database from here — this tool does not
- * write (SPEC §1.2) — so the only control on it is the one that is about the reader and not the
- * data: the light the page is read in.
+ * write (SPEC §1.2) — so the only controls on it are the two that are about the reader and not the
+ * data: the light the page is read in, and whether it may reach them when they are not looking at
+ * it (#60).
  */
-function TopBar({ meta }: { meta: Meta }) {
+function TopBar({ meta, notifications }: { meta: Meta; notifications: AttentionNotifications }) {
   return (
     <motion.header
       initial={enter({ opacity: 0, y: -8 })}
@@ -549,6 +582,8 @@ function TopBar({ meta }: { meta: Meta }) {
       <Status meta={meta} />
 
       <Source meta={meta} />
+
+      <NotifyToggle {...notifications} />
 
       <ThemeToggle />
     </motion.header>

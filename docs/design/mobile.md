@@ -447,6 +447,10 @@ the desktop dock (§4.11, §8 rule 3).
 - "Last write" (line 377) is already `hidden … lg:flex` — untouched, and now genuinely earning
   that class.
 - ThemeToggle (line 394): `size-7` gains `pointer-coarse:size-10`.
+- NotifyToggle (#60), the bar's other reader-facing control: the same `size-7
+  pointer-coarse:size-10`, for the same reason and by the same rule. Both are icon buttons with an
+  `aria-label` that is also their `title`; neither is mobile-only chrome, so neither is guarded by
+  `useIsMobile()` (§1).
 
 **Notices** (lines 421-428): the motion.div gains
 `max-lg:max-h-24 max-lg:overflow-y-auto max-lg:landscape:max-h-16` — a long degraded list

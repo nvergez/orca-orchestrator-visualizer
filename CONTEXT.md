@@ -71,3 +71,19 @@ _Avoid_: Timeout, expiry
 **Stale Worker**:
 A worker whose current dispatch attempt has produced no activity evidence for at least the recency threshold, whether or not it ever sent a heartbeat. It reports missing evidence, never that the terminal is dead, stuck or hung.
 _Avoid_: Dead worker, hung worker, quiet worker
+
+**Attention Tab State**:
+What the browser tab reports about the attention queue to a reader who is looking at something else: the count of attention items in the document title, and a badged favicon while that count is above zero. It is derived from the queue alone, needs no permission, and returns to normal when the queue clears.
+_Avoid_: Unread count, badge count
+
+**Attention Notification**:
+A desktop notification announcing one attention item, sent at most once for that item's stable identity, and only when the item enters the queue after the notification baseline. It carries no urgency the queue does not already have.
+_Avoid_: Alert, toast, push, warning
+
+**Notification Baseline**:
+The attention queue as it stands on the first snapshot of a stream connection — on initial load and again on every reconnect. Its items count as already seen, so retained evidence never announces itself.
+_Avoid_: Read state, acknowledged state, dismissed state
+
+**Notification Opt-In**:
+The reader's locally stored wish to receive attention notifications, off until they say otherwise. It is a separate fact from the browser's notification permission, which only an explicit user gesture may request and which may be denied, revoked or absent — in which case the attention tab state is the whole of the delivery.
+_Avoid_: Notification setting, subscription
