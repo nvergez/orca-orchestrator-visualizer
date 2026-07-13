@@ -1,0 +1,3 @@
+# Keep SQLite authoritative around live hints
+
+SQLite snapshots remain the sole authority for orchestration state even when live supervision enables filesystem wake hints or Orca CLI enrichment. A WAL watcher may only schedule the existing `data_version` poll early, and CLI results may only add ephemeral context after an exact identity join; either path can time out, fail, or disappear without invalidating the last good snapshot. This preserves the single-writer and post-mortem properties that motivated direct read-only SQLite while allowing explicitly optional lower latency and richer live context.

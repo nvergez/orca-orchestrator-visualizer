@@ -1,0 +1,3 @@
+# Separate run activity from Orca process liveness
+
+An orchestration is recently active, unfinished but silent, or finished based on convergence and timestamped activity evidence; whether the Orca process is running remains separate metadata. A running process cannot prove an old dispatch is active, while pending or gate-blocked work has not finished merely because it is quiet, so one boolean cannot truthfully represent both dimensions. Issue #48 owns the exact wire field, evidence set, threshold application, and compatibility path; live-supervision features consume that contract instead of defining a competing one.
