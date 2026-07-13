@@ -127,6 +127,19 @@ function strip(): HTMLElement | null {
   return screen.queryByTestId('gate-strip');
 }
 
+/**
+ * The rail row for a run. Scoped to the rail rather than queried by accessible name across the
+ * page: the attention queue (#56) names the same orchestrations these rows do — deliberately,
+ * since a cross-run queue that never says *which* run it means sends every click in blind — so
+ * "the button that says `Another run`" is legitimately two buttons, and only one of them is the
+ * rail's.
+ */
+function row(runId: string): HTMLElement {
+  const found = screen.getAllByTestId('run-row').find((element) => element.dataset.run === runId);
+  if (!found) throw new Error(`no rail row for ${runId}`);
+  return found;
+}
+
 /** The canvas lays out asynchronously (elkjs), so the nodes arrive on a later tick. */
 async function node(id: string): Promise<HTMLElement> {
   return await waitFor(() => {
@@ -256,10 +269,10 @@ describe('the gate strip', () => {
     // The rail opens on the most recently active run, which here is the unblocked one.
     expect(strip()).toBeNull();
 
-    await userEvent.click(screen.getByRole('button', { name: /Another run/ }));
+    await userEvent.click(row(OTHER_RUN_ID));
     expect(within(strip()!).getByText(/Blocking the other run/)).toBeVisible();
 
-    await userEvent.click(screen.getByRole('button', { name: /Ship the visualizer/ }));
+    await userEvent.click(row(RUN_ID));
     expect(strip()).toBeNull();
   });
 

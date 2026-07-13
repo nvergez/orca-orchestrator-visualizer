@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import { type AttentionItem, deriveAttention } from './attention.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -19,6 +20,7 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
+import { useNow } from './relative-time.ts';
 import { useRunSelection } from './rail/selection.ts';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
@@ -78,6 +80,7 @@ const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
 const NO_TURNS: Turn[] = [];
 const NO_CAST: CastMember[] = [];
+const NO_ATTENTION: AttentionItem[] = [];
 
 export type AppProps = {
   event: StreamEvent | null;
@@ -106,6 +109,17 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const pulses = usePulses(useArrivals(event));
 
   const turns = event?.snapshot.turns ?? NO_TURNS;
+
+  // The attention queue (#56): one pure derivation over the latest snapshot and the shared wall
+  // clock — the same clock the rail's health dots age on, so an item that exists because
+  // something is ten minutes quiet and a dot that is amber for the same reason cannot disagree.
+  // The clock ticking (`WALL_CLOCK_TICK_MS`) is also what lets a fresh failure age *out* of the
+  // queue while a quiet database pushes nothing at all.
+  const attentionNow = useNow(event);
+  const attention = useMemo(
+    () => (event ? deriveAttention(event.snapshot, attentionNow) : NO_ATTENTION),
+    [event, attentionNow]
+  );
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -247,6 +261,18 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   }
 
   /**
+   * An attention item is a place to go, through the seam that already exists (#56): the task
+   * when the cause names one — `showTask`, because a cause can perfectly well live in an
+   * orchestration you are not looking at — otherwise the run it blocks. Nothing is written
+   * anywhere: attending to a cause is *going and looking at it*, and the item leaves the queue
+   * only when its evidence does (SPEC §1.2).
+   */
+  function attend(item: AttentionItem): void {
+    if (item.taskId !== null) showTask(item.taskId);
+    else if (item.runId !== null) selectRun(item.runId);
+  }
+
+  /**
    * A gate, a dependency chip, a turn in the conversation — anything that *names* a task rather
    * than toggling one. It selects: clicking a blocking question a second time to mean "never mind"
    * would be a strange thing for a blocker to offer, and the way out of a selection is the node,
@@ -293,6 +319,8 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
             runs={runs}
             tasks={allTasks}
             coordinatorRuns={event.snapshot.coordinatorRuns}
+            attention={attention}
+            onAttend={attend}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
             selectedAgent={selectedAgent}

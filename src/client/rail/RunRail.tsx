@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import { runHealth, type RunHealth } from '../../shared/run-health.ts';
 import type { CoordinatorRun, Run, Task } from '../../shared/types.ts';
+import type { AttentionItem } from '../attention.ts';
+import { AttentionQueue } from '../attention/AttentionQueue.tsx';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
@@ -76,6 +78,10 @@ export type RunRailProps = {
   runs: Run[];
   tasks: Task[];
   coordinatorRuns: CoordinatorRun[];
+  /** The cross-run attention queue (#56), already ranked — the rail renders it, never re-derives it. */
+  attention: AttentionItem[];
+  /** Clicking an item selects its orchestrator — and its task, when the cause names one (App). */
+  onAttend: (item: AttentionItem) => void;
   selectedId: string | null;
   onSelect: (runId: string) => void;
   /** The agent selected inside the open orchestrator — the canvas dims to it, the dock fills with it. */
@@ -91,6 +97,8 @@ export function RunRail({
   runs,
   tasks,
   coordinatorRuns,
+  attention,
+  onAttend,
   selectedId,
   onSelect,
   selectedAgent,
@@ -244,6 +252,14 @@ export function RunRail({
           <h2 className={PANEL_TITLE_CLASS}>Orchestrators</h2>
           <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">{runs.length}</span>
         </div>
+
+        {/*
+          The attention queue (#56), above the list it triages: the rail is already the panel for
+          picking the orchestrator worth opening, and this is that question answered outright —
+          across every run at once, which no row of the list below could say for itself. Renders
+          nothing while nothing needs intervention.
+        */}
+        <AttentionQueue items={attention} onAttend={onAttend} />
 
         {/*
           No auto-jump (SPEC §7.3). An orchestration appearing while you read an old one is *news*,
