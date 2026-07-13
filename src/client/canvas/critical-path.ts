@@ -44,7 +44,7 @@ export type CriticalPath =
   | { kind: 'cycle' };
 
 /**
- * The two statuses that cannot move again (HANDOFF.md enums). Everything else — including a
+ * The two statuses that cannot move again (`docs/reference/orca-db-schema.md`). Everything else — including a
  * status from an Orca this build has never seen — keeps the run in-flight: a *final* path over
  * work in an unreadable state would be a claim about evidence we cannot read.
  */

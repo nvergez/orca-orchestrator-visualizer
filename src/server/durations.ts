@@ -24,7 +24,7 @@ import { instantOf } from './time.ts';
  * its dense error surface testable value by value (SPEC §14.5).
  */
 
-/** The one dispatch status that says an attempt is still running (HANDOFF.md enums). */
+/** The one dispatch status that says an attempt is still running (`docs/reference/orca-db-schema.md`). */
 const IN_FLIGHT_DISPATCH: DispatchStatus = 'dispatched';
 
 /**

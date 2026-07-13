@@ -2,17 +2,17 @@
 
 **A read-only web visualizer for Orca's orchestration database.**
 
-Status: **MVP locked; live-supervision extension and post-mortem roadmap approved.** Sections 1–11 are the implementation-ready MVP specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). The multi-session live-supervision extension was approved from roadmap [#51](https://github.com/nvergez/orca-viz/issues/51), and the quantitative post-mortem roadmap from [#52](https://github.com/nvergez/orca-viz/issues/52); neither reopens the MVP's read-only or render-what-parses invariants, and where one deliberately refines an MVP decision, that extension governs its own scope. Every decision traces to an issue, and an implementation session should be able to work one child ticket from this document plus [`HANDOFF.md`](./HANDOFF.md) without reopening product scope.
+Status: **MVP locked; live-supervision extension and post-mortem roadmap approved.** Sections 1–11 are the implementation-ready MVP specification produced by the wayfinder map ([#1](https://github.com/nvergez/orca-viz/issues/1)). The multi-session live-supervision extension was approved from roadmap [#51](https://github.com/nvergez/orca-viz/issues/51), and the quantitative post-mortem roadmap from [#52](https://github.com/nvergez/orca-viz/issues/52); neither reopens the MVP's read-only or render-what-parses invariants, and where one deliberately refines an MVP decision, that extension governs its own scope. Every decision traces to an issue, and an implementation session should be able to work one child ticket from this document alone, without reopening product scope.
 
 Post-MVP amendments are normative where they explicitly supersede the locked MVP contract. The run-health amendment replaces the `Run.live` and `endedAt` semantics with an additive, compatibility-preserving run-health model.
 
-> **Note (integration):** three approved extensions each landed a section numbered `## 12.` — live supervision (#51), run health (#48) and the post-mortem roadmap (#52). All three are normative; the duplicate numbering is a known artifact of parallel authorship and is resolved by a dedicated renumbering pass, not by dropping a section.
+> **Note (integration):** three approved extensions each landed a section numbered `## 12.` — run health (#48), live supervision (#51) and the post-mortem roadmap (#52). All three are normative; the duplicate numbering was an artifact of parallel authorship, and a renumbering pass has since resolved it into §12, §13 and §14 without dropping a section.
 
-**Reading order for the implementer:** `HANDOFF.md` (verified ground truth about Orca's DB — do not re-derive it) → this document. The three research docs under [`docs/research/`](./docs/research/) are the evidence behind the rulings; consult them when you need the `file:line` citations, not to make decisions.
+**Reading order for the implementer:** this document, start to finish. [`docs/reference/orca-db-schema.md`](./docs/reference/orca-db-schema.md) is verified ground truth about Orca's DB — do not re-derive it, look it up. The three research docs under [`docs/research/`](./docs/research/) are the evidence behind the rulings; consult them when you need the `file:line` citations, not to make decisions.
 
 | Source | What it settles |
 |---|---|
-| [`HANDOFF.md`](./HANDOFF.md) | The DB exists, is safely readable from outside, and its v5 schema |
+| [`orca-db-schema.md`](./docs/reference/orca-db-schema.md) | The DB exists, is safely readable from outside, and its v5 schema |
 | [#2](https://github.com/nvergez/orca-viz/issues/2) · [`db-history.md`](./docs/research/db-history.md) | What history the DB retains; run inference; the enum traps |
 | [#3](https://github.com/nvergez/orca-viz/issues/3) · [`db-discovery.md`](./docs/research/db-discovery.md) | Cross-platform DB discovery; WAL read-only rules |
 | [#4](https://github.com/nvergez/orca-viz/issues/4) · [`cli-data-source.md`](./docs/research/cli-data-source.md) | Why the `orca` CLI is not the data source |
@@ -38,7 +38,7 @@ It is an **unofficial, third-party, shareable OSS tool** for any Orca user (#1):
 
 These are not preferences. Violating any of them is a bug, not a trade-off.
 
-1. **Never write to `orchestration.db`.** Every connection opens `readOnly: true` (#5). Orca's coordinator assumes it is the single writer and maintains invariants (e.g. `pending → ready` promotion) inside its own transactions (`HANDOFF.md`).
+1. **Never write to `orchestration.db`.** Every connection opens `readOnly: true` (#5). Orca's coordinator assumes it is the single writer and maintains invariants (e.g. `pending → ready` promotion) inside its own transactions (`docs/reference/orca-db-schema.md`).
 2. **No mutations of any kind** — no gate resolution, no dep editing, no retries, no marking messages read (#1). Note that `orca orchestration check` *mutates* (`read = 1`); nothing in this tool may go near it (#4).
 3. **Never crash on schema drift.** Render what parses (#5, §5 below).
 4. **Loopback-only by default.** The DB contains task specs, agent prompts, and message bodies (#8, §6.4).
@@ -152,7 +152,7 @@ Resolution order — **first hit wins**; every candidate must pass validation be
 
 ## 4. The data (schema v5)
 
-Ground truth is `HANDOFF.md` (tables, columns, enums) and #2 (what the rows actually contain in practice). Restated here only where the visualizer must act on it.
+Ground truth is [`docs/reference/orca-db-schema.md`](./docs/reference/orca-db-schema.md) (tables, columns, enums) and #2 (what the rows actually contain in practice). Restated here only where the visualizer must act on it.
 
 ### 4.1 The five tables
 
@@ -164,7 +164,7 @@ Ground truth is `HANDOFF.md` (tables, columns, enums) and #2 (what the rows actu
 | `decision_gates` | **Empty in practice** — see the trap in §4.2. |
 | `coordinator_runs` | **Empty in practice** — written only by Orca's built-in `Coordinator` loop, which agent/CLI-driven coordination never uses. Read it and render it if rows exist; do not depend on it. |
 
-Enums (`HANDOFF.md`): `TaskStatus` = `pending | ready | dispatched | completed | failed | blocked`; `DispatchStatus` = `pending | dispatched | completed | failed | circuit_broken`; `MessageType` = `status | dispatch | worker_done | merge_ready | escalation | handoff | decision_gate | heartbeat`; `GateStatus` = `pending | resolved | timeout`; `CoordinatorStatus` = `idle | running | completed | failed`.
+Enums (`docs/reference/orca-db-schema.md`): `TaskStatus` = `pending | ready | dispatched | completed | failed | blocked`; `DispatchStatus` = `pending | dispatched | completed | failed | circuit_broken`; `MessageType` = `status | dispatch | worker_done | merge_ready | escalation | handoff | decision_gate | heartbeat`; `GateStatus` = `pending | resolved | timeout`; `CoordinatorStatus` = `idle | running | completed | failed`.
 
 ### 4.2 Traps the schema hides — get these wrong and the tool ships broken (#2, #7)
 

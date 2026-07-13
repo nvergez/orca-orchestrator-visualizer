@@ -389,7 +389,8 @@ function describe(bar: TimelineBar): string {
  * An attempt's `DispatchStatus`, on the six-status palette (`canvas/theme.ts`).
  *
  * Four of the five land on it by name. `circuit_broken` does not exist as a *task* status, and it is
- * emphatically not an *unknown* one — it is the breaker tripping after three failures (HANDOFF.md),
+ * emphatically not an *unknown* one — it is the breaker tripping after three failures
+ * (`docs/reference/orca-db-schema.md`),
  * which is a failure and must look like one. Neutral grey for the loudest thing a dispatch row can
  * say would be the one degradation SPEC §5 never meant: the raw string is still in the tooltip.
  */
