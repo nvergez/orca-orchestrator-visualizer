@@ -407,6 +407,39 @@ describe('the scoreboard degrades by name, count by count', () => {
     // The message metrics never read that table, and survive whole.
     expect(worker.score?.heartbeats).toBe(1);
   });
+
+  /**
+   * The links are the one metric whose absence could have been mistaken for a measurement: an
+   * empty list reads as "this agent produced nothing", which is a *verdict*, and a database that
+   * cannot read a receipt has no right to one. So an unreadable source is `undefined` and a
+   * readable one that found nothing is `[]` — and both are on the wire, distinguishably.
+   */
+  it('leaves the outcome links unknown — not empty — when neither evidence source can be read', async () => {
+    const { meta, snapshot } = await snapshotOf(
+      orchestration({ omitColumns: { tasks: ['result'], messages: ['payload'] } })
+    );
+
+    expect(matching(meta.degraded, /^scoreboard outcome links from task results/i)).toHaveLength(1);
+    expect(matching(meta.degraded, /^scoreboard outcome links from worker completions/i)).toHaveLength(1);
+
+    const worker = snapshot.runs.find((run) => run.handle === CODER)!.cast[0]!;
+    // Unknown: absent, so nothing on screen can claim the agent produced nothing.
+    expect(worker.score?.outcomeLinks).toBeUndefined();
+    // …while everything that did not read those columns still counts.
+    expect(worker.score).toMatchObject({ heartbeats: 1, failures: 0 });
+  });
+
+  it('reads the links from the surviving source when only one of the two is gone', async () => {
+    const { meta, snapshot } = await snapshotOf(orchestration({ omitColumns: { tasks: ['result'] } }));
+
+    // The half that went missing is named; the half that survives keeps working, and the links
+    // are a measured zero rather than unknown.
+    expect(matching(meta.degraded, /^scoreboard outcome links from task results/i)).toHaveLength(1);
+    expect(matching(meta.degraded, /^scoreboard outcome links from worker completions/i)).toHaveLength(0);
+
+    const worker = snapshot.runs.find((run) => run.handle === CODER)!.cast[0]!;
+    expect(worker.score?.outcomeLinks).toEqual([]);
+  });
 });
 
 describe('the only legal hard-fail', () => {

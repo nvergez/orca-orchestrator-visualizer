@@ -130,10 +130,24 @@ export type Scorecard = {
   failures?: number;
   /**
    * Deduplicated recognized receipt URLs (#67's readers): the worker_done payloads this agent
-   * sent, plus the results of tasks whose surviving attempt was this agent's. Absent when
-   * nothing was recognized — an empty list would say the same thing in more bytes.
+   * sent, plus the results of tasks whose surviving attempt was this agent's.
+   *
+   * **An empty array and an absent one are different facts, and the difference is the feature.**
+   * `[]` means the receipts were read and named no link — a real zero. *Absent* means neither
+   * evidence source was readable at all (`RESULT_RECEIPT_COLUMN` / `COMPLETION_RECEIPT_COLUMNS`),
+   * so the links are **unknown** — and unknown must not sort, or render, as "produced nothing".
+   * That is the same rule the counts above keep, and an empty list for both would break it.
    */
   outcomeLinks?: string[];
+  /**
+   * How many recognized links the cap cut (`RECEIPT_PREVIEW_FACTS`). Absent when it cut none.
+   *
+   * The cap is not decoration: this object rides the snapshot that is re-sent whole every five
+   * seconds (SPEC §6.3), and the links are URLs *an agent typed into a result column* — the one
+   * ingredient here that grows without limit. A worker that names four hundred of them costs
+   * eight and a count, exactly as its turn does.
+   */
+  outcomeLinksOmitted?: number;
 };
 
 /**

@@ -8,10 +8,18 @@ import type {
   Run,
   Scorecard,
 } from '../shared/types.ts';
+import { RECEIPT_PREVIEW_FACTS } from './conversation.ts';
+import { closed, earliest, latest, open } from './durations.ts';
 import type { TaskWithHandle } from './runs.ts';
 import type { Columns } from './rows.ts';
-import { hasColumn, MESSAGE_SEQUENCE, MESSAGE_TYPE } from './schema.ts';
-import { instantOf } from './time.ts';
+import {
+  COMPLETION_RECEIPT_COLUMNS,
+  FAILURE_COUNT,
+  FIRST_HEARTBEAT_COLUMNS,
+  hasColumn,
+  RESULT_RECEIPT_COLUMN,
+  SCOREBOARD_COUNT_COLUMNS,
+} from './schema.ts';
 
 /**
  * **The scoreboard: the cast, quantified** (#68, SPEC §12.4).
@@ -20,9 +28,9 @@ import { instantOf } from './time.ts';
  * cost and produced, from the two kinds of evidence the schema retains about an agent — its
  * dispatch attempts, and the messages attributed to it. Nothing here is a new reading of the
  * database: the attempts are the ones the cast was cast from, the messages are the ones the
- * conversation was built from, placed by the same attribution (`attribution.ts`), and the
- * receipts are #67's readers verbatim. A scoreboard derived from its own private queries would
- * be a second truth that could disagree with every panel beside it.
+ * conversation was built from, placed by the same attribution (`attribution.ts`), the clocks are
+ * `durations.ts`'s, and the receipts are #67's readers. A scoreboard derived from its own
+ * private queries would be a second truth that could disagree with every panel beside it.
  *
  * It is attached in a **second pass**, the way the gates are (`gates.ts`): the cast is cast
  * while the runs are inferred, but the metrics need attributed messages, and attribution needs
@@ -30,29 +38,17 @@ import { instantOf } from './time.ts';
  *
  * The honesty rules, each of which the wire shape enforces (`Scorecard`):
  *
- * - **Absence is the honest value.** A span whose endpoints cannot carry it, a first heartbeat
- *   that was never retained, a count whose column this Orca does not have — each is *absent*,
- *   never zero, never the epoch (SPEC §12.4). A zero that survives really counts zero rows.
+ * - **Absence is the honest value, and it is not the same as zero.** A span whose endpoints
+ *   cannot carry it, a first heartbeat that was never retained, a count whose *column* this Orca
+ *   does not have — each is absent, and the client renders it unknown. A `0` that survives to
+ *   the wire really counted zero rows. The two are told apart *here*, because the client cannot:
+ *   a missing column and an agent that did nothing look identical by the time they are numbers.
  * - **An ambiguous message counts nowhere.** Attribution answers null when two runs match
  *   (SPEC §4.4 rule 3), and a null `runId` is in no run's scoreboard — a metric quietly fed by
  *   a guess would be a lie with a number on it.
  * - **No composite, no winner.** The module computes facts one at a time and never an
  *   aggregate over them: the agents were dispatched different work (SPEC §12.6).
  */
-
-/** The failure column is degradation-guarded: its 0 default is indistinguishable from absence. */
-const FAILURE_COUNT = 'dispatch_contexts.failure_count';
-
-/**
- * What the per-message metrics need before a zero is a real zero: `sequence` for the log to be
- * readable at all, `type` to tell a heartbeat from everything else, `from_handle` to tie a row
- * to the cast member who sent it. Missing any of them, every count would read 0 — not "none
- * retained" but "none readable", and the scoreboard must not conflate the two.
- */
-const MESSAGE_COUNT_COLUMNS = [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle'] as const;
-
-/** …and placing a heartbeat *in time* additionally needs the instant it was written. */
-export const FIRST_HEARTBEAT_COLUMNS = [...MESSAGE_COUNT_COLUMNS, 'messages.created_at'] as const;
 
 export type ScoreboardEvidence = {
   /** Every task, carrying its run id, its attempts and its recognized result receipt. */
@@ -63,19 +59,9 @@ export type ScoreboardEvidence = {
   columns: Columns;
 };
 
-/**
- * The earliest readable dispatch instant across an agent's attempts — where its clock starts.
- * Null when no attempt retains one: a span or a heartbeat time with no start measures nothing.
- */
+/** What an agent's clocks start at: the earliest readable dispatch across all of its attempts. */
 function firstDispatch(attempts: readonly Pick<Dispatch, 'dispatchedAt'>[]): string | null {
-  let earliest: { at: number; iso: string } | null = null;
-
-  for (const attempt of attempts) {
-    const at = instantOf(attempt.dispatchedAt);
-    if (at !== null && (earliest === null || at < earliest.at)) earliest = { at, iso: attempt.dispatchedAt };
-  }
-
-  return earliest?.iso ?? null;
+  return earliest(attempts.map((attempt) => attempt.dispatchedAt));
 }
 
 /**
@@ -83,34 +69,26 @@ function firstDispatch(attempts: readonly Pick<Dispatch, 'dispatchedAt'>[]): str
  * attempt it ever held (SPEC §12.4). Open — the client ages it as "so far" — while any of its
  * attempts is still in flight; absent when the endpoints cannot carry it. It is occupancy of
  * the calendar, not summed task time: two attempts running in parallel are one interval.
+ *
+ * `closed`/`open` are `durations.ts`'s, so a backwards or unreadable endpoint means here exactly
+ * what it means to every other clock in the tool — no observation at all (#66).
  */
 export function agentSpan(
   attempts: readonly Pick<Dispatch, 'status' | 'dispatchedAt' | 'completedAt'>[]
 ): DurationObservation | undefined {
   const startAt = firstDispatch(attempts);
   if (startAt === null) return undefined;
-  const start = instantOf(startAt)!;
 
-  // Work still out there keeps the whole span open, whatever the finished attempts say:
-  // the agent's occupancy of the clock has not ended.
+  // Work still out there keeps the whole span open, whatever the finished attempts say: the
+  // agent's occupancy of the clock has not ended.
   if (attempts.some((attempt) => attempt.completedAt === null && attempt.status === 'dispatched')) {
-    return { clock: 'agent-span', startAt, complete: false };
-  }
-
-  let end: { at: number; iso: string } | null = null;
-  for (const attempt of attempts) {
-    if (attempt.completedAt === null) continue;
-    const at = instantOf(attempt.completedAt);
-    if (at !== null && (end === null || at > end.at)) end = { at, iso: attempt.completedAt };
+    return open('agent-span', startAt);
   }
 
   // No retained completion, and nothing in flight: the work stopped and the rows do not say
   // when. "So far" would claim work still running; any end picked here would be invented.
-  // A completion before the first dispatch is a contradiction, and a contradiction is not a
-  // duration anybody experienced (#66's rule, held here too).
-  if (end === null || end.at < start) return undefined;
-
-  return { clock: 'agent-span', startAt, endAt: end.iso, complete: true, ms: end.at - start };
+  const endAt = latest(attempts.map((attempt) => attempt.completedAt));
+  return endAt === null ? undefined : closed('agent-span', startAt, endAt);
 }
 
 /**
@@ -118,26 +96,19 @@ export function agentSpan(
  * orchestrator waited before its agent first showed life. Closed by construction: it exists
  * only when a heartbeat was retained and both instants read, and **no retained heartbeat is
  * unknown, never zero** — an agent that never beat did not respond instantly.
+ *
+ * A beat from *before* the dispatch is two clocks in contradiction, not a response time, and
+ * `closed` refuses it for the same reason it refuses every backwards interval.
  */
 export function timeToFirstHeartbeat(
   attempts: readonly Pick<Dispatch, 'dispatchedAt'>[],
   beats: readonly string[]
 ): DurationObservation | undefined {
   const startAt = firstDispatch(attempts);
-  if (startAt === null) return undefined;
-  const start = instantOf(startAt)!;
+  const endAt = earliest(beats);
+  if (startAt === null || endAt === null) return undefined;
 
-  let earliest: { at: number; iso: string } | null = null;
-  for (const beat of beats) {
-    const at = instantOf(beat);
-    if (at !== null && (earliest === null || at < earliest.at)) earliest = { at, iso: beat };
-  }
-
-  // No readable beat — or one from *before* the dispatch, which is two clocks contradicting
-  // each other, not a response time.
-  if (earliest === null || earliest.at < start) return undefined;
-
-  return { clock: 'first-heartbeat', startAt, endAt: earliest.iso, complete: true, ms: earliest.at - start };
+  return closed('first-heartbeat', startAt, endAt);
 }
 
 /**
@@ -167,8 +138,18 @@ export function attachScoreboards(runs: Run[], { entries, messages, columns }: S
     (message) => message.runId!
   );
 
-  const canCountMessages = MESSAGE_COUNT_COLUMNS.every((column) => hasColumn(columns, column));
-  const canCountFailures = hasColumn(columns, FAILURE_COUNT);
+  // What this database can actually answer, asked once rather than per cast member. Each flag
+  // is the difference between a zero and an unknown, and the user is told about every one of
+  // them by name in `meta.degraded` (`schema.ts`).
+  const can: Capabilities = {
+    counts: SCOREBOARD_COUNT_COLUMNS.every((column) => hasColumn(columns, column)),
+    firstHeartbeat: FIRST_HEARTBEAT_COLUMNS.every((column) => hasColumn(columns, column)),
+    failures: hasColumn(columns, FAILURE_COUNT),
+    // Either source is enough to recognize a link. Neither is what makes the links *unknown*
+    // rather than none — the one distinction an empty list could never carry.
+    resultReceipts: hasColumn(columns, RESULT_RECEIPT_COLUMN),
+    completionReceipts: COMPLETION_RECEIPT_COLUMNS.every((column) => hasColumn(columns, column)),
+  };
 
   return runs.map((run) => {
     if (run.cast.length === 0) return run;
@@ -178,23 +159,29 @@ export function attachScoreboards(runs: Run[], { entries, messages, columns }: S
 
     return {
       ...run,
-      cast: run.cast.map(
-        (member): CastMember => ({
-          ...member,
-          score: scorecardOf(member, runEntries, runMessages, { canCountMessages, canCountFailures }),
-        })
-      ),
+      cast: run.cast.map((member): CastMember => {
+        const score = scorecardOf(member, runEntries, runMessages, can);
+        // A database that can answer nothing about an agent gets no scorecard at all, rather
+        // than an empty object that says "measured, and here is nothing" (SPEC §6.3).
+        return Object.keys(score).length === 0 ? member : { ...member, score };
+      }),
     };
   });
 }
 
-type Capabilities = { canCountMessages: boolean; canCountFailures: boolean };
+type Capabilities = {
+  counts: boolean;
+  firstHeartbeat: boolean;
+  failures: boolean;
+  resultReceipts: boolean;
+  completionReceipts: boolean;
+};
 
 function scorecardOf(
   member: CastMember,
   entries: TaskWithHandle[],
   messages: FeedMessage[],
-  { canCountMessages, canCountFailures }: Capabilities
+  can: Capabilities
 ): Scorecard {
   // The member's attempts, kept per task: the failure rule is per-task, and the receipts of a
   // task belong to the agent of its *surviving* attempt.
@@ -214,11 +201,13 @@ function scorecardOf(
   const span = agentSpan(attempts);
   if (span !== undefined) score.span = span;
 
-  if (canCountMessages) {
+  if (can.counts) {
     score.heartbeats = beats.length;
     score.messages = sent.length - beats.length;
     score.escalations = sent.filter((message) => message.type === 'escalation').length;
+  }
 
+  if (can.firstHeartbeat) {
     const firstBeat = timeToFirstHeartbeat(
       attempts,
       beats.map((beat) => beat.createdAt)
@@ -226,10 +215,15 @@ function scorecardOf(
     if (firstBeat !== undefined) score.firstHeartbeat = firstBeat;
   }
 
-  if (canCountFailures) score.failures = failureTotal(held.map(({ attempts: own }) => own));
+  if (can.failures) score.failures = failureTotal(held.map(({ attempts: own }) => own));
 
-  const links = outcomeLinks(member, held, sent);
-  if (links.length > 0) score.outcomeLinks = links;
+  // Absent — unknown — only when *neither* evidence source can be read. One readable source is
+  // a partial reading, and `meta.degraded` names which half went missing.
+  if (can.resultReceipts || can.completionReceipts) {
+    const links = outcomeLinks(member, held, sent, can);
+    score.outcomeLinks = links.slice(0, RECEIPT_PREVIEW_FACTS);
+    if (links.length > RECEIPT_PREVIEW_FACTS) score.outcomeLinksOmitted = links.length - RECEIPT_PREVIEW_FACTS;
+  }
 
   return score;
 }
@@ -244,17 +238,22 @@ function scorecardOf(
 function outcomeLinks(
   member: CastMember,
   held: { entry: TaskWithHandle; attempts: Dispatch[] }[],
-  sent: FeedMessage[]
+  sent: FeedMessage[],
+  can: Capabilities
 ): string[] {
   const readings: ReceiptFact[][] = [];
 
-  for (const { entry } of held) {
-    const surviving = entry.attempts[entry.attempts.length - 1];
-    if (surviving?.assigneeHandle === member.handle) readings.push(entry.resultReceipt);
+  if (can.resultReceipts) {
+    for (const { entry } of held) {
+      const surviving = entry.attempts[entry.attempts.length - 1];
+      if (surviving?.assigneeHandle === member.handle) readings.push(entry.resultReceipt);
+    }
   }
 
-  for (const message of sent) {
-    if (message.type === 'worker_done') readings.push(receiptOfWorkerDone(message.payload));
+  if (can.completionReceipts) {
+    for (const message of sent) {
+      if (message.type === 'worker_done') readings.push(receiptOfWorkerDone(message.payload));
+    }
   }
 
   return mergeReceipts(...readings)

@@ -68,6 +68,42 @@ export const COMPLETION_COLUMNS = [MESSAGE_TYPE, MESSAGE_PAYLOAD] as const;
 export const DISPATCH_TASK_ID = 'dispatch_contexts.task_id';
 
 /**
+ * **What the scoreboard counts with** (#68). Its counts are the one place in this tool where a
+ * missing column and a real zero would wear the same digit — zero heartbeats *counted* and zero
+ * heartbeats *countable* both read `0` — so each group is guarded, and its absence is named
+ * rather than being quietly rendered as a clean sheet.
+ *
+ * All three, or none: `sequence` is what makes the log readable at all, `type` is what tells a
+ * heartbeat from every other row, and `from_handle` is what ties a row to the cast member who
+ * sent it. Any one missing and every count would read 0 — not "none retained" but "none
+ * readable", which is exactly the lie the scoreboard exists to refuse.
+ */
+export const SCOREBOARD_COUNT_COLUMNS = [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle'] as const;
+
+/** …and placing a beat *in time* additionally needs the instant it was written at. */
+export const FIRST_HEARTBEAT_COLUMNS = [...SCOREBOARD_COUNT_COLUMNS, 'messages.created_at'] as const;
+
+/**
+ * The breaker's own counter. Its `?? 0` default on the wire (`toDispatch`) is indistinguishable
+ * from a real zero, so the scoreboard has to be *told* the column is absent — a cast member
+ * showing "0 failures" out of a database that cannot count failures would be an invented clean
+ * sheet, and the most flattering lie this tool could tell about an agent.
+ */
+export const FAILURE_COUNT = 'dispatch_contexts.failure_count';
+
+/**
+ * **What an outcome link can be recognized from** (#68) — the two evidence sources #67 reads,
+ * seen from the scoreboard's side.
+ *
+ * A task's result is one source; a worker's completion is the other, and the scoreboard needs
+ * `from_handle` on top of #67's pair, because a completion it cannot attribute to a cast member
+ * is a receipt belonging to nobody. **Neither source readable ⇒ the links are unknown, not
+ * none** — the same rule the counts keep, and the one an empty list would silently break.
+ */
+export const RESULT_RECEIPT_COLUMN = 'tasks.result';
+export const COMPLETION_RECEIPT_COLUMNS = [MESSAGE_TYPE, MESSAGE_PAYLOAD, 'messages.from_handle'] as const;
+
+/**
  * **What it takes to know who the agents were** — the cast, and everything that hangs off it.
  *
  * An orchestrator is `tasks.created_by_terminal_handle`; *its agents* are the `assignee_handle`s
@@ -267,29 +303,36 @@ const FEATURES: Feature[] = [
       'Run span ends — this Orca has no tasks.completed_at column, so a finished run’s span can end only on its latest task creation, and understates any run whose work outlived it.',
   },
   {
-    // The scoreboard's message metrics (#68). All three or none: `sequence` is what makes the
-    // log readable at all, `type` is what tells a heartbeat from every other row, and
-    // `from_handle` is what ties a row to the cast member who sent it. Missing any of them,
-    // every count would read 0 — not "none retained" but "none readable" — and a zero nobody
-    // measured is exactly the number the scoreboard promises never to show.
-    allOf: [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle'],
+    // The scoreboard's message metrics (#68) — see `SCOREBOARD_COUNT_COLUMNS` for why all three
+    // or none.
+    allOf: SCOREBOARD_COUNT_COLUMNS,
     degraded:
       'Scoreboard message counts — this Orca is missing one of messages.sequence/type/from_handle, so heartbeats, other messages and escalations cannot be counted per cast member: the scoreboard shows unknown counts rather than zeros nobody measured.',
   },
   {
     // The same columns plus the instant a beat was written: a heartbeat that cannot be found,
     // attributed or placed in time cannot be measured *to*.
-    allOf: [MESSAGE_SEQUENCE, MESSAGE_TYPE, 'messages.from_handle', 'messages.created_at'],
+    allOf: FIRST_HEARTBEAT_COLUMNS,
     degraded:
       'Time to first heartbeat — this Orca is missing one of messages.sequence/type/from_handle/created_at, so no heartbeat can be found, attributed and placed in time: the scoreboard shows unknown rather than zero.',
   },
   {
-    // The breaker's own counter (#68). Its `?? 0` default on the wire is indistinguishable from
-    // a real zero, so the scoreboard has to be told the column is absent — a member showing
-    // "0 failures" out of a database that cannot count failures would be an invented clean sheet.
-    anyOf: ['dispatch_contexts.failure_count'],
+    anyOf: [FAILURE_COUNT],
     degraded:
       'Scoreboard failure counts — this Orca has no dispatch_contexts.failure_count column, so how often a cast member’s tasks failed cannot be counted: the scoreboard shows unknown rather than zero.',
+  },
+  {
+    // The scoreboard's outcome links, source by source (#68). Losing *one* source is a partial
+    // loss and says so; losing both is what turns the links from "none recognized" — a real
+    // zero — into unknown, and the sentence a reader gets is what tells the two apart.
+    anyOf: [RESULT_RECEIPT_COLUMN],
+    degraded:
+      'Scoreboard outcome links from task results — this Orca has no tasks.result column, so no link can be recognized in what a cast member’s tasks reported back: the scoreboard’s links come from worker completion messages alone.',
+  },
+  {
+    allOf: COMPLETION_RECEIPT_COLUMNS,
+    degraded:
+      'Scoreboard outcome links from worker completions — this Orca is missing one of messages.type/payload/from_handle, so a worker_done payload cannot be found, read, or attributed to the cast member that sent it: the scoreboard’s links come from task results alone.',
   },
   {
     // The agent span and the time to first heartbeat both start at the first dispatch (#68) —

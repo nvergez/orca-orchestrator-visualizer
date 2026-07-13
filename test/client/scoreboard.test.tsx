@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
 import type { CastMember, Meta, Run, Scorecard, StreamEvent, Task } from '../../src/shared/types.ts';
+import { FakeMatchMedia, MOBILE_QUERY } from './fake-match-media.ts';
 
 /**
  * The scoreboard, on screen (#68, SPEC §12.4). The server sends one scorecard per cast member
@@ -110,8 +111,11 @@ function trio(): CastMember[] {
       messages: 4,
       escalations: 1,
       failures: 4,
+      // Read, and named no link: a measured zero, which is *not* the same fact as A3's absence.
+      outcomeLinks: [],
     }),
-    // Missing evidence end to end: no span, no beats readable, no failure column.
+    // Missing evidence end to end: no span, no first beat, no failure column, and receipts this
+    // database cannot read at all — every one of which is unknown, and none of which is zero.
     member('A3', THIRD, { heartbeats: 1, messages: 0, escalations: 0 }),
   ];
 }
@@ -180,7 +184,11 @@ describe('the comparison grid', () => {
 
     const third = rows.find((row) => row.dataset.agent === 'A3')!;
     expect(within(third).getByTestId('score-span')).toHaveTextContent('—');
-    expect(within(third).getByTestId('score-failures')).toHaveTextContent('—');
+    // The failure column is the one an invented zero would *flatter*: a clean sheet out of a
+    // database with no breaker column at all.
+    const failures = within(third).getByTestId('score-failures');
+    expect(failures).toHaveTextContent('—');
+    expect(failures.getAttribute('title')).toMatch(/unknown/i);
   });
 
   it('links each recognized outcome, and only claims what a receipt said', () => {
@@ -190,8 +198,56 @@ describe('the comparison grid', () => {
 
     const link = within(rows.find((row) => row.dataset.agent === 'A1')!).getByRole('link');
     expect(link).toHaveAttribute('href', 'https://github.com/x/y/pull/1');
+    // Untrusted text out of a database anyone can write to: it hands the page neither this
+    // window nor a referrer (`ReceiptLink`, #67).
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
 
     expect(within(rows.find((row) => row.dataset.agent === 'A2')!).queryByRole('link')).toBeNull();
+  });
+
+  it('tells "produced nothing" apart from "cannot read receipts" — an unknown is never a verdict', () => {
+    render(<App event={event([run({ cast: trio() })], [task()])} />);
+    const panel = openScoreboard();
+    const rows = within(panel).getAllByTestId('scoreboard-row');
+
+    // A2's receipts were read and named no link: none, measured.
+    const measured = within(rows.find((row) => row.dataset.agent === 'A2')!).getByTestId('score-outcomes');
+    expect(measured).toHaveTextContent('none');
+
+    // A3's could not be read at all. Rendering that as "none" would be a verdict on an agent
+    // out of a database that cannot pass judgement (SPEC §12.4).
+    const unknown = within(rows.find((row) => row.dataset.agent === 'A3')!).getByTestId('score-outcomes');
+    expect(unknown).toHaveTextContent('—');
+    expect(unknown).not.toHaveTextContent(/none/);
+    expect(unknown.getAttribute('title')).toMatch(/unknown/i);
+  });
+
+  it('says how many links the cap cut, rather than quietly showing eight of nine', () => {
+    const many = member('A1', FIRST, {
+      outcomeLinks: ['https://github.com/x/y/pull/1', 'https://github.com/x/y/pull/2'],
+      outcomeLinksOmitted: 7,
+    });
+
+    render(<App event={event([run({ cast: [many, trio()[1]!] })], [task()])} />);
+    const panel = openScoreboard();
+    const row = within(panel)
+      .getAllByTestId('scoreboard-row')
+      .find((candidate) => candidate.dataset.agent === 'A1')!;
+
+    expect(within(row).getByTestId('score-outcomes-omitted')).toHaveTextContent('+7 more');
+  });
+
+  it('sorts an unreadable outcome column last, and a measured zero as the zero it is', () => {
+    render(<App event={event([run({ cast: trio() })], [task()])} />);
+    const panel = openScoreboard();
+
+    fireEvent.click(within(panel).getByRole('button', { name: /sort by outcome links/i }));
+    // A1 has one link; A2 measured zero; A3 is unknown and must not be ranked as "produced
+    // nothing" — it goes last, exactly as it does in every other column.
+    expect(rowOrder(panel)).toEqual(['A1', 'A2', 'A3']);
+
+    fireEvent.click(within(panel).getByRole('button', { name: /sort by outcome links/i }));
+    expect(rowOrder(panel)).toEqual(['A2', 'A1', 'A3']);
   });
 
   it('sorts by one metric at a time, and an unknown sorts last in either direction', () => {
@@ -220,6 +276,54 @@ describe('the comparison grid', () => {
     expect(within(panel).queryByText(/winner|overall|composite|total score/i)).toBeNull();
     // The refusal is said out loud, not just omitted: different work, no ranking.
     expect(within(panel).getByText(/different work/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The fold** (`docs/design/mobile.md`). A seven-column table in a 374px band leaves four of its
+ * metrics behind a horizontal scrollbar with nothing on screen to say they are there — which is
+ * the same failure as not rendering them at all. So the phone compares in cards, and the sort
+ * chips keep every metric individually sortable.
+ */
+describe('the folded scoreboard', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function fold(): void {
+    const media = new FakeMatchMedia();
+    media.set(MOBILE_QUERY, true);
+    vi.stubGlobal('matchMedia', media.matchMedia);
+  }
+
+  it('compares in cards, not in a table with columns off the edge', () => {
+    fold();
+    render(<App event={event([run({ cast: trio() })], [task()])} />);
+
+    fireEvent.click(screen.getByTestId('dock-band-toggle'));
+    const panel = openScoreboard();
+
+    // No table at all: every metric of every agent is on screen, spelled out.
+    expect(within(panel).queryByTestId('scoreboard-grid')).toBeNull();
+    expect(rowOrder(panel)).toEqual(['A1', 'A2', 'A3']);
+
+    const first = within(panel)
+      .getAllByTestId('scoreboard-row')
+      .find((row) => row.dataset.agent === 'A1')!;
+    expect(within(first).getByTestId('score-failures')).toHaveTextContent('1');
+    expect(within(first).getByTestId('score-escalations')).toHaveTextContent('0');
+    expect(within(first).getByRole('link')).toHaveAttribute('href', 'https://github.com/x/y/pull/1');
+  });
+
+  it('keeps every metric individually sortable on the fold', () => {
+    fold();
+    render(<App event={event([run({ cast: trio() })], [task()])} />);
+
+    fireEvent.click(screen.getByTestId('dock-band-toggle'));
+    const panel = openScoreboard();
+
+    fireEvent.click(within(panel).getByRole('button', { name: /sort by failures/i }));
+    expect(rowOrder(panel)).toEqual(['A2', 'A1', 'A3']);
   });
 });
 

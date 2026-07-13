@@ -270,7 +270,37 @@ describe('the scoreboard on the wire — a multi-agent run', () => {
       'https://github.com/x/y/pull/1',
       'https://ci.example.com/build/7',
     ]);
-    expect(member(cast, SECOND_AGENT).score?.outcomeLinks).toBeUndefined();
+
+    // Read, and named no link: an empty list is a **measured zero**, and it is a different fact
+    // from the absent list a database that cannot read receipts produces (below).
+    expect(member(cast, SECOND_AGENT).score?.outcomeLinks).toEqual([]);
+  });
+
+  it('caps the links it puts on a re-sent snapshot, and says how many it cut', async () => {
+    // The one ingredient of a scorecard that grows without limit is a URL an agent *typed*
+    // (SPEC §6.3). Nine of them cost eight and a count, exactly as a turn's receipt does.
+    // A link is recognized by its *value* in any top-level string field (#67), so nine fields
+    // each holding a URL is nine recognized links.
+    const links = Object.fromEntries(
+      Array.from({ length: 9 }, (_, index) => [`link${index + 1}`, `https://github.com/x/y/pull/${index + 1}`])
+    );
+    const dbPath = new FixtureBuilder()
+      .task({
+        id: 'task_many',
+        handle: COORDINATOR,
+        title: 'Named nine links',
+        status: 'completed',
+        createdAt: at(0),
+        completedAt: at(20),
+        result: JSON.stringify(links),
+      })
+      .dispatch({ taskId: 'task_many', assigneeHandle: FIRST_AGENT, status: 'completed', dispatchedAt: at(1), completedAt: at(19) })
+      .write(tempDbPath());
+
+    const score = member(await castOfRun(dbPath), FIRST_AGENT).score;
+
+    expect(score?.outcomeLinks).toHaveLength(8);
+    expect(score?.outcomeLinksOmitted).toBe(1);
   });
 
   it('never mints a composite score or a winner — the wire carries facts, not a ranking', async () => {
@@ -326,7 +356,8 @@ describe('the scoreboard on the wire — a retried run', () => {
     const cast = await castOfRun(retriedRun().write(tempDbPath()));
 
     expect(member(cast, SECOND_AGENT).score?.outcomeLinks).toEqual(['https://github.com/x/y/pull/9']);
-    expect(member(cast, FIRST_AGENT).score?.outcomeLinks).toBeUndefined();
+    // The agent that was replaced produced no receipt of its own — a measured zero, not unknown.
+    expect(member(cast, FIRST_AGENT).score?.outcomeLinks).toEqual([]);
   });
 });
 
@@ -373,7 +404,9 @@ describe('the scoreboard on the wire — missing evidence', () => {
 
     expect(score?.span).toBeUndefined();
     expect(score?.firstHeartbeat).toBeUndefined();
-    expect(score?.outcomeLinks).toBeUndefined();
+    // The columns *are* readable and named no link: zero, measured. (A database that cannot read
+    // receipts at all leaves this absent instead — `degradation.test.ts` holds that line.)
+    expect(score?.outcomeLinks).toEqual([]);
     // The counts are real zeros — zero retained rows — not unknowns.
     expect(score).toMatchObject({ heartbeats: 0, messages: 0, escalations: 0, failures: 0 });
   });
