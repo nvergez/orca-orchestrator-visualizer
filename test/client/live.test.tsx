@@ -329,6 +329,56 @@ describe('<Live>', () => {
     expect(screen.getAllByTestId('run-row')).toHaveLength(56);
     expect(screen.queryByTestId('load-older')).toBeNull();
     expect(screen.getByTestId('task-node')).toHaveTextContent('Build it');
+    // And the page you asked for is not announced back at you: six ids the client had never
+    // seen just landed, and not one of them is an orchestration that *started*.
+    expect(screen.queryByText('new orchestration started')).toBeNull();
+  });
+
+  it('never calls a page of older history news — and still announces a run that really did start', async () => {
+    // **The chip's one job is to point forwards.** A window the reader extends downwards hands
+    // the rail run ids it has never seen — that is what a page of older history *is* — and a
+    // selection that reads freshness as "an id I have not seen" announces the newest of them as
+    // "↑ new orchestration started". The chip then points days into the past, and the reader who
+    // trusts it is thrown out of the post-mortem they were reading: the auto-jump SPEC §7.3
+    // forbids, arriving through the one control that exists to prevent it.
+    const older = Array.from({ length: 55 }, (_, index) =>
+      run({
+        id: `run_old_${String(index).padStart(2, '0')}`,
+        handle: `term_old_${index}`,
+        label: `Older work ${index}`,
+        startedAt: '2026-07-01T00:00:00.000Z',
+        endedAt: new Date(Date.parse('2026-07-10T00:00:00Z') - index * 60_000).toISOString(),
+      })
+    );
+    world = { runs: [run(), ...older], tasks: [task()] }; // 56: a full page, and six behind the button
+
+    render(<Live />);
+    const source = stream();
+    source.push(event());
+    await screen.findByText('Ship the visualizer');
+
+    await userEvent.click(screen.getByTestId('load-older'));
+    await screen.findByText('Older work 54');
+    expect(screen.queryByText('new orchestration started')).toBeNull();
+
+    // A later tick must not surface it either. Nothing displaces a chip that was never earned:
+    // the refreshed window names no id the client lacks, so a wrongly-announced run would simply
+    // sit there — pointing backwards — for the rest of the session.
+    source.push(event({ affected: { all: false, runIds: ['run_9f8e7d6c'] } }));
+    await settle();
+    expect(screen.queryByText('new orchestration started')).toBeNull();
+
+    // …and the chip is silent about the past, not broken. A run that genuinely started while the
+    // reader was down in the archive sorts ahead of everything they hold, and is announced from
+    // there — without touching the canvas they are on.
+    world = {
+      runs: [run({ id: 'run_fresh', handle: 'term_fresh', label: 'The new one', endedAt: '2026-07-12T09:00:00.000Z' }), ...world.runs],
+      tasks: world.tasks,
+    };
+    source.push(event({ affected: { all: false, runIds: ['run_fresh'] } }));
+
+    expect(await screen.findByText('new orchestration started')).toBeVisible();
+    expect(screen.getByTestId('task-node')).toHaveTextContent('Build it');
   });
 
   it('keeps a reader on an old run when new history pushes it past the page edge — no auto-jump', async () => {

@@ -32,7 +32,23 @@ export function useRunSelection(runs: Run[]): RunSelection {
   const opened = useRef(false);
 
   useEffect(() => {
-    const fresh = runs.filter((run) => !known.current.has(run.id));
+    // **News is what sorts ahead of the window you had — not merely an id you had not seen.**
+    //
+    // `runs` is a window the reader can extend *downwards*: "Load older history" (#69) appends a
+    // page of orchestrations from days ago, and every id on it is one this client has never seen.
+    // Read freshness as "unseen" and paging backwards announces the newest run of the *older*
+    // page as though an orchestration had just started — a chip that, followed, throws the reader
+    // out of the post-mortem they were reading and into one from last week, which is the very
+    // yank SPEC §7.3 exists to forbid, dressed up as an invitation.
+    //
+    // So the question is where a run *landed*. The list is most-recent-first, and an
+    // orchestration that started while you were reading sorts ahead of every run you already
+    // held: it is above the topmost row you recognise. Everything below that row is history,
+    // and history arriving because you asked for it is not an event. When no row is recognised
+    // at all — an `orchestration reset` wiped what we held — there is nothing left to sort
+    // behind, and the list is news in its entirety.
+    const recognised = runs.findIndex((run) => known.current.has(run.id));
+    const ahead = recognised === -1 ? runs : runs.slice(0, recognised);
     for (const run of runs) known.current.add(run.id);
     if (runs.length === 0) return;
 
@@ -44,9 +60,9 @@ export function useRunSelection(runs: Run[]): RunSelection {
       return;
     }
 
-    // …and every run list after that is news. `runs` is most-recent-first, so the first new
-    // one is the newest.
-    if (fresh.length > 0) setAnnouncedId(fresh[0]!.id);
+    // …and anything at the head of a run list after that is news. `runs` is most-recent-first,
+    // so the first of them is the newest.
+    if (ahead.length > 0) setAnnouncedId(ahead[0]!.id);
   }, [runs]);
 
   // A selection can outlive its run: an `orchestration reset` wipes the tasks it was made of.
