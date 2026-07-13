@@ -148,8 +148,8 @@ export function App({ event, streamEpoch = 0, loadTask = fetchTaskDetail }: AppP
     items: attention,
     connected: event !== null,
     epoch: streamEpoch,
-    // The same seam the queue's own rows click through: a toast that landed somewhere else than
-    // its row would be two answers to "where is this cause?".
+    // The same seam the queue's own rows click through: a notification that landed somewhere else
+    // than its row would be two answers to "where is this cause?".
     onAttend: attend,
   });
 

@@ -170,7 +170,7 @@ class FakeNotification {
     this.closed = true;
   }
 
-  /** The reader clicks the toast on their desktop. */
+  /** The reader clicks the notification on their desktop. */
   activate(): void {
     act(() => {
       this.onclick?.(new Event('click'));
@@ -303,15 +303,24 @@ describe('the desktop notification', () => {
     const newer = escalation({ id: 'msg:42', at: ago(5 * 60_000), subject: 'Newer escalation' });
 
     const view = render(<App loadTask={NO_DETAIL} event={event({}, 1)} />);
-    view.rerender(<App loadTask={NO_DETAIL} event={event({ turns: [older, newer] }, 2)} />);
+    view.rerender(<App loadTask={NO_DETAIL} event={event({ turns: [older] }, 2)} />);
+    view.rerender(<App loadTask={NO_DETAIL} event={event({ turns: [older, newer] }, 3)} />);
 
+    // Two causes, arriving one at a time: two notifications, and the second push announced only
+    // the one that was new in it.
     expect(shown()).toHaveLength(2);
     expect(screen.getAllByTestId('attention-item')[0]).toHaveTextContent('Older escalation');
 
-    // The queue re-ranks — the older escalation was retried and re-escalated, so the *other* one
-    // is now the oldest thing waiting. Two rows swap places; nothing new has entered.
+    // The queue re-ranks — the first escalation was re-sent, so the *other* one is now the oldest
+    // thing waiting. Two rows swap places; nothing new has entered, and nothing is announced.
     view.rerender(
-      <App loadTask={NO_DETAIL} event={event({ turns: [escalation({ id: 'msg:41', at: ago(60_000), subject: 'Older escalation' }), newer] }, 3)} />
+      <App
+        loadTask={NO_DETAIL}
+        event={event(
+          { turns: [escalation({ id: 'msg:41', at: ago(60_000), subject: 'Older escalation' }), newer] },
+          4
+        )}
+      />
     );
     expect(screen.getAllByTestId('attention-item')[0]).toHaveTextContent('Newer escalation');
     expect(shown()).toHaveLength(2);
@@ -324,9 +333,46 @@ describe('the desktop notification', () => {
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new Event('blur'));
     });
-    view.rerender(<App loadTask={NO_DETAIL} event={event({ turns: [older, newer] }, 4)} />);
+    view.rerender(<App loadTask={NO_DETAIL} event={event({ turns: [older, newer] }, 5)} />);
 
     expect(shown()).toHaveLength(2);
+  });
+
+  it('gathers causes that arrive together into one notification, and goes to the worst of them', async () => {
+    // Not hypothetical: a coordinator's several workers cross the ten-minute silence threshold on
+    // one wall-clock tick, and a snapshot can carry a gate, an escalation and a failure at once. A
+    // notifier that sent one per cause would be a notifier that is turned off after the first bad
+    // afternoon — and five notifications are not five pieces of news. They are one: *something has
+    // gone wrong over there*. The queue, one click away, is where the ranking is.
+    alreadyOptedIn();
+
+    const view = render(<App loadTask={NO_DETAIL} event={event({}, 1)} />);
+    view.rerender(
+      <App
+        loadTask={NO_DETAIL}
+        event={event(
+          {
+            tasks: [task(), task({ id: 'task_wrecked', title: 'Wrecked', status: 'failed', completedAt: ago(60_000) })],
+            gates: [gate()],
+            turns: [escalation()],
+          },
+          2
+        )}
+      />
+    );
+
+    expect(screen.getAllByTestId('attention-item')).toHaveLength(3);
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0]!.title).toBe('3 things need attention');
+    // It names the most urgent of them — the top of #56's ranking, which is the blocking gate —
+    // and counts the rest rather than reciting them.
+    expect(shown()[0]!.options.body).toContain('Which driver?');
+    expect(shown()[0]!.options.body).toContain('and 2 more');
+    expect(shown()[0]!.options.tag).toBe('gate:msg_gate');
+
+    // …and its click goes where that cause goes, exactly as a single one's would.
+    shown()[0]!.activate();
+    expect(await screen.findByTestId('inspector')).toHaveTextContent('A task');
   });
 
   it('never announces one identity twice, even when its evidence comes back', () => {
@@ -381,7 +427,7 @@ describe('the desktop notification', () => {
     expect(await screen.findByTestId('inspector')).toHaveTextContent('Stuck work');
   });
 
-  it('degrades to the tab when the browser has denied us', () => {
+  it('degrades to the tab when the browser has denied us, and says so where it can be read', async () => {
     FakeNotification.permission = 'denied';
     localStorage.setItem(NOTIFY_STORAGE_KEY, 'on');
 
@@ -393,8 +439,24 @@ describe('the desktop notification', () => {
     expect(shown()).toHaveLength(0);
     expect(FakeNotification.requests).toBe(0);
     expect(document.title).toBe('(1) orca-viz');
-    expect(bell()).toBeDisabled();
+    expect(bell()).toHaveAttribute('aria-disabled', 'true');
     expect(bell()).toHaveAccessibleName(/blocked/i);
+
+    // **The explanation has to be reachable**, and this is the state where that matters most: a
+    // denial is the one of the two dead states the reader can go and undo, in their own browser
+    // settings. `disabled` would take the bell out of the tab order *and* kill its tooltip
+    // (shadcn's button carries `disabled:pointer-events-none`), so the only state with something
+    // to say would be the only state that could not say it.
+    expect(bell()).not.toBeDisabled();
+    expect(bell()).toHaveAttribute('title', expect.stringMatching(/blocked/i));
+
+    // …and it is inert all the same. A click neither prompts a browser that has already refused
+    // nor quietly rewrites the wish the reader recorded when it had not.
+    await userEvent.click(bell());
+
+    expect(FakeNotification.requests).toBe(0);
+    expect(localStorage.getItem(NOTIFY_STORAGE_KEY)).toBe('on');
+    expect(shown()).toHaveLength(0);
   });
 
   it('degrades to the tab when the browser has no Notification at all', () => {
@@ -406,7 +468,7 @@ describe('the desktop notification', () => {
     view.rerender(<App loadTask={NO_DETAIL} event={event({ gates: [gate()] }, 2)} />);
 
     expect(document.title).toBe('(1) orca-viz');
-    expect(bell()).toBeDisabled();
+    expect(bell()).toHaveAttribute('aria-disabled', 'true');
     expect(bell()).toHaveAccessibleName(/not available/i);
   });
 
@@ -442,7 +504,7 @@ describe('the desktop notification', () => {
     expect(shown()).toHaveLength(0);
     expect(document.title).toBe('(1) orca-viz');
     // …and having met that browser once, the tool stops claiming it can notify on it.
-    expect(bell()).toBeDisabled();
+    expect(bell()).toHaveAttribute('aria-disabled', 'true');
     expect(bell()).toHaveAccessibleName(/not available/i);
   });
 
@@ -472,7 +534,7 @@ describe('the desktop notification', () => {
     // The wish is not recorded as granted when the browser said no: the control tells the truth
     // about what will happen, which is nothing.
     expect(localStorage.getItem(NOTIFY_STORAGE_KEY)).not.toBe('on');
-    await waitFor(() => expect(bell()).toBeDisabled());
+    await waitFor(() => expect(bell()).toHaveAttribute('aria-disabled', 'true'));
     expect(bell()).toHaveAccessibleName(/blocked/i);
 
     view.rerender(<App loadTask={NO_DETAIL} event={event({ gates: [gate()] }, 2)} />);

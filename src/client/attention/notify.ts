@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type AttentionItem, ATTENTION_KIND_LABEL } from '../attention.ts';
-import { ATTENTION_FAVICON } from './favicon.ts';
+import { readPreference, writePreference } from '../preference.ts';
 
 /**
- * **One ping, for a cause you have not seen** (#60).
+ * **One notification, for a cause you have not seen** (#60).
  *
  * The queue (#56) already answers *does anything need intervention now?* — but only to a reader
  * who is looking at the page, and the supervisor this tool is for is by definition somewhere else.
@@ -11,22 +11,24 @@ import { ATTENTION_FAVICON } from './favicon.ts';
  * and everything about it is a promise of restraint, because a notifier that cries wolf is turned
  * off within a day:
  *
- * 1. **Off until the reader says otherwise**, and their word is kept in `localStorage` — the same
- *    place, and for the same reason, as the theme they chose (`theme-mode.ts`).
+ * 1. **Off until the reader says otherwise**, and their word is kept where the theme they chose is
+ *    kept (`preference.ts`), for the same reason: a choice about the reader outlives the tab.
  * 2. **Permission is asked for from their click, and nowhere else.** Browsers only allow it from a
  *    gesture, and a page that raises a permission dialog before it has shown you anything is the
  *    page you deny out of reflex. `toggle()` is the one call site in the client.
  * 3. **The queue it opens on — and the queue it reconnects to — is history.** The database is
  *    never pruned (SPEC §4.2, trap 10); thirteen runs and four days of blocking gates sit in it
  *    right now. Announcing them on load would be announcing them at *every* load, and announcing
- *    the ones that piled up behind a dropped connection would turn a laptop lid into a burst of
- *    toasts. Both are one rule: **the first snapshot of a connection is the baseline** — recorded
- *    as seen, and never announced.
- * 4. **At most one notification per stable identity.** #56 built its ids from the durable rows
- *    behind the evidence — a gate id, a run + assignee handle, a task + attempt id, a message
- *    sequence — precisely so that this can be a `Set` and not a heuristic. Repeated snapshots,
- *    re-rankings and a cause whose evidence leaves and comes back are all the same id, and the id
- *    is never announced twice.
+ *    the ones that piled up behind a dropped connection would turn a closed laptop lid into an
+ *    alarm. Both are one rule: **the first snapshot of a connection is the baseline** — recorded
+ *    as seen, and never announced (`docs/adr/0002-…`).
+ * 4. **At most one notification per stable identity, and at most one per snapshot.** #56 built its
+ *    ids from the durable rows behind the evidence — a gate id, a run + assignee handle, a task +
+ *    attempt id, a message sequence — precisely so that this can be a `Set` and not a heuristic.
+ *    Repeated snapshots, re-rankings and a cause whose evidence leaves and comes back are all the
+ *    same id, and the id is never announced twice. Several causes arriving *together* — which is
+ *    not hypothetical, since a coordinator's five workers can cross the ten-minute silence
+ *    threshold on one wall-clock tick — are one notification that says so, never five.
  * 5. **Every failure degrades to the tab.** No `Notification` at all (jsdom, and older browsers),
  *    permission denied, permission revoked *while the page is open*, or a platform that has the API
  *    and throws from its constructor (Chrome on Android, which wants a service worker — out of
@@ -42,12 +44,16 @@ import { ATTENTION_FAVICON } from './favicon.ts';
 export const NOTIFY_STORAGE_KEY = 'orca-viz-notifications';
 
 /**
- * What the tool can actually do about notifications right now.
+ * What the browser will let us do, which is a different question from what the reader asked for.
  *
- * `unavailable` and `blocked` are *not* the same fact and must not be shown as one: one is a
- * browser that cannot, the other is a browser that was told not to — and only the second is
- * something the reader can go and change in their own settings.
+ * `unavailable` is not a fourth permission: it is *this tool's* word for a browser that has no
+ * `Notification` to grant (jsdom, older browsers) or has one it refuses to construct. It is kept
+ * apart from `denied` all the way to the control, because only `denied` is something the reader
+ * can go and change.
  */
+export type NotifyPermission = NotificationPermission | 'unavailable';
+
+/** What the tool can actually do about notifications right now — the control renders exactly this. */
 export type NotifyState = 'unavailable' | 'blocked' | 'off' | 'on';
 
 export type AttentionNotifications = {
@@ -66,13 +72,13 @@ export type NotifyOptions = {
    * first snapshot of each generation is a baseline — which is the whole of rule 3 above.
    */
   epoch: number;
-  /** Where a clicked notification goes: the shell's own `attend`, so the row and the toast agree. */
+  /** Where a clicked notification goes: the shell's own `attend`, so the row and it agree. */
   onAttend: (item: AttentionItem) => void;
 };
 
 export function useAttentionNotifications({ items, connected, epoch, onAttend }: NotifyOptions): AttentionNotifications {
   const [enabled, setEnabled] = useState(storedOptIn);
-  const [permission, setPermission] = useState<NotificationPermission | 'unavailable'>(() => readPermission(false));
+  const [permission, setPermission] = useState<NotifyPermission>(readPermission);
   /**
    * The platform has the API and will not construct one (Chrome on Android throws `Illegal
    * constructor`). Sticky on purpose: having met that browser once, the tool stops claiming it can
@@ -99,9 +105,11 @@ export function useAttentionNotifications({ items, connected, epoch, onAttend }:
 
     // Read on every tick, never cached: a permission revoked in the browser's own settings while
     // this page sits open is exactly the case a startup read would miss.
-    const permitted = readPermission(broken);
+    const permitted = broken ? 'unavailable' : readPermission();
     setPermission(permitted);
 
+    // In the queue's own rank order, because that is what makes `fresh[0]` the most urgent thing
+    // that just arrived — the one a summary names, and the one its click goes to.
     const fresh = items.filter((item) => !seen.current.has(item.id));
     for (const item of items) seen.current.add(item.id);
 
@@ -113,20 +121,18 @@ export function useAttentionNotifications({ items, connected, epoch, onAttend }:
       return;
     }
 
-    if (!enabled || permitted !== 'granted') return;
+    if (!enabled || permitted !== 'granted' || fresh.length === 0) return;
 
-    for (const item of fresh) {
-      if (!announce(item, attend)) {
-        setBroken(true);
-        return;
-      }
-    }
+    const announced = announce(notificationOf(fresh), () => attend.current(fresh[0]!));
+    if (!announced) setBroken(true);
   }, [items, epoch, connected, enabled, broken]);
 
   const toggle = useCallback((): void => {
     void (async () => {
       const api = globalThis.Notification;
-      if (broken || api === undefined) return;
+      // Nothing to toggle, and nothing to ask: the control is telling the reader so, and a click
+      // that quietly rewrote their stored wish would be a control that lies about being inert.
+      if (broken || api === undefined || api.permission === 'denied') return;
 
       if (enabled && api.permission === 'granted') {
         remember(false);
@@ -146,7 +152,7 @@ export function useAttentionNotifications({ items, connected, epoch, onAttend }:
       }
 
       const granted = api.permission === 'granted';
-      setPermission(readPermission(false));
+      setPermission(readPermission());
       // A wish that cannot come true is not recorded as one: the control has to say what will
       // actually happen, and after a denial what happens is nothing.
       remember(granted);
@@ -157,32 +163,66 @@ export function useAttentionNotifications({ items, connected, epoch, onAttend }:
   return { state: stateOf(enabled, permission), toggle };
 }
 
-function stateOf(enabled: boolean, permission: NotificationPermission | 'unavailable'): NotifyState {
+function stateOf(enabled: boolean, permission: NotifyPermission): NotifyState {
   if (permission === 'unavailable') return 'unavailable';
   if (permission === 'denied') return 'blocked';
   return enabled && permission === 'granted' ? 'on' : 'off';
 }
 
+/** What a notification says. Separated from the sending so the words can be read in a test. */
+export type AttentionNotification = { title: string; body: string; tag: string };
+
 /**
- * The cause, on the desktop: its kind as the title, its own words as the body, and the
- * orchestration it belongs to — because a cross-run queue that never says *whose* cause this is
- * sends every click in blind (#56).
+ * The causes that just arrived, in the reader's language.
  *
- * `tag` is the item's stable id, so the OS collapses a repeat instead of stacking one, and the icon
- * is the same badged mark the tab is wearing at that moment (`favicon.ts`).
+ * **One cause** is named outright: its kind as the title — CONTEXT.md's vocabulary, through
+ * `ATTENTION_KIND_LABEL`, so the notification and the queue's own row cannot come to call it two
+ * different things — and its own words, with the orchestration it belongs to, as the body. A
+ * cross-run queue that never said *whose* cause this is would send every click in blind (#56).
+ *
+ * **Several** are one notification that counts them and names the most urgent, because a burst of
+ * five is how a notifier gets turned off, and because five things needing attention is *one* piece
+ * of news to a supervisor: something has gone wrong over there. The queue itself, one click away,
+ * is where the other four are — ranked, which a stack of five notifications would not be.
+ *
+ * The `tag` is the stable id of the cause the notification is *about*, so a platform that collapses
+ * on tags collapses a repeat rather than stacking one.
+ */
+export function notificationOf(fresh: AttentionItem[]): AttentionNotification {
+  const first = fresh[0]!;
+  const where = first.runLabel === null ? '' : ` · ${first.runLabel}`;
+
+  if (fresh.length === 1) {
+    return {
+      title: sentence(ATTENTION_KIND_LABEL[first.kind]),
+      body: `${first.title} · ${first.explanation}${where}`,
+      tag: first.id,
+    };
+  }
+
+  return {
+    title: `${fresh.length} things need attention`,
+    body: `${first.title} · ${first.explanation}${where} — and ${fresh.length - 1} more`,
+    tag: first.id,
+  };
+}
+
+/**
+ * Sends it, and wires its click to the destination its cause already has.
+ *
+ * **No `icon`.** The tab's badged mark (`favicon.ts`) is an SVG data URI, and Chrome and Firefox
+ * decode a notification icon as a raster image — an SVG renders as nothing at all. A silently
+ * ignored option is a claim this file would be making and the desktop would not be keeping, so it
+ * is not made: the browser shows its own mark for the origin, which is honest and is already right.
  *
  * Returns false — and only false — when the platform refuses to construct a notification at all.
  */
-function announce(item: AttentionItem, attend: { current: (item: AttentionItem) => void }): boolean {
+function announce({ title, body, tag }: AttentionNotification, onClick: () => void): boolean {
   const api = globalThis.Notification;
   if (api === undefined) return false;
 
   try {
-    const notification = new api(sentence(ATTENTION_KIND_LABEL[item.kind]), {
-      body: item.runLabel === null ? `${item.title} · ${item.explanation}` : `${item.title} · ${item.explanation} · ${item.runLabel}`,
-      tag: item.id,
-      icon: ATTENTION_FAVICON,
-    });
+    const notification = new api(title, { body, tag });
 
     notification.onclick = () => {
       try {
@@ -192,7 +232,7 @@ function announce(item: AttentionItem, attend: { current: (item: AttentionItem) 
         // A platform that will not raise its window still has a page that can navigate.
       }
       notification.close();
-      attend.current(item);
+      onClick();
     };
 
     return true;
@@ -206,24 +246,14 @@ function sentence(label: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function readPermission(broken: boolean): NotificationPermission | 'unavailable' {
-  if (broken || globalThis.Notification === undefined) return 'unavailable';
-  return globalThis.Notification.permission;
+function readPermission(): NotifyPermission {
+  return globalThis.Notification?.permission ?? 'unavailable';
 }
 
 function storedOptIn(): boolean {
-  try {
-    return localStorage.getItem(NOTIFY_STORAGE_KEY) === 'on';
-  } catch {
-    // A browser that will not remember is still a browser that can notify — for this session.
-    return false;
-  }
+  return readPreference(NOTIFY_STORAGE_KEY) === 'on';
 }
 
 function remember(enabled: boolean): void {
-  try {
-    localStorage.setItem(NOTIFY_STORAGE_KEY, enabled ? 'on' : 'off');
-  } catch {
-    // Private-mode Safari throws outright. It is not a reason to fail to notify.
-  }
+  writePreference(NOTIFY_STORAGE_KEY, enabled ? 'on' : 'off');
 }

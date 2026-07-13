@@ -53,7 +53,14 @@ export function NotifyToggle({ state, toggle }: AttentionNotifications) {
       data-state={state}
       variant="ghost"
       size="icon"
-      disabled={inert}
+      // **`aria-disabled`, and not `disabled`** — the difference is the whole point of the two
+      // inert states. shadcn's button carries `disabled:pointer-events-none`, so a truly disabled
+      // bell cannot be hovered and cannot be focused: its `title` would never appear and a screen
+      // reader would skip past it. The one state a reader can actually *fix* — `blocked`, which
+      // they set in the browser's own settings — would be the one state that could not tell them
+      // how. So it stays hoverable, focusable and readable, and simply does nothing: `toggle`
+      // already refuses (`notify.ts`), which is where an inert control's inertness belongs.
+      aria-disabled={inert}
       aria-pressed={state === 'on'}
       onClick={toggle}
       // The label *is* the explanation, in both directions: a screen reader reads it as the
@@ -62,10 +69,10 @@ export function NotifyToggle({ state, toggle }: AttentionNotifications) {
       aria-label={look.label}
       title={look.label}
       className={cn(
-        'text-muted-foreground hover:text-foreground size-7 shrink-0 cursor-pointer pointer-coarse:size-10',
-        // A disabled shadcn button already dims and drops the pointer; what it must not do is look
-        // like a bug. It reads as "not here", the tab keeps counting, and the title says why.
-        'disabled:cursor-default',
+        'text-muted-foreground size-7 shrink-0 pointer-coarse:size-10',
+        // It reads as "not here" — and it must not read as a bug, which is why it keeps its
+        // tooltip and its place in the tab order while losing only the affordance to be pressed.
+        inert ? 'cursor-default opacity-50' : 'hover:text-foreground cursor-pointer',
         look.ink
       )}
     >
