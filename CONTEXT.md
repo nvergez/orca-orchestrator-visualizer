@@ -39,3 +39,7 @@ _Avoid_: Run page, history slice
 **Evidence hint**:
 An explicitly uncertain agent-kind or repository label derived from unambiguous retained evidence and accompanied by its provenance.
 _Avoid_: Identity, classification
+
+**Invalidation notice**:
+The identity a live stream event carries of the retained evidence that changed, so a reader refetches only the affected run summaries and selected run rather than the whole database. It names what to read again; it never carries the evidence itself.
+_Avoid_: Delta, patch, diff

@@ -343,8 +343,8 @@ export function agentOfTurn(turn: Turn): string | null {
 }
 
 /**
- * **What changed since this client's previous event** — identity to refetch by, never the data
- * itself (SPEC §12, ADR 0002, #69).
+ * **The invalidation notice** (`CONTEXT.md`): what changed since this client's previous event —
+ * identity to refetch by, never the data itself (SPEC §12, ADR 0002, #69).
  *
  * The stream used to re-send every retained run, task and turn on every push, and the database
  * is never pruned — so the wire and the browser paid for the whole of history on every tick.

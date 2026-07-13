@@ -620,6 +620,7 @@ The DB never prunes; 13 runs across 4 days sit in it right now. There is **no "h
 
 - **No auto-jump.** A new run appearing while you read an old one shows a **"new run started ↑"** chip on the rail. The canvas is never yanked out from under you.
 - **Feed scope toggle: "This run" (default) / "All."** The global `sequence` timeline is the only true total-order history in the schema and costs nothing extra to expose — one click away, never the default.
+  > **Superseded by §12.4 (#69).** The global scope is retired, and the second toggle is now **"Unattributed"**. It costs nothing extra to expose only while the client is *holding* the whole database, and ADR 0002 stopped it doing that: the client fetches one selected run whole and pages the rest, so a button marked "All" would show one orchestration and call it every one. What that scope is *for* — a turn nothing places must still appear, attached to nobody (§4.4 rule 3, §7.7) — is unchanged and is exactly what the new name says. Another orchestrator's conversation is a rail click away.
 
 ### 7.4 The gate strip (#7 §4, §8)
 
@@ -706,6 +707,7 @@ So instead:
 - **Every turn carries its `source`** — the columns it was reconstructed from, in small grey type under the bubble. Four of these turns are not messages, and a bubble that pretended otherwise would be a lie. This is not a footnote; it is the point.
 - **Heartbeats collapse to one line per task** — 302 of 466 messages, all saying "alive". *"18 heartbeats · every ~5 min"*, with the cadence **measured** from two instants and a count rather than read off Orca's documentation. There is no "show heartbeats" toggle any more, and nothing is hidden: the two hundred rows the line replaces all say the same word, and their value — *liveness* — already reached the screen as the last-seen badge (§4.6).
 - **Scope: "This orchestrator" (default) / "All."** An agent selected in the rail narrows it further. "All" is not a convenience: a turn the server could not place belongs to no orchestrator (§4.4, rule 3), and it must still **appear, attached to nobody**, rather than be guessed into somebody's thread.
+  > **Superseded by §12.4 (#69): the second scope is now "Unattributed",** and it shows exactly the turns nothing places — which is precisely the job this bullet gives it, and now the only job it can honestly do. The client holds one selected run and those turns (ADR 0002), so "All" would have been a name for something the panel no longer has.
 - A turn whose `taskId` does not resolve to a live task (post-reset orphan — §4.2, trap 8) still renders, simply unlinked. `read` / `delivered_at` are **not rendered** (#8 §3).
 
 ### 7.8 The node inspector (#7 §8)

@@ -97,7 +97,7 @@ export type AppProps = {
 export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHistory }: AppProps) {
   // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
   // selected run's complete evidence, each refetched when `event.affected` names it (#69).
-  const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, view } = useHistory(
+  const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, snapshot } = useHistory(
     event,
     loadHistory
   );
@@ -107,8 +107,8 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // of dependency edges that cross into other orchestrations (`linkedTasks`): an edge is real
   // whichever terminal created its endpoints, and a dep chip that could not see across would
   // call a task sitting right there in the database deleted.
-  const tasks = view?.tasks ?? NO_TASKS;
-  const allTasks = useMemo(() => (view === null ? NO_TASKS : [...view.tasks, ...view.linkedTasks]), [view]);
+  const tasks = snapshot?.tasks ?? NO_TASKS;
+  const allTasks = useMemo(() => (snapshot === null ? NO_TASKS : [...snapshot.tasks, ...snapshot.linkedTasks]), [snapshot]);
 
   // The conversation is the server's, whole, per selected run (SPEC §4.7) — the client picks a
   // scope and nothing else. What still arrives as a *delta* is the message log, and it is the
@@ -116,11 +116,11 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // (`conversation/pulses.ts`).
   const pulses = usePulses(useArrivals(event));
 
-  const turns = view?.turns ?? NO_TURNS;
+  const turns = snapshot?.turns ?? NO_TURNS;
 
   // The freshest description of the selected run: its snapshot once loaded, the index summary
   // until then. Both are the same wire shape, and the snapshot is the completer truth (ADR 0002).
-  const activeRun = view?.run ?? selected;
+  const activeRun = snapshot?.run ?? selected;
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -165,8 +165,8 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // (`server/gates.ts`); re-deriving it here would re-implement the one trap #19 exists to
   // avoid. The strip wants only the open ones.
   const openGates = useMemo(
-    () => (view === null ? NO_GATES : view.gates.filter((gate) => gate.status === 'open')),
-    [view]
+    () => (snapshot === null ? NO_GATES : snapshot.gates.filter((gate) => gate.status === 'open')),
+    [snapshot]
   );
 
   // Only ever a task on the canvas: a selection is cleared whenever the run changes, and a run
@@ -177,8 +177,8 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
   // The node wears one ⛔ marker because it has room for one; the inspector is where the decision
   // that was actually made is legible.
   const taskGates = useMemo(
-    () => (view !== null && selectedTask ? view.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES),
-    [view, selectedTask]
+    () => (snapshot !== null && selectedTask ? snapshot.gates.filter((gate) => gate.taskId === selectedTask.id) : NO_GATES),
+    [snapshot, selectedTask]
   );
 
   // The bodies, on the click and not before — the 172 KB the snapshot exists to not send
@@ -317,7 +317,7 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}
             <div className="min-h-0 flex-1 max-lg:min-h-24">
-              {selected !== null && view === null ? (
+              {selected !== null && snapshot === null ? (
                 // The selected run's evidence is on its way (#69). Milliseconds on loopback —
                 // but an empty canvas would read as "this run has no tasks", which is a claim,
                 // and not one anybody has verified yet.

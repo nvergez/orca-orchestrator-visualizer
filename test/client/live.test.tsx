@@ -294,6 +294,56 @@ describe('<Live>', () => {
     expect(screen.getByTestId('task-node')).toHaveTextContent('Build it');
   });
 
+  it('keeps a reader on an old run when new history pushes it past the page edge — no auto-jump', async () => {
+    // **The regression a windowed rail is most able to cause, and it hides at the page edge.**
+    //
+    // The reader is on the *last row of the first page* — 50 runs loaded, and the 50th is the
+    // one they are reading. A new orchestration starts, so their run is now the 51st most
+    // recently active. A refresh that re-reads "the newest 50" — the count they had — drops it:
+    // the rail can no longer find their selection, falls back to the top of the list, and the
+    // post-mortem they were studying is replaced by the run that just started. SPEC §7.3: "A run
+    // starting while you read a post-mortem is *news*, not an instruction. The canvas is never
+    // yanked out from under you."
+    const older = Array.from({ length: 49 }, (_, index) =>
+      run({
+        id: `run_old_${String(index).padStart(2, '0')}`,
+        handle: `term_old_${index}`,
+        label: `Older work ${index}`,
+        startedAt: '2026-07-01T00:00:00.000Z',
+        endedAt: new Date(Date.parse('2026-07-10T00:00:00Z') - index * 60_000).toISOString(),
+      })
+    );
+    world = { runs: [run(), ...older], tasks: [task()] }; // exactly one page: 1 + 49
+
+    render(<Live />);
+    const source = stream();
+    source.push(event());
+    await screen.findByText('Ship the visualizer');
+    expect(screen.getAllByTestId('run-row')).toHaveLength(50);
+
+    // They settle on the very last row of the page.
+    await userEvent.click(await screen.findByText('Older work 48'));
+    await waitFor(() => expect(screen.getByRole('button', { current: true })).toHaveTextContent('Older work 48'));
+
+    // A brand-new orchestration starts while they read. Their run is now the 51st.
+    world = {
+      runs: [
+        run({ id: 'run_fresh', handle: 'term_fresh', label: 'The new one', endedAt: '2026-07-12T09:00:00.000Z' }),
+        ...world.runs,
+      ],
+      tasks: world.tasks,
+    };
+    source.push(event({ affected: { all: false, runIds: ['run_fresh'] } }));
+
+    // It is announced…
+    expect(await screen.findByText('new orchestration started')).toBeVisible();
+    // …and the reader has not moved: their run is still in the rail — the window followed it
+    // past the page edge rather than dropping it — and it is still the selected one.
+    expect(screen.getByText('Older work 48')).toBeVisible();
+    expect(screen.getByRole('button', { current: true })).toHaveTextContent('Older work 48');
+    expect(screen.getAllByTestId('run-row')).toHaveLength(51);
+  });
+
   it('flips the badge to stale when Orca is closed, and keeps rendering everything else', async () => {
     const source = await opened();
     expect(screen.getByText(/connected to a running Orca/i)).toBeVisible();

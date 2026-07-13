@@ -657,7 +657,7 @@ describe('the conversation on the fold', () => {
   });
 
   it('never raises the chip for the reader’s own re-scope — a filter is not an arrival', async () => {
-    // Flipping "All" re-derives the list from the same turns: the last shown id moves, but
+    // Flipping the scope re-derives the list from the same turns: the last shown id moves, but
     // nothing landed. The chip is arrival news in the new-run chip's grammar (mobile.md §4.10),
     // and announcing the reader's own tap back at them would make it furniture — so a move
     // that changed the scope retires the chip instead of raising it.
@@ -667,7 +667,8 @@ describe('the conversation on the fold', () => {
       <CannedApp
         event={withTurns([
           turn({ id: 'turn_here', body: 'Said in this run.' }),
-          turn({ id: 'turn_elsewhere', runId: OTHER_RUN_ID, taskId: null, at: '2026-07-08T14:00:00.000Z' }),
+          // A turn nothing places (SPEC §4.4, rule 3) — the whole of the second scope since #69.
+          turn({ id: 'turn_nobodys', runId: null, taskId: null, at: '2026-07-08T14:00:00.000Z' }),
         ])}
         loadTask={NO_DETAIL}
       />
@@ -682,10 +683,10 @@ describe('the conversation on the fold', () => {
     Object.defineProperty(viewport, 'scrollHeight', { configurable: true, get: () => 1000 });
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 200 });
 
-    // …and re-scopes. The global log ends on another run's turn, so the last shown id changes
-    // in both directions — and neither direction is news.
+    // …and re-scopes. The two scopes end on different turns, so the last shown id changes in
+    // both directions — and neither direction is news.
     await user.click(screen.getByTestId('dock-band-toggle'));
-    await user.click(screen.getByRole('button', { name: 'All' }));
+    await user.click(screen.getByRole('button', { name: 'Unattributed' }));
     expect(screen.queryByTestId('new-turns-chip')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'This orchestrator' }));
