@@ -7,6 +7,15 @@ import type { Task } from '../../shared/types.ts';
 
 export type Edge = { id: string; source: string; target: string };
 
+/**
+ * One edge's identity, written in one place: the critical path names the edges of its road by
+ * the same rule (`Canvas.tsx`), and two spellings of the same id would unhighlight the road
+ * without a test noticing.
+ */
+export function edgeIdOf(source: string, target: string): string {
+  return `${source}->${target}`;
+}
+
 export type Graph = {
   /** Tasks the layered layout draws: everything an edge touches. */
   connected: Task[];
@@ -34,7 +43,7 @@ export function buildGraph(tasks: Task[]): Graph {
   for (const task of tasks) {
     for (const dep of task.deps) {
       if (!known.has(dep)) continue;
-      edges.push({ id: `${dep}->${task.id}`, source: dep, target: task.id });
+      edges.push({ id: edgeIdOf(dep, task.id), source: dep, target: task.id });
       touched.add(dep);
       touched.add(task.id);
     }

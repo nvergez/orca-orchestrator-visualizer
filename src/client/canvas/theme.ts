@@ -13,8 +13,9 @@ export { STALE_HEARTBEAT_MS } from '../worker-health.ts';
  * - **`surface`** — Tailwind classes, for anything Tailwind can paint. A node and a chip of the
  *   same status wear the *same string*, which is how "one palette for the page" stays true by
  *   construction rather than by discipline (`conversation/theme.ts`).
- * - **`accent`** — a `var(--…)` value, for the two places that need a colour and not a class:
- *   React Flow's minimap fill, and the box-shadow of a pulse.
+ * - **`accent`** — a `var(--…)` value, for the places that need a colour and not a class:
+ *   React Flow's minimap fill, the box-shadow of a pulse, and — since #71 — the critical
+ *   path's edge stroke and node ring (`CRITICAL_PATH_COLOUR`, below).
  */
 
 /** 240 × 84, title clamped to three lines. Nothing is hidden behind a hover (SPEC §7.5). */
@@ -65,6 +66,14 @@ export const GATE_THEME: StatusTheme = {
   dot: 'bg-gate',
   border: 'border-gate',
 };
+
+/**
+ * The critical path's one colour (#71): the theme's own ink (`index.css`), because every hue on
+ * this page already means a status, an agent, a gate or a selection, and the highlight must
+ * claim none of them. A value and not a class — it is worn as an edge stroke and a box-shadow
+ * ring, and neither takes a class.
+ */
+export const CRITICAL_PATH_COLOUR = 'var(--critical-path)';
 
 /**
  * The six statuses (SPEC §7.5, and the colour table locked in #12). The light value of every

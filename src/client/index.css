@@ -86,6 +86,14 @@
   --gate-ink: #9a3412;
 
   /**
+   * The critical path (#71): the longest road retained duration took through one run's DAG.
+   * Ink, not a hue — every hue on this page already means a status, an agent, a gate or a
+   * selection, and the one thing this highlight must not do is claim any of them. Aliased to
+   * the theme's own foreground, so it flips with the theme by construction.
+   */
+  --critical-path: var(--foreground);
+
+  /**
    * **Agent identity — and it is never a fill.**
    *
    * A node has one background and two things want to colour it: its *status*, and the *agent* that
