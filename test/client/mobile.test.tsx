@@ -734,7 +734,10 @@ describe('the canvas on the fold', () => {
     render(<App event={event()} loadTask={NO_DETAIL} />);
     await drawn(2);
 
-    expect(media.listenerCount(PORTRAIT_QUERY)).toBeGreaterThan(0);
+    // Waited for, not asserted outright: `Refit` subscribes from an effect, and it lives *inside*
+    // `<ReactFlow>` — so it mounts a commit behind the nodes `drawn` is watching for. Reading the
+    // count the instant a node appears is a race the fold loses every few hundred runs.
+    await waitFor(() => expect(media.listenerCount(PORTRAIT_QUERY)).toBeGreaterThan(0));
 
     clickNode(TASK_A);
     await waitFor(() => expect(inspector()).not.toBeNull());
