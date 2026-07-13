@@ -36,9 +36,11 @@ Read the parent issue before implementing or reviewing a child ticket.
 
 ## Reading order for implementation and review
 
-`HANDOFF.md` → `SPEC.md` → parent issue **#12** → the ticket itself.
+`SPEC.md` → parent issue **#12** → the ticket itself.
 
-`HANDOFF.md` contains verified facts about Orca’s database; do not re-derive them. `SPEC.md` is locked and is the specification of record. If a ticket conflicts with `SPEC.md`, report the conflict rather than choosing between them.
+`SPEC.md` is locked and is the specification of record. If a ticket conflicts with `SPEC.md`, report the conflict rather than choosing between them.
+
+`docs/reference/orca-db-schema.md` holds verified facts about Orca’s database — its tables, columns, and enums. Do not re-derive them; look them up when you need them. It is a reference, not a first read: it describes the database, while `SPEC.md` §4.2 describes the traps in it, and only `SPEC.md` decides what the tool does.
 
 The research documents under `docs/research/` provide evidence behind the rulings. Consult them for citations, not to reopen settled decisions.
 

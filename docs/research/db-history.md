@@ -10,7 +10,7 @@ Resolves wayfinder ticket #2. Sources: Orca orchestration source at `/home/dev/p
 
 3. **Messages and dispatch attempts are append-only history; everything else is current-state-only.** The `messages` table is a true event log (insert-only content, monotonic `AUTOINCREMENT sequence` = total order); each dispatch *attempt* is a new `dispatch_contexts` row, so per-task retry history survives. But `tasks.status`, `tasks.result`, `decision_gates.status`, `coordinator_runs.status`, and the per-row dispatch fields are all overwritten in place — intermediate task states (`pending → ready`, `blocked → ready`) leave no timestamped trace of their own.
 
-4. **Beyond HANDOFF.md's summary:** 10 explicit indexes, no views, no triggers, no foreign keys (all `task_id` references are soft), no soft-delete flags, `PRAGMA user_version = 5` as the schema-detection hook, a `sqlite_sequence` row for `messages` that lets you *detect* a past reset, meaningful `rowid` ordering on `dispatch_contexts`, mutable `read`/`delivered_at` flags on messages, and an inconsistent timestamp format split (SQL `datetime('now')` vs JS ISO-8601) that any consumer must normalize.
+4. **Beyond the schema reference's summary** ([`orca-db-schema.md`](../reference/orca-db-schema.md))**:** 10 explicit indexes, no views, no triggers, no foreign keys (all `task_id` references are soft), no soft-delete flags, `PRAGMA user_version = 5` as the schema-detection hook, a `sqlite_sequence` row for `messages` that lets you *detect* a past reset, meaningful `rowid` ordering on `dispatch_contexts`, mutable `read`/`delivered_at` flags on messages, and an inconsistent timestamp format split (SQL `datetime('now')` vs JS ISO-8601) that any consumer must normalize.
 
 ---
 
@@ -90,7 +90,7 @@ These are exposed solely via the `orchestration.reset` RPC (`rpc/methods/orchest
 - **`orchestration.ask` writes a `decision_gate` *message* but no `decision_gates` row** (`rpc/methods/orchestration.ts:549-584`). A gates-table row is created only by `orchestration.gateCreate` or when the built-in `Coordinator` loop consumes a `decision_gate` message (`coordinator.ts:327-351`). Live DB: 53 `decision_gate` messages, **0** `decision_gates` rows. A visualizer that renders gates from the table alone will show nothing for CLI-driven runs — derive gates from messages instead.
 - **`timeoutGate()` (`db.ts:772-781`) has no callers** anywhere in `src` outside tests — `status = 'timeout'` never occurs in practice; `ask` timeouts simply return with the message left unread.
 
-## 4. Queryable things HANDOFF.md's summary missed
+## 4. Queryable things the schema reference's summary missed
 
 - **Indexes (10 explicit, all confirmed live):** `idx_messages_id` (UNIQUE on `messages.id` — `id` is *not* the PK; `sequence` is), `idx_inbox (to_handle, read)`, `idx_messages_undelivered_inbox (to_handle, read, delivered_at, sequence)` (`db.ts:264-272`), `idx_thread (thread_id)`, `idx_tasks_status`, `idx_tasks_parent`, `idx_dispatch_task`, `idx_dispatch_status`, `idx_gates_task`, `idx_gates_status` (`db.ts:81-136`). No views, no triggers.
 - **No foreign keys, no soft-delete flags.** `dispatch_contexts.task_id`, `decision_gates.task_id`, message payload ids are all unenforced strings; after `resetTasks()`, surviving messages point at nonexistent tasks. Handles in `messages` survive terminal deletion by design (`db.ts:391-394`).
@@ -98,7 +98,7 @@ These are exposed solely via the `orchestration.reset` RPC (`rpc/methods/orchest
 - **`sqlite_sequence`** (from `messages` AUTOINCREMENT): `seq` vs `COUNT(*)`/`MIN(sequence)` detects historical resets.
 - **`rowid` ordering on `dispatch_contexts` is load-bearing** — the source's own "latest dispatch" queries use `MAX(rowid)` (`db.ts:511-515, 616, 653`); safe for a visualizer to use for attempt ordering.
 - **Timestamp formats are split** (verified live): columns written by SQL defaults or `datetime('now')` — all `created_at`s, `dispatch_contexts.dispatched_at/completed_at`, `messages.delivered_at`, `decision_gates.resolved_at`, `last_heartbeat_at` — are `'YYYY-MM-DD HH:MM:SS'` UTC; columns written from JS — `tasks.completed_at`, `coordinator_runs.completed_at` (`db.ts:527-528, 835-836`) — are ISO-8601 `'…T…Z'` (live: 55/55 ISO). Normalize before comparing across columns.
-- **DB location:** `join(app.getPath('userData'), 'orchestration.db')` (`orca-runtime.ts:2891-2898`), lazily opened, WAL + `synchronous=NORMAL` + `busy_timeout=5000` (`db.ts:49-56`). Matches HANDOFF.md.
+- **DB location:** `join(app.getPath('userData'), 'orchestration.db')` (`orca-runtime.ts:2891-2898`), lazily opened, WAL + `synchronous=NORMAL` + `busy_timeout=5000` (`db.ts:49-56`). Matches [`orca-db-schema.md`](../reference/orca-db-schema.md).
 
 ## What this means for the visualizer
 

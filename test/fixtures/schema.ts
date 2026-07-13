@@ -8,7 +8,8 @@ import { TABLES, type TableName } from '../../src/server/schema.ts';
  * too many.
  *
  * The DDL below is transcribed from a live `orchestration.db` at `user_version = 5`
- * (`SELECT sql FROM sqlite_master`), which is the schema HANDOFF.md pins as current.
+ * (`SELECT sql FROM sqlite_master`), which is the schema `docs/reference/orca-db-schema.md`
+ * pins as current.
  * It is generated rather than dumped so fixtures can express the *drift* the tool has
  * to survive — older versions with columns genuinely absent, newer ones with enum
  * values we have never heard of. A committed binary can express none of that.

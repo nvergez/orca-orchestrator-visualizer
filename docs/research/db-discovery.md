@@ -90,7 +90,7 @@ Because `setPath` is explicit, the later `setName` is irrelevant in dev. Note th
 
 ## 4. WAL caveats for read-only opens
 
-Orca opens the DB with `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000` (`src/main/runtime/orchestration/db.ts:51-53`), via Node's built-in `node:sqlite` `DatabaseSync` (`src/main/sqlite/sync-database.ts:2,31-35`). External read-only access while Orca writes is verified working (see HANDOFF.md). Caveats, per [sqlite.org/wal.html](https://www.sqlite.org/wal.html):
+Orca opens the DB with `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000` (`src/main/runtime/orchestration/db.ts:51-53`), via Node's built-in `node:sqlite` `DatabaseSync` (`src/main/sqlite/sync-database.ts:2,31-35`). External read-only access while Orca writes is verified working (see [`orca-db-schema.md`](../reference/orca-db-schema.md)). Caveats, per [sqlite.org/wal.html](https://www.sqlite.org/wal.html):
 
 1. **SQLite ≥ 3.22.0 is required to open a WAL DB read-only at all**, and one of these must hold: (a) the `-shm` and `-wal` files already exist and are readable, (b) the reader has write permission on the containing directory (so it can create them), or (c) the connection uses the `immutable=1` URI parameter ([§ Read-Only Databases](https://www.sqlite.org/wal.html#read_only_databases)). Any Node ≥ 18 / better-sqlite3 build satisfies the version floor.
 2. **Same-user access (the normal case) just works.** While Orca runs, `-wal`/`-shm` exist with mode `0644` (verified above), and the same user has directory write access anyway. A `readOnly: true` open participates in the shared-memory reader index without modifying the DB image.

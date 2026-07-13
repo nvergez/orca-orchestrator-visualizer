@@ -9,7 +9,7 @@
  * rather than one to negotiate.
  */
 
-/** Orca's own enums (HANDOFF.md). Unknown values pass through verbatim — never dropped. */
+/** Orca's own enums (`docs/reference/orca-db-schema.md`). Unknown values pass through verbatim — never dropped. */
 
 /**
  * The six task statuses, as a value, because two of them have to be *enumerated* and not just
