@@ -3,10 +3,11 @@ import { Diamond } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
 import type { CastMember, Run } from '../../shared/types.ts';
-import { agentLook, MONOGRAM_CLASS, STALE_HEARTBEAT_MS } from '../canvas/theme.ts';
+import { agentLook, MONOGRAM_CLASS } from '../canvas/theme.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SECTION_IN } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
+import type { WorkerHealth } from '../worker-health.ts';
 
 /**
  * **The cast — and the tool's central gesture.**
@@ -28,13 +29,12 @@ import { relativeTime } from '../relative-time.ts';
 
 export type CastProps = {
   run: Run;
+  healthByAgent: ReadonlyMap<string, WorkerHealth>;
   selectedAgent: string | null;
   onSelectAgent: (handle: string | null) => void;
-  /** The clock the "last seen" badges are measured against — one clock, so the list ages in step. */
-  now: number;
 };
 
-export function Cast({ run, selectedAgent, onSelectAgent, now }: CastProps) {
+export function Cast({ run, healthByAgent, selectedAgent, onSelectAgent }: CastProps) {
   if (run.cast.length === 0) {
     return (
       <p data-testid="cast-empty" className="text-muted-foreground/70 px-4 pt-1 pb-3 pl-7 text-[11px] text-balance">
@@ -94,7 +94,7 @@ export function Cast({ run, selectedAgent, onSelectAgent, now }: CastProps) {
               selected={member.handle === selectedAgent}
               // Clicking the selected agent lets it go — the way out is where the way in was.
               onSelect={() => onSelectAgent(member.handle === selectedAgent ? null : member.handle)}
-              now={now}
+              health={healthByAgent.get(member.handle) ?? { state: 'inactive' }}
             />
 
             <CopyButton
@@ -114,13 +114,13 @@ function Agent({
   cast,
   selected,
   onSelect,
-  now,
+  health,
 }: {
   member: CastMember;
   cast: CastMember[];
   selected: boolean;
   onSelect: () => void;
-  now: number;
+  health: WorkerHealth;
 }) {
   const look = agentLook(member.handle, cast);
 
@@ -129,6 +129,7 @@ function Agent({
       type="button"
       data-testid="agent-row"
       data-agent={member.monogram}
+      data-health={health.state}
       aria-pressed={selected}
       onClick={onSelect}
       title={member.handle}
@@ -159,7 +160,7 @@ function Agent({
         </code>
       </span>
 
-      <LastSeen at={member.lastHeartbeatAt} now={now} taskCount={member.taskCount} />
+      <LastSeen health={health} taskCount={member.taskCount} />
     </button>
   );
 }
@@ -168,16 +169,13 @@ function Agent({
  * "seen 12s ago" — an agent that is still beating, and the one thing the rail can say about an
  * orchestration that has not finished (SPEC §4.6).
  *
- * It replaces the task count only while the agent is *recently* alive. A heartbeat from three hours
- * ago is not liveness, it is history — and a badge reading "seen 3h ago" beside a finished run
- * would cry wolf about work that went perfectly well. Past the threshold the row goes back to
- * saying how much the agent did, which is what a post-mortem came for.
+ * It replaces the task count only while the agent has a currently dispatched attempt. Settled work
+ * always returns to its historical task count; a stale current attempt stays visible and amber.
+ * Before the first heartbeat, the dispatch time is named explicitly instead of being mistaken for
+ * a check-in.
  */
-function LastSeen({ at, now, taskCount }: { at: string | null; now: number; taskCount: number }) {
-  const silentFor = at === null ? null : now - Date.parse(at);
-  const beating = silentFor !== null && !Number.isNaN(silentFor) && silentFor < STALE_HEARTBEAT_MS;
-
-  if (!beating) {
+function LastSeen({ health, taskCount }: { health: WorkerHealth; taskCount: number }) {
+  if (health.state === 'inactive' || health.state === 'unknown') {
     return (
       <span className="text-muted-foreground shrink-0 text-[11px] tabular-nums">
         {taskCount} {taskCount === 1 ? 'task' : 'tasks'}
@@ -185,12 +183,23 @@ function LastSeen({ at, now, taskCount }: { at: string | null; now: number; task
     );
   }
 
+  const stale = health.state === 'stale';
+  const label =
+    health.heartbeat === 'received'
+      ? `seen ${relativeTime(health.elapsedMs)} ago`
+      : `dispatched ${relativeTime(health.elapsedMs)} ago · no heartbeat`;
+
   return (
     <span
       data-testid="agent-last-seen"
-      className="bg-status-dispatched-soft text-status-dispatched-ink shrink-0 rounded-full px-1.5 py-px text-[10px] tabular-nums"
+      className={cn(
+        'shrink-0 rounded-full px-1.5 py-px text-[10px] tabular-nums',
+        stale
+          ? 'bg-amber-100 font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+          : 'bg-status-dispatched-soft text-status-dispatched-ink'
+      )}
     >
-      seen {relativeTime(silentFor!)} ago
+      {label}
     </span>
   );
 }

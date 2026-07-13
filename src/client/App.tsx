@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../shared/types.ts';
 import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import { type AttentionItem, deriveAttention } from './attention.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -19,6 +20,7 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
+import { useNow } from './relative-time.ts';
 import { useRunSelection } from './rail/selection.ts';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
@@ -56,7 +58,8 @@ import { useIsMobile } from './viewport.tsx';
  * deserves the width.
  *
  * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
- * rail beside today's and renders through the exact same code path; live-ness is a green dot.
+ * rail beside today's and renders through the exact same code path; each row wears its
+ * `active | silent | finished` health, and the Orca process has its own pill (SPEC §12).
  *
  * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
  * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a
@@ -77,6 +80,7 @@ const NO_TASKS: Task[] = [];
 const NO_GATES: Gate[] = [];
 const NO_TURNS: Turn[] = [];
 const NO_CAST: CastMember[] = [];
+const NO_ATTENTION: AttentionItem[] = [];
 
 export type AppProps = {
   event: StreamEvent | null;
@@ -105,6 +109,17 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   const pulses = usePulses(useArrivals(event));
 
   const turns = event?.snapshot.turns ?? NO_TURNS;
+
+  // The attention queue (#56): one pure derivation over the latest snapshot and the shared wall
+  // clock — the same clock the rail's health dots age on, so an item that exists because
+  // something is ten minutes quiet and a dot that is amber for the same reason cannot disagree.
+  // The clock ticking (`WALL_CLOCK_TICK_MS`) is also what lets a fresh failure age *out* of the
+  // queue while a quiet database pushes nothing at all.
+  const attentionNow = useNow(event);
+  const attention = useMemo(
+    () => (event ? deriveAttention(event.snapshot, attentionNow) : NO_ATTENTION),
+    [event, attentionNow]
+  );
 
   // The two pieces of state that are nobody's panel and everybody's business.
   //
@@ -152,13 +167,15 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   );
 
   // The same scoping, for the gates (#19) — and it is the *only* thing the client does to
-  // them. Which question is still open, and which run it blocks, are answers the server has
-  // already worked out from the `decision_gate` messages (`server/gates.ts`); re-deriving
-  // either here would be re-implementing the one trap the ticket exists to avoid.
-  const openGates = useMemo(
+  // them. Which question is blocking *now*, and which run it blocks, are answers the server
+  // has already worked out from the gate messages, the `decision_gates` rows and the tasks'
+  // current state (`server/gates.ts`, #45); re-deriving either here would be re-implementing
+  // the one trap the ticket exists to avoid. The strip interrupts over `blocking` alone —
+  // an unanswered historical ask is not enough evidence to interrupt (SPEC §7.1).
+  const blockingGates = useMemo(
     () =>
       event && selected
-        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.status === 'open')
+        ? event.snapshot.gates.filter((gate) => gate.runId === selected.id && gate.blocking)
         : NO_GATES,
     [event, selected]
   );
@@ -244,6 +261,27 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
   }
 
   /**
+   * An attention item is a place to go, through the seam that already exists (#56): the task
+   * when the cause names one — `showTask`, because a cause can perfectly well live in an
+   * orchestration you are not looking at — otherwise the run it blocks. Nothing is written
+   * anywhere: attending to a cause is *going and looking at it*, and the item leaves the queue
+   * only when its evidence does (SPEC §1.2).
+   *
+   * The task is resolved before it is shown, and the run is the fallback when it does not
+   * resolve. On the wire that cannot happen — every id an attention item carries was read off a
+   * task in this very snapshot, and the server nulls a `Gate.taskId` naming a task a reset
+   * deleted (`server/attribution.ts`) — but `showTask` on an id it cannot find selects nothing
+   * at all, and a queue whose whole promise is "one click and you are there" is the last place
+   * that may quietly do nothing.
+   */
+  function attend(item: AttentionItem): void {
+    const target = item.taskId === null ? undefined : allTasks.find((task) => task.id === item.taskId);
+
+    if (target) showTask(target.id);
+    else if (item.runId !== null) selectRun(item.runId);
+  }
+
+  /**
    * A gate, a dependency chip, a turn in the conversation — anything that *names* a task rather
    * than toggling one. It selects: clicking a blocking question a second time to mean "never mind"
    * would be a strange thing for a blocker to offer, and the way out of a selection is the node,
@@ -288,7 +326,10 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
         <div className="flex min-h-0 flex-1 gap-2 max-lg:flex-col">
           <RunRail
             runs={runs}
+            tasks={allTasks}
             coordinatorRuns={event.snapshot.coordinatorRuns}
+            attention={attention}
+            onAttend={attend}
             selectedId={selected?.id ?? null}
             onSelect={selectRun}
             selectedAgent={selectedAgent}
@@ -304,7 +345,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
               be in your way, or it is a question you will not see until you go looking for it —
               and you go looking for it only once you have already noticed nothing is moving.
             */}
-            <GateStrip gates={openGates} tasks={tasks} onSelectTask={showTask} />
+            <GateStrip gates={blockingGates} tasks={tasks} onSelectTask={showTask} />
 
             {/* `max-lg:min-h-24` floors the canvas: an expanded band + gate + notices can never
                 crush React Flow to 0×0, so the fit math never sees a zero container. */}

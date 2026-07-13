@@ -17,12 +17,14 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { CastMember, Task, Wave } from '../../shared/types.ts';
 import type { Pulse } from '../conversation/theme.ts';
+import { useNow } from '../relative-time.ts';
 import { useIsMobile } from '../viewport.tsx';
+import { hasCurrentActivityEvidence, taskWorkerHealth } from '../worker-health.ts';
 import { PANEL_CLASS } from '../surface.ts';
 import { buildGraph, type Edge, type Graph } from './graph.ts';
 import { layoutGraph, type Layout, type WaveBox } from './layout.ts';
 import { TaskNode, type TaskFlowNode } from './TaskNode.tsx';
-import { agentOf, isAlive, NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
+import { agentOf, NODE_HEIGHT, NODE_WIDTH, themeOf } from './theme.ts';
 import { WaveRegion, type WaveFlowNode } from './WaveRegion.tsx';
 
 /**
@@ -92,6 +94,7 @@ export function Canvas({
   const graph = useMemo(() => buildGraph(tasks), [tasks]);
   const [laidOut, setLaidOut] = useState<{ graph: Graph; waves: Wave[]; layout: Layout } | null>(null);
   const [showIsolated, setShowIsolated] = useState(true);
+  const now = useNow(tasks);
 
   useEffect(() => {
     let current = true;
@@ -121,13 +124,13 @@ export function Canvas({
       layout
         ? [
             ...toWaveNodes(layout.boxes),
-            ...toTaskNodes(graph, layout, showIsolated, { cast, agentTasks, selectedTaskId, pulses }),
+            ...toTaskNodes(graph, layout, showIsolated, { cast, agentTasks, selectedTaskId, pulses, now }),
           ]
         : [],
-    [graph, layout, showIsolated, cast, agentTasks, selectedTaskId, pulses]
+    [graph, layout, showIsolated, cast, agentTasks, selectedTaskId, pulses, now]
   );
 
-  const edges = useMemo(() => toEdges(graph.edges, tasks, agentTasks), [graph.edges, tasks, agentTasks]);
+  const edges = useMemo(() => toEdges(graph.edges, tasks, agentTasks, now), [graph.edges, tasks, agentTasks, now]);
 
   if (tasks.length === 0) {
     return (
@@ -452,10 +455,10 @@ function toTaskNodes(
     agentTasks: ReadonlySet<string> | null;
     selectedTaskId: string | null;
     pulses: ReadonlyMap<string, Pulse>;
+    now: number;
   }
 ): TaskFlowNode[] {
   const at = new Map(layout.placements.map((placement) => [placement.id, placement]));
-  const now = Date.now();
   const shown = showIsolated ? [...graph.connected, ...graph.isolated] : graph.connected;
 
   return shown.map((task, index) => ({
@@ -466,7 +469,7 @@ function toTaskNodes(
     height: NODE_HEIGHT,
     data: {
       task,
-      now,
+      now: view.now,
       agent: agentOf(task, view.cast),
       selected: task.id === view.selectedTaskId,
       dimmed: view.agentTasks !== null && !view.agentTasks.has(task.id),
@@ -488,11 +491,13 @@ function toTaskNodes(
  * stayed bright between two faded nodes would draw the eye to a relationship you did not ask to
  * see, which is the one thing the dimming exists to stop.
  */
-function toEdges(edges: Edge[], tasks: Task[], agentTasks: ReadonlySet<string> | null): FlowEdge[] {
-  const status = new Map(tasks.map((task) => [task.id, task.status]));
+function toEdges(edges: Edge[], tasks: Task[], agentTasks: ReadonlySet<string> | null, now: number): FlowEdge[] {
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
 
   return edges.map((edge) => {
-    const inFlight = isAlive(status.get(edge.target) ?? '');
+    const target = tasksById.get(edge.target);
+    const health = target ? taskWorkerHealth(target, now) : { state: 'inactive' as const };
+    const inFlight = hasCurrentActivityEvidence(health);
     const dimmed = agentTasks !== null && !(agentTasks.has(edge.source) && agentTasks.has(edge.target));
 
     return {

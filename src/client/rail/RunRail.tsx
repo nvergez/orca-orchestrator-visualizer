@@ -1,17 +1,25 @@
 import { ArrowUp, ChevronDown, OctagonAlert, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RadarDot } from '@/components/fx/radar-dot';
 import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import type { CoordinatorRun, Run } from '../../shared/types.ts';
+import { runHealth, type RunHealth } from '../../shared/run-health.ts';
+import type { CoordinatorRun, Run, Task } from '../../shared/types.ts';
+import type { AttentionItem } from '../attention.ts';
+import { AttentionQueue } from '../attention/AttentionQueue.tsx';
 import { CHIP_CLASS } from '../chip.ts';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
+import {
+  isActiveWorkerHealth,
+  type WorkerHealth,
+  workerHealthByAgent,
+} from '../worker-health.ts';
 import { Cast } from './Cast.tsx';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
@@ -33,9 +41,12 @@ import { formatRunDate, statusBreakdown } from './summary.ts';
  *    orchestrator *contains* its agents, and a fourth column would state no relationship at all.
  *    Selecting one dims the canvas to their tasks and fills the conversation with their half of the
  *    dialogue. That single click is what the tool is for.
- * 2. **Which one is actually live.** The database is never pruned, so yesterday's orchestration sits
- *    in the rail beside today's and renders through the exact same code path. There is no history
- *    mode — there is a list, and a green dot on the one that is still running.
+ * 2. **How each one stands.** The database is never pruned, so yesterday's orchestration sits in
+ *    the rail beside today's and renders through the exact same code path. There is no history
+ *    mode — there is a list, and each row wears its health: `active | silent | finished`, derived
+ *    here from `converged`, `lastActivityAt` and the shared wall clock (SPEC §12.3). It is
+ *    evidence, not a diagnosis — a silent run is never called ended, dead or stuck — and it is not
+ *    the Orca process, whose own state the shell's pill reports separately (SPEC §12.1).
  *
  * The hover highlight **slides** from row to row rather than fading in under each (SPEC §7.9). It is
  * one element with one `layoutId`, so the browser moves it; and it is the difference between a list
@@ -49,6 +60,7 @@ import { formatRunDate, statusBreakdown } from './summary.ts';
  * jsdom, and the fallback is `true` — desktop and every existing test see the rail unchanged.
  */
 const CAN_HOVER = globalThis.matchMedia?.('(hover: hover)').matches ?? true;
+const EMPTY_HEALTH_BY_AGENT: ReadonlyMap<string, WorkerHealth> = new Map();
 
 /**
  * On a phone the rail is a stacked band that folds to a summary row instead of a fixed-width
@@ -64,7 +76,12 @@ export type RailFold = {
 
 export type RunRailProps = {
   runs: Run[];
+  tasks: Task[];
   coordinatorRuns: CoordinatorRun[];
+  /** The cross-run attention queue (#56), already ranked — the rail renders it, never re-derives it. */
+  attention: AttentionItem[];
+  /** Clicking an item selects its orchestrator — and its task, when the cause names one (App). */
+  onAttend: (item: AttentionItem) => void;
   selectedId: string | null;
   onSelect: (runId: string) => void;
   /** The agent selected inside the open orchestrator — the canvas dims to it, the dock fills with it. */
@@ -78,7 +95,10 @@ export type RunRailProps = {
 
 export function RunRail({
   runs,
+  tasks,
   coordinatorRuns,
+  attention,
+  onAttend,
   selectedId,
   onSelect,
   selectedAgent,
@@ -91,8 +111,20 @@ export function RunRail({
   // about itself.
   const [hovered, setHovered] = useState<string | null>(null);
 
-  // One clock for every "last seen" badge in the cast, so the list ages in step.
+  // One clock for every health dot and every "last seen" badge, so the list ages in step — and
+  // it ticks on its own (`WALL_CLOCK_TICK_MS`), because a run must cross `active → silent`
+  // while the database is pushing nothing at all (SPEC §12.3).
   const now = useNow(runs);
+  const healthByRun = useMemo(
+    () =>
+      new Map(
+        runs.map((run) => {
+          const runTasks = tasks.filter((task) => task.runId === run.id);
+          return [run.id, workerHealthByAgent(runTasks, now)] as const;
+        })
+      ),
+    [runs, tasks, now]
+  );
 
   // What the summary row has to say while the list is clipped: which run, and — if the canvas is
   // dimmed to one agent — which agent, so the filter stays escapable without unfolding.
@@ -143,7 +175,7 @@ export function RunRail({
     >
       {/*
         The band's summary row — everything the fold owes you while the list is clipped: which run,
-        is it alive, is it blocked, am I filtered. Two *sibling* buttons, because a button inside a
+        how it stands, is it blocked, am I filtered. Two *sibling* buttons, because a button inside a
         button is not a thing HTML has (the Cast.tsx rule): the toggle owns the row, the `[A2 ✕]`
         chip stands beside it so agent-dimming stays escapable while the canvas is showing (CANVAS
         report §2). Desktop never passes `fold`, so desktop never renders this.
@@ -158,12 +190,16 @@ export function RunRail({
             onClick={fold.onToggle}
             className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-4 text-left"
           >
-            <RadarDot live={selectedRun?.live ?? false} />
+            {selectedRun ? (
+              <HealthDot health={runHealth(selectedRun, now)} />
+            ) : (
+              <RadarDot live={false} />
+            )}
             <b className="truncate text-[13px] font-semibold">{selectedRun?.label ?? 'Orchestrators'}</b>
-            {selectedRun?.hasOpenGates && (
+            {selectedRun?.hasBlockingGates && (
               <OctagonAlert
                 role="img"
-                aria-label="blocked on an open decision gate"
+                aria-label="blocked on a decision gate"
                 className="text-gate size-4 shrink-0"
               />
             )}
@@ -218,6 +254,14 @@ export function RunRail({
         </div>
 
         {/*
+          The attention queue (#56), above the list it triages: the rail is already the panel for
+          picking the orchestrator worth opening, and this is that question answered outright —
+          across every run at once, which no row of the list below could say for itself. Renders
+          nothing while nothing needs intervention.
+        */}
+        <AttentionQueue items={attention} onAttend={onAttend} />
+
+        {/*
           No auto-jump (SPEC §7.3). An orchestration appearing while you read an old one is *news*,
           not an instruction: the canvas is never yanked out from under you.
         */}
@@ -246,6 +290,8 @@ export function RunRail({
                 <li key={run.id}>
                   <RunRow
                     run={run}
+                    now={now}
+                    healthByAgent={healthByRun.get(run.id) ?? EMPTY_HEALTH_BY_AGENT}
                     selected={run.id === selectedId}
                     hovered={hovered === run.id}
                     onHover={() => setHovered(run.id)}
@@ -255,7 +301,12 @@ export function RunRail({
                   {/* The cast, under the one that is open — the hierarchy the database has always had,
                       drawn as a hierarchy for the first time. */}
                   {run.id === selectedId && (
-                    <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
+                    <Cast
+                      run={run}
+                      healthByAgent={healthByRun.get(run.id) ?? EMPTY_HEALTH_BY_AGENT}
+                      selectedAgent={selectedAgent}
+                      onSelectAgent={onSelectAgent}
+                    />
                   )}
                 </li>
               ))}
@@ -280,12 +331,17 @@ export function RunRail({
  */
 function RunRow({
   run,
+  now,
+  healthByAgent,
   selected,
   hovered,
   onHover,
   onSelect,
 }: {
   run: Run;
+  /** The rail's shared wall clock — health has to age without a push (SPEC §12.3). */
+  now: number;
+  healthByAgent: ReadonlyMap<string, WorkerHealth>;
   selected: boolean;
   hovered: boolean;
   onHover: () => void;
@@ -343,17 +399,9 @@ function RunRow({
       <Spotlight />
 
       <span className="relative flex items-center gap-2">
-        <RadarDot
-          live={run.live}
-          className="size-2"
-          // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "which of
-          // these is still going", and it is the only place it is said.
-        />
-        <span data-testid="live-dot" data-live={run.live} className="sr-only">
-          {run.live ? 'running now' : 'ended'}
-        </span>
+        <HealthDot health={runHealth(run, now)} className="size-2" />
         <b className="truncate text-[13px] font-semibold">{run.label}</b>
-        <BlockedFlag blocked={run.hasOpenGates} />
+        <BlockedFlag blocked={run.hasBlockingGates} />
       </span>
 
       <code className="text-muted-foreground/80 relative mt-0.5 block truncate pl-4 font-mono text-[10.5px]">
@@ -378,7 +426,49 @@ function RunRow({
           </>
         )}
       </span>
+
+      <RunWorkerHealth run={run} healthByAgent={healthByAgent} />
     </button>
+  );
+}
+
+function RunWorkerHealth({
+  run,
+  healthByAgent,
+}: {
+  run: Run;
+  healthByAgent: ReadonlyMap<string, WorkerHealth>;
+}) {
+  const active = run.cast
+    .map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const })
+    .filter(isActiveWorkerHealth);
+  if (active.length === 0) return null;
+
+  const staleWithoutHeartbeat = active.filter(
+    (health) => health.state === 'stale' && health.heartbeat === 'missing'
+  ).length;
+  const stale = active.filter((health) => health.state === 'stale' && health.heartbeat === 'received').length;
+  const quiet = active.filter((health) => health.state === 'quiet').length;
+  const working = active.filter((health) => health.state === 'working').length;
+  const state = staleWithoutHeartbeat + stale > 0 ? 'stale' : quiet > 0 ? 'quiet' : 'working';
+  const parts = [
+    staleWithoutHeartbeat > 0 && `${staleWithoutHeartbeat} stale without heartbeat`,
+    stale > 0 && `${stale} stale`,
+    quiet > 0 && `${quiet} awaiting heartbeat`,
+    working > 0 && `${working} active`,
+  ].filter((part): part is string => part !== false);
+
+  return (
+    <span
+      data-testid="run-worker-health"
+      data-health={state}
+      className={cn(
+        'relative mt-1 ml-4 block text-[10px] tabular-nums',
+        state === 'stale' ? 'font-bold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+      )}
+    >
+      {parts.join(' · ')}
+    </span>
   );
 }
 
@@ -387,7 +477,46 @@ function Dot() {
 }
 
 /**
- * The octagon — this orchestration is sitting on a question nobody has answered (`run.hasOpenGates`).
+ * The three looks of run health, in one table so a state cannot pulse one thing, wear another
+ * and say a third. Only `active` moves — the page's one "this is not finished" gesture
+ * (SPEC §7.9). `silent` holds still in amber over work that has not converged; `finished` holds
+ * still in the muted grey of a story that is over. The words are the glossary's (CONTEXT.md),
+ * and nobody else's: a silent run is *not* "ended", "dead" or "stuck" — the model reports
+ * retained evidence, and those three are diagnoses the database cannot support (SPEC §12.3).
+ */
+const HEALTH_LOOK: Record<RunHealth, { pulses: boolean; dot: string | false; words: string }> = {
+  active: { pulses: true, dot: false, words: 'active — recent activity' },
+  silent: { pulses: false, dot: 'bg-run-silent/70', words: 'silent — unfinished, no recent activity' },
+  finished: { pulses: false, dot: false, words: 'finished' },
+};
+
+/**
+ * A run's health, worn as the row's dot — with an sr-only twin saying it in words, because a
+ * colour a screen reader cannot reach was never said at all.
+ */
+function HealthDot({ health, className }: { health: RunHealth; className?: string }) {
+  const look = HEALTH_LOOK[health];
+
+  return (
+    <>
+      <RadarDot
+        live={look.pulses}
+        className={cn(className, look.dot)}
+        // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "how
+        // does this run stand", and the sr-only twin below is how it reaches everyone.
+      />
+      <span data-testid="health-dot" data-health={health} className="sr-only">
+        {look.words}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The octagon — a decision gate is provably blocking this orchestration right now
+ * (`run.hasBlockingGates`, #45). Not merely "a question was never answered": stale probes on
+ * finished runs wore this flag for days before the blocking fact was separated from the
+ * lifecycle state.
  *
  * The rail's job is to let you pick the orchestrator worth opening *without* opening it (SPEC §7.2),
  * and a blocked one is the most worth opening there is: it is not slow, it is **stopped**, and it
@@ -401,10 +530,10 @@ function BlockedFlag({ blocked }: { blocked: boolean }) {
     <OctagonAlert
       data-testid="run-gate-marker"
       role="img"
-      aria-label="blocked on an open decision gate"
+      aria-label="blocked on a decision gate"
       className="text-gate ml-auto size-3.5 shrink-0"
     >
-      <title>Blocked on an open decision gate</title>
+      <title>Blocked on a decision gate</title>
     </OctagonAlert>
   );
 }

@@ -74,13 +74,15 @@ function run(over: Partial<Run> = {}): Run {
     handle: HANDLE,
     label: 'Ship the visualizer',
     startedAt: '2026-07-08T12:00:00.000Z',
+    lastActivityAt: '2026-07-08T13:00:00.000Z',
+    converged: true,
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: 2,
     cast: [A1, A2],
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 2, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -313,20 +315,116 @@ describe('a question, and its answer', () => {
     await waitFor(() => expect(turns()).toHaveLength(1));
 
     expect(screen.getAllByTestId('gate-option').map((option) => option.dataset.picked)).toEqual(['true', 'false']);
+    // The tick already says the decision — a state chip on top of it would say it twice.
+    expect(screen.queryByTestId('gate-state')).toBeNull();
   });
 
-  it('says an unanswered question is still waiting — which is why the run is stopped', async () => {
+  it('shows a recorded answer that names no option — a row-resolved twin must not read as unanswered', async () => {
+    // The #45 collision, at the last surface it can hide on: a Coordinator writes the
+    // resolution only to the `decision_gates` row, so no reply turn follows this question.
+    // If nothing here shows the answer, the resolved gate reads exactly like an open one.
     render(
       <App
         event={withTurns([
-          turn({ kind: 'decision_gate', body: 'A block, or inherit?', options: ['a block', 'inherit'] }),
+          turn({
+            kind: 'decision_gate',
+            body: 'Keep the accent, or invert it?',
+            options: ['keep', 'invert'],
+            gateStatus: 'resolved',
+            answer: 'Keep it, but only above the fold.',
+          }),
         ])}
         loadTask={NO_DETAIL}
       />
     );
 
-    expect(await screen.findByTestId('gate-open')).toHaveTextContent(/waiting for an answer/i);
+    const state = await screen.findByTestId('gate-state');
+    expect(state).toHaveTextContent(/answered:/i);
+    expect(state).toHaveTextContent(/Keep it, but only above the fold\./);
+  });
+
+  it('says a resolved gate whose resolution text was never recorded is still resolved', async () => {
+    render(
+      <App
+        event={withTurns([
+          turn({ kind: 'decision_gate', body: 'Ship it today?', gateStatus: 'resolved' }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/resolved/i);
+  });
+
+  it('says a blocking question is blocking — waiting for an answer', async () => {
+    // The blocking chip follows the server's separate `blocking` fact, never the mere absence
+    // of a reply (#45): here the gate's task is authoritatively blocked right now.
+    render(
+      <App
+        event={withTurns([
+          turn({
+            kind: 'decision_gate',
+            body: 'A block, or inherit?',
+            options: ['a block', 'inherit'],
+            gateStatus: 'unanswered',
+            blocking: true,
+          }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/blocking — waiting for an answer/i);
     expect(screen.getAllByTestId('gate-option').map((option) => option.dataset.picked)).toEqual(['false', 'false']);
+  });
+
+  it('says an unanswered non-blocker recorded no answer — not that anything is waiting', async () => {
+    // A reply-less ask proves nothing beyond the missing answer: `orchestration.ask` never
+    // persists its timeout, and the live database is full of finished runs wearing stale
+    // probes (#45). "Waiting" here was the lie this issue exists to remove.
+    render(
+      <App
+        event={withTurns([
+          turn({
+            kind: 'decision_gate',
+            body: 'ping: can you read this?',
+            options: ['yes', 'no'],
+            gateStatus: 'unanswered',
+          }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    const state = await screen.findByTestId('gate-state');
+    expect(state).toHaveTextContent(/no answer recorded/i);
+    expect(state).not.toHaveTextContent(/waiting|blocked/i);
+  });
+
+  it('names a timed-out gate as timed out — its own terminal state, never an open question', async () => {
+    render(
+      <App
+        event={withTurns([
+          turn({ kind: 'decision_gate', body: 'Ship it today?', options: ['yes', 'no'], gateStatus: 'timeout' }),
+        ])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/timed out/i);
+  });
+
+  it('states the gate’s fate even when the question offered no options', async () => {
+    // Half the live gate messages are hand-written escalations with no options at all. Their
+    // state chip must not live inside an options list they do not have.
+    render(
+      <App
+        event={withTurns([turn({ kind: 'decision_gate', body: 'Which base branch?', gateStatus: 'unanswered' })])}
+        loadTask={NO_DETAIL}
+      />
+    );
+
+    expect(await screen.findByTestId('gate-state')).toHaveTextContent(/no answer recorded/i);
   });
 });
 

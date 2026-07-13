@@ -1,8 +1,8 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/client/App.tsx';
-import type { CastMember, CoordinatorRun, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
+import type { CastMember, CoordinatorRun, Dispatch, Meta, Run, StreamEvent, Task } from '../../src/shared/types.ts';
 
 /**
  * Seam 2 (#12): `<App>` fed a canned `StreamEvent` — the client's only input.
@@ -41,13 +41,15 @@ function run(over: Partial<Run> = {}): Run {
     handle: HANDLE,
     label: 'Ship the visualizer',
     startedAt: '2026-07-11T20:54:00.000Z',
+    lastActivityAt: '2026-07-11T21:30:00.000Z',
+    converged: true,
     endedAt: '2026-07-11T21:30:00.000Z',
     taskCount: 1,
     cast: [],
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 1, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -68,6 +70,20 @@ function task(over: Partial<Task> = {}): Task {
     dispatch: null,
     attemptCount: 0,
     gate: null,
+    ...over,
+  };
+}
+
+function dispatch(assigneeHandle: string, over: Partial<Dispatch> = {}): Dispatch {
+  return {
+    id: `ctx_${assigneeHandle}`,
+    assigneeHandle,
+    status: 'dispatched',
+    failureCount: 0,
+    lastFailure: null,
+    dispatchedAt: new Date(Date.now() - 60_000).toISOString(),
+    completedAt: null,
+    lastHeartbeatAt: null,
     ...over,
   };
 }
@@ -107,6 +123,8 @@ const NEWER = run({
   handle: HANDLE,
   label: 'Ship the visualizer',
   startedAt: '2026-07-11T20:54:00.000Z',
+  lastActivityAt: '2026-07-11T21:30:00.000Z',
+  converged: false,
   endedAt: '2026-07-11T21:30:00.000Z',
   taskCount: 2,
   cast: [],
@@ -158,15 +176,6 @@ describe('the run rail', () => {
     expect(row('run_newer')).toHaveAttribute('title', HANDLE);
   });
 
-  it('marks a genuinely live run with a green dot, and a finished one without', () => {
-    render(<App event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
-
-    // The one thing that tells a running orchestration from a finished one — and the only
-    // difference between "history" and "now" in a tool that has no history mode (SPEC §7.3).
-    expect(within(row('run_newer')).getByTestId('live-dot')).toHaveAttribute('data-live', 'true');
-    expect(within(row('run_older')).getByTestId('live-dot')).toHaveAttribute('data-live', 'false');
-  });
-
   it('lists the unattributed run as a normal row rather than hiding the orphans', () => {
     const orphans = run({ id: 'run_unattributed', handle: null, label: 'Unattributed', taskCount: 4 });
 
@@ -180,6 +189,94 @@ describe('the run rail', () => {
     render(<App event={event([], [])} />);
 
     expect(screen.getByText(/No orchestrators yet/i)).toBeVisible();
+  });
+});
+
+/**
+ * Run health on the rail (SPEC §12.3): `active | silent | finished`, derived on the client from
+ * `converged`, `lastActivityAt` and a wall clock — never from `run.live`, which is deprecated
+ * wire compatibility the new client ignores (SPEC §12.4). The words are the glossary's
+ * (CONTEXT.md): a silent run is never called "ended", "dead" or "stuck" — the tool reports
+ * evidence, not a diagnosis.
+ */
+describe('run health on the rail', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function healthDot(runId: string): HTMLElement {
+    return within(row(runId)).getByTestId('health-dot');
+  }
+
+  it('shows all three states for what they are — evidence about the run, not the process', () => {
+    // Orca itself is `live` in META, and that must not drag the silent run to active — nor may
+    // the active run's recency drag the finished one away from finished (SPEC §12.1).
+    const active = run({
+      id: 'run_active',
+      converged: false,
+      lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const silent = run({
+      id: 'run_silent',
+      handle: OTHER_HANDLE,
+      converged: false,
+      lastActivityAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+      statusCounts: { pending: 0, ready: 0, dispatched: 1, completed: 0, failed: 0, blocked: 0 },
+    });
+    const finished = run({
+      id: 'run_finished',
+      handle: 'term_3c4d5e6f-1234-4321-8888-aabbccddeeff',
+      converged: true,
+      lastActivityAt: new Date(Date.now() - 30_000).toISOString(),
+    });
+
+    render(<App event={event([active, silent, finished], [])} />);
+
+    expect(healthDot('run_active')).toHaveAttribute('data-health', 'active');
+    expect(healthDot('run_silent')).toHaveAttribute('data-health', 'silent');
+    expect(healthDot('run_finished')).toHaveAttribute('data-health', 'finished');
+    // The old vocabulary is gone: an unfinished silent run is not "ended" (SPEC §7.3).
+    expect(row('run_silent')).not.toHaveTextContent('ended');
+  });
+
+  it('keeps recent activity active when Orca itself is stale — the process is a separate fact', () => {
+    const active = run({
+      id: 'run_active',
+      converged: false,
+      lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    render(<App event={{ ...event([active], []), meta: { ...META, liveness: 'stale', orcaPid: null } }} />);
+
+    // Health says what the evidence says; the shell's liveness pill says the process just
+    // exited. Both are on screen, and neither is folded into the other (SPEC §12.1).
+    expect(healthDot('run_active')).toHaveAttribute('data-health', 'active');
+    expect(screen.getByText(/showing last-known state/i)).toBeVisible();
+  });
+
+  it('crosses active → silent on the wall clock alone — a quiet database pushes no event', () => {
+    // Nine and a half minutes of silence at render; nothing further ever arrives on the
+    // stream. The shared wall clock must carry the run across the ten-minute boundary by
+    // itself (SPEC §12.3) — this is exactly the crossing a server-computed value would freeze
+    // behind the data_version gate.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(new Date('2026-07-11T22:00:00.000Z'));
+
+    const quiet = run({
+      id: 'run_quiet',
+      converged: false,
+      lastActivityAt: new Date(Date.now() - (9 * 60_000 + 30_000)).toISOString(),
+    });
+
+    render(<App event={event([quiet], [])} />);
+    expect(healthDot('run_quiet')).toHaveAttribute('data-health', 'active');
+
+    // One minute of wall-clock time later — no push, no re-render from outside.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(healthDot('run_quiet')).toHaveAttribute('data-health', 'silent');
   });
 });
 
@@ -373,20 +470,71 @@ describe('the cast', () => {
     expect(screen.getByTestId('cast-empty')).toHaveTextContent(/no terminal handle/i);
   });
 
-  it('badges an agent that is still beating, and counts its tasks when it is not', () => {
-    // "seen 12s ago" is liveness, and it replaces the task count only while the agent is *recently*
-    // alive (SPEC §4.6). A heartbeat from three hours ago is history, and a badge over a finished
-    // run would cry wolf about work that went perfectly well.
-    const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(Date.now() - 12_000).toISOString() };
-    const quiet: CastMember = { ...A2, lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() };
+  it('badges an agent with current task evidence, and counts settled work instead of crying wolf', () => {
+    const now = Date.now();
+    const beating: CastMember = { ...A1, lastHeartbeatAt: new Date(now - 12_000).toISOString() };
+    const historical: CastMember = { ...A2, lastHeartbeatAt: new Date(now - 3 * 60 * 60 * 1000).toISOString() };
+    const tasks = [
+      task({
+        id: 'task_1',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(ALICE, { lastHeartbeatAt: beating.lastHeartbeatAt }),
+      }),
+      task({
+        id: 'task_2',
+        runId: 'run_crew',
+        status: 'completed',
+        dispatch: dispatch(BOB, { status: 'completed', lastHeartbeatAt: historical.lastHeartbeatAt }),
+      }),
+    ];
 
-    render(<App event={event([run({ id: 'run_crew', cast: [beating, quiet] })], CREW_TASKS)} />);
+    render(<App event={event([run({ id: 'run_crew', cast: [beating, historical] })], tasks)} />);
 
     const [alice, bob] = screen.getAllByTestId('agent-row');
 
     expect(within(alice!).getByTestId('agent-last-seen')).toHaveTextContent(/seen 12s ago/);
     expect(within(bob!).queryByTestId('agent-last-seen')).toBeNull();
     expect(bob!).toHaveTextContent('2 tasks');
+  });
+
+  it('shows never-heartbeating health consistently in the cast and run summary', () => {
+    const now = Date.now();
+    const tasks = [
+      task({
+        id: 'task_1',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(ALICE, { dispatchedAt: new Date(now - 2 * 60_000).toISOString() }),
+      }),
+      task({
+        id: 'task_2',
+        runId: 'run_crew',
+        status: 'dispatched',
+        dispatch: dispatch(BOB, { dispatchedAt: new Date(now - 11 * 60_000).toISOString() }),
+      }),
+    ];
+
+    const crew = run({
+      id: 'run_crew',
+      cast: [A1, A2],
+      converged: false,
+      lastActivityAt: new Date(now - 2 * 60_000).toISOString(),
+    });
+    render(<App event={event([crew], tasks)} />);
+
+    const [alice, bob] = screen.getAllByTestId('agent-row');
+    expect(alice).toHaveAttribute('data-health', 'quiet');
+    expect(alice).toHaveTextContent(/dispatched 2m ago · no heartbeat/);
+    expect(bob).toHaveAttribute('data-health', 'stale');
+    expect(bob).toHaveTextContent(/dispatched 11m ago · no heartbeat/);
+
+    const summary = within(row('run_crew')).getByTestId('run-worker-health');
+    expect(summary).toHaveAttribute('data-health', 'stale');
+    expect(summary).toHaveTextContent('1 stale without heartbeat · 1 awaiting heartbeat');
+    // #48 owns run health (`converged` + `lastActivityAt`); worker health is additive and does
+    // not rewrite that semantic — a stale worker leaves a recently active run `active`.
+    expect(within(row('run_crew')).getByTestId('health-dot')).toHaveAttribute('data-health', 'active');
   });
 
   it('drops the agent when the rail moves to another orchestrator', async () => {

@@ -248,7 +248,10 @@ describe('a question, and its answer', () => {
       body: 'Keep the accent, or invert it?',
       options: ['keep', 'invert'],
       answer: 'keep', // …so the panel can tick the option that was taken.
+      gateStatus: 'resolved',
     });
+    // A resolved question blocks nothing, and a false field is 360 × 16 bytes of nothing (`Turn`).
+    expect(gate.blocking).toBeUndefined();
 
     expect(answer).toMatchObject({
       direction: 'out',
@@ -262,7 +265,7 @@ describe('a question, and its answer', () => {
     expect(turns.indexOf(gate)).toBeLessThan(turns.indexOf(answer));
   });
 
-  it('leaves an unanswered gate with a null answer — that is what an open question is', async () => {
+  it('leaves an unanswered gate with no answer — no answer recorded is all silence proves', async () => {
     const turns = await turnsOf(
       new FixtureBuilder()
         .task({ id: 'task_1', handle: BOSS, status: 'dispatched', createdAt: at(0) })
@@ -282,10 +285,80 @@ describe('a question, and its answer', () => {
     // Absent, not null: a field with nothing to say does not say it, because the snapshot is
     // re-sent whole every five seconds (`Turn`).
     expect(gate.answer).toBeUndefined();
+    expect(gate.gateStatus).toBe('unanswered');
+    // The task is `dispatched` — work is moving, so this reply-less ask blocks nothing (#45),
+    // and the panel must say "no answer recorded" rather than "waiting".
+    expect(gate.blocking).toBeUndefined();
     // Half the live database's gate messages carry no `payload.question` — the worker wrote it in
     // the subject. Reading the payload alone would leave this bubble blank.
     expect(gate.body).toBe('Should the scroller be a block, or inherit?');
     expect(turns.some((turn) => turn.kind === 'answer')).toBe(false);
+  });
+
+  it('says out loud when an unanswered question is blocking now — its task is authoritatively blocked', async () => {
+    const turns = await turnsOf(
+      new FixtureBuilder()
+        .task({ id: 'task_1', handle: BOSS, status: 'blocked', createdAt: at(0) })
+        .dispatch({ taskId: 'task_1', assigneeHandle: ALICE, dispatchedAt: at(MINUTE) })
+        .message({
+          type: 'decision_gate',
+          fromHandle: ALICE,
+          toHandle: BOSS,
+          subject: 'Which base branch?',
+          payload: { taskId: 'task_1', dispatchId: 'ctx_1' },
+          createdAt: at(20 * MINUTE),
+        })
+    );
+
+    const gate = turns.find((turn) => turn.kind === 'decision_gate')!;
+
+    expect(gate).toMatchObject({ gateStatus: 'unanswered', blocking: true });
+    expect(gate.answer).toBeUndefined();
+  });
+
+  it("carries a Coordinator row twin's authoritative lifecycle onto the turn — resolution and timeout alike", async () => {
+    // The #45 collision, as the conversation sees it: resolution lives only in the
+    // `decision_gates` row, and a panel reading threads alone would show this question
+    // as waiting forever.
+    const gateId = syntheticId('msg', 'the-twin');
+
+    const builder = new FixtureBuilder()
+      .task({ id: 'task_1', handle: BOSS, status: 'dispatched', createdAt: at(0) })
+      .dispatch({ taskId: 'task_1', assigneeHandle: ALICE, dispatchedAt: at(MINUTE) })
+      .message({
+        id: gateId,
+        type: 'decision_gate',
+        fromHandle: ALICE,
+        toHandle: BOSS,
+        subject: 'Decision needed',
+        payload: { taskId: 'task_1', question: 'Keep the accent, or invert it?', options: ['keep', 'invert'] },
+        createdAt: at(20 * MINUTE),
+      })
+      .gate({
+        taskId: 'task_1',
+        question: 'Keep the accent, or invert it?',
+        status: 'resolved',
+        resolution: 'keep',
+        createdAt: at(21 * MINUTE),
+      })
+      .message({
+        type: 'decision_gate',
+        fromHandle: ALICE,
+        toHandle: BOSS,
+        subject: 'Decision needed',
+        payload: { taskId: 'task_1', question: 'Ship it today?', options: ['yes', 'no'] },
+        createdAt: at(30 * MINUTE),
+      })
+      .gate({ taskId: 'task_1', question: 'Ship it today?', status: 'timeout', createdAt: at(31 * MINUTE) });
+
+    const turns = await turnsOf(builder);
+    const gates = turns.filter((turn) => turn.kind === 'decision_gate');
+
+    // No reply threaded on either message — the row is the only record, and it is enough.
+    expect(gates[0]).toMatchObject({ gateStatus: 'resolved', answer: 'keep' });
+    expect(gates[1]).toMatchObject({ gateStatus: 'timeout' });
+    expect(gates[1]!.answer).toBeUndefined();
+    expect(gates[1]!.blocking).toBeUndefined(); // timeout is terminal — never a blocker (#45)
   });
 });
 

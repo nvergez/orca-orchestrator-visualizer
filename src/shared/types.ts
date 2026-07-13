@@ -20,6 +20,24 @@
 export const TASK_STATUSES = ['pending', 'ready', 'dispatched', 'completed', 'failed', 'blocked'] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * **The statuses that end a task's story** — and the definition of *Convergence* (CONTEXT.md).
+ *
+ * `pending`, `ready`, `dispatched` and `blocked` are work that can still move. A status this
+ * build has never heard of is conservatively *not* terminal: render-what-parses cannot prove an
+ * unknown status is an ending (SPEC §5, §12.1).
+ *
+ * Shared, and not restated per module, for the reason `STALE_HEARTBEAT_MS` is: the server asks
+ * this to decide whether a run has converged (`server/runs.ts`) and the client asks it to decide
+ * whether a task can still be intervened on (`client/attention.ts`). Two lists would eventually
+ * be two answers, and they are answers to one question.
+ */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set<TaskStatus>(['completed', 'failed']);
+
+export function isTerminalStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
 export type DispatchStatus = 'pending' | 'dispatched' | 'completed' | 'failed' | 'circuit_broken';
 export type MessageType =
   | 'status'
@@ -126,6 +144,21 @@ export type Run = {
   handle: string | null;
   label: string;
   startedAt: string;
+  /**
+   * When recorded work on this run last happened: the newest readable instant across every
+   * task's creation and completion and every dispatch attempt's dispatch, completion, last
+   * heartbeat and last failure — all attempts, not just the surviving one (SPEC §12.2). It is
+   * evidence of activity, never proof that a process is still running; health is derived from
+   * it, and from `converged`, by `runHealth` (`run-health.ts`).
+   */
+  lastActivityAt: string;
+  /**
+   * Every task has a known terminal status — `completed` or `failed` (SPEC §12.1). `pending`,
+   * `ready`, `dispatched`, `blocked` and any status this build has never heard of are not
+   * converged: render-what-parses cannot prove an unknown status terminal.
+   */
+  converged: boolean;
+  /** @deprecated Exact alias of `lastActivityAt` during the additive migration (SPEC §12.4). */
   endedAt: string;
   taskCount: number;
   /** The agents this orchestrator spawned, in first-dispatch order (`cast.ts`). */
@@ -139,8 +172,15 @@ export type Run = {
    * a task the rail lies about.
    */
   statusCounts: Record<TaskStatus | string, number>;
+  /**
+   * @deprecated Snapshot-time compatibility projection — `meta.liveness === 'live' &&
+   * runHealth(run, snapshotNow) === 'active'` (SPEC §12.4). It fixes the old false-positive
+   * green dots but cannot say `silent` from `finished`; new clients ignore it and derive
+   * `RunHealth` themselves. Removed only under a separately versioned breaking wire contract.
+   */
   live: boolean;
-  hasOpenGates: boolean;
+  /** True exactly when a gate attributed to this run has `blocking: true` (SPEC §4.5, #45). */
+  hasBlockingGates: boolean;
   /** 0 ⇒ the edgeless empty state (SPEC §7.5). */
   edgeCount: number;
 };
@@ -158,12 +198,12 @@ export type Dispatch = {
 };
 
 /**
- * A decision blocking an orchestration — **derived from `decision_gate` messages, never from
- * the `decision_gates` table** (SPEC §4.5, and the trap in §4.2 that the whole of #19 is).
+ * One normalized decision gate — **derived primarily from `decision_gate` messages, enriched by
+ * authoritative `decision_gates` rows** (SPEC §4.5; the trap in §4.2 that the whole of #19 is,
+ * and the collision #45 found inside it).
  *
- * The locked shape of #12 is `{ messageId, question, options, status, resolution }`, and every
- * one of those fields means exactly what it did. Four things are added to it, and each of them
- * is a thing the locked rulings *require* and the locked shape had nowhere to put:
+ * The locked shape of #12 is `{ messageId, question, options, status, resolution }`. Four
+ * things were added by #19 because the locked rulings required a home for them:
  *
  * - **`runId` / `taskId`.** "A gate with a `payload.taskId` attaches to that task; one without
  *   attaches to its **run** and to **no node**." A gate is therefore not always a *task's*
@@ -177,21 +217,44 @@ export type Dispatch = {
  *   as a table row". It is never null for a gate a real `orchestration.ask` created.
  * - **`createdAt`.** When it was asked. The strip shows the oldest blocker first, and a gate
  *   with no instant cannot be ordered against one that has one.
+ *
+ * And #45 split what used to be one ambiguous `open | resolved` pair into **two separate
+ * facts** (CONTEXT.md, ADR 0001): `status` is the gate's recorded lifecycle, and `blocking` is
+ * its present effect. The database cannot distinguish an ask that is still waiting from one
+ * that timed out unrecorded, so "no reply" stopped being treated as proof of a block.
  */
 export type Gate = {
   /** The gate message's id, or — for a table-only gate — the `decision_gates` row's. */
   id: string;
   /** The `decision_gate` message that asked it. Null when only the gate table knows about it. */
   messageId: string | null;
-  /** The run it blocks. Null when nothing in the schema says which one. */
+  /** The run it belongs to. Null when nothing in the schema says which one. */
   runId: string | null;
-  /** The task it blocks, when it names one that still exists. Null ⇒ it marks no node. */
+  /** The task it names, when that task still exists. Null ⇒ it marks no node. */
   taskId: string | null;
   question: string;
   options: string[];
-  /** Resolved ⇔ a reply threads on the gate message's id. There is no third state (SPEC §4.2, trap 9). */
-  status: 'open' | 'resolved';
-  /** The reply's body. Null while the gate is open. */
+  /**
+   * The recorded lifecycle, and only what the database proves (SPEC §4.5):
+   *
+   * - `pending` | `resolved` | `timeout` — a `decision_gates` row's own status, authoritative
+   *   whenever a row exists. `timeout` is a distinct terminal state, never folded away.
+   * - `resolved` — also a message-only gate a reply threaded on (the reply is the resolution).
+   * - `unanswered` — a message with neither a threaded reply nor a matching row. It proves no
+   *   answer was recorded — **not** that anything is still waiting: `orchestration.ask` never
+   *   persists its timeout (SPEC §4.2, trap 9), so age and silence prove nothing more. A row
+   *   status this build has never seen also degrades here: it proves the question was raised,
+   *   not that work is paused (SPEC §4.5's conservative-blocking rule, `server/gates.ts`).
+   */
+  status: 'pending' | 'resolved' | 'timeout' | 'unanswered';
+  /**
+   * The present blocker signal — what raises the strip, the ⛔ marker, the rail flag and
+   * `Run.hasBlockingGates` — separate from the lifecycle state and conservative (#45): a
+   * `pending` row blocks; terminal states never do; an `unanswered` ask blocks only while it
+   * names an existing task whose current authoritative status is `blocked`.
+   */
+  blocking: boolean;
+  /** The recorded decision: the row's `resolution`, or the threaded reply's body. Null when none. */
   resolution: string | null;
   /** Normalized to ISO, like every other instant on the wire. */
   createdAt: string;
@@ -215,9 +278,10 @@ export type Task = {
   /** > 1 ⇒ this task was retried. */
   attemptCount: number;
   /**
-   * The gate this node wears: the open one it is blocked on, or — when nothing is blocking —
-   * the last one it answered. A task can raise several, and `snapshot.gates` has them all; a
-   * *node* has room for the one that decides its ⛔ marker (SPEC §7.5).
+   * The gate this node wears: the oldest one still *blocking* it, or — when nothing blocks —
+   * the latest one, kept for the task's history (SPEC §4.5, #45). A task can raise several,
+   * and `snapshot.gates` has them all; a *node* has room for the one that decides its ⛔
+   * marker (SPEC §7.5).
    */
   gate: Gate | null;
 };
@@ -321,8 +385,12 @@ export type Turn = {
   truncated?: boolean;
   /** A gate's options. Absent for everything that is not a gate. */
   options?: string[];
-  /** A gate's answer, when one threaded on it. Absent ⇒ the question is still open. */
+  /** A gate's recorded answer — the row's resolution or the threaded reply. Absent ⇒ none recorded. */
   answer?: string;
+  /** A gate turn's lifecycle state (`Gate.status`). Absent for everything that is not a gate. */
+  gateStatus?: Gate['status'];
+  /** True ⇔ the gate is blocking *now* (`Gate.blocking`). Absent when it is not, and on non-gates. */
+  blocking?: boolean;
   /** How many beats a `heartbeats` row is standing in for. Absent on every other kind. */
   beatCount?: number;
   /** The last beat of a `heartbeats` row, so the panel can say "every ~5 min". Absent elsewhere. */
