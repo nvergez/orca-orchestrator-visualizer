@@ -1,9 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CannedApp, type CannedEvent } from './canned.tsx';
+import { CannedApp, type CannedEvent, historyOf, reportOf } from './canned.tsx';
 import { FakeMatchMedia, MOBILE_QUERY } from './fake-match-media.ts';
+import { App } from '../../src/client/App.tsx';
 import type { TaskLoader } from '../../src/client/inspector/detail.ts';
+import type { ReportLoader } from '../../src/client/report/query.ts';
 import type { CastMember, Dispatch, Meta, Run, Task, TaskDetail, Turn } from '../../src/shared/types.ts';
 
 /**
@@ -308,6 +310,17 @@ describe('ranking and filtering are the server’s — the panel only asks', () 
     await userEvent.selectOptions(agents, BOB);
     expect(rows().map((row) => row.dataset.task)).toEqual([ELSEWHERE]);
   });
+
+  it('offers "no agent on record" in the same select — the column’s missing value is findable', async () => {
+    render(<CannedApp event={event()} loadTask={NO_DETAIL} />);
+    const panel = await open();
+
+    // One control, two questions: which agent, and *no agent at all*. A select that only offered
+    // handles could never ask the second, and the second is the one a stalled task answers.
+    await userEvent.selectOptions(within(panel).getByTestId('report-filter-agent'), 'none');
+
+    expect(rows().map((row) => row.dataset.task)).toEqual([STALLED]);
+  });
 });
 
 /** 60 tasks in one run: one page of 50, and an explicit way down to the other 10. */
@@ -340,6 +353,29 @@ describe('paging', () => {
     expect(rows()).toHaveLength(60);
     // History ends where the button stops rendering — which is where the server said it ends.
     expect(within(panel).queryByTestId('report-more')).not.toBeInTheDocument();
+  });
+});
+
+describe('a page that did not arrive says so', () => {
+  it('does not let "Load older rows" fail in silence', async () => {
+    const world = manyTasks();
+    const loader = reportOf(world);
+    // The first page lands; the page behind the cursor does not. A button that quietly did nothing
+    // would leave the reader believing those rows are not there — which is the one thing "older
+    // history is explicit" (SPEC §12.4) exists to prevent.
+    const flaky: ReportLoader = (search) =>
+      search.includes('cursor=') ? Promise.reject(new Error('the wire hung up')) : loader(search);
+
+    render(<App event={world} loadTask={NO_DETAIL} loadHistory={historyOf(world)} loadReport={flaky} />);
+    const panel = await open();
+
+    await userEvent.click(within(panel).getByTestId('report-more'));
+
+    expect(await within(panel).findByTestId('report-more-failed')).toHaveTextContent(/did not arrive/i);
+    // The rows that did land are still there, and the button is still standing: pressing it again
+    // *is* the retry, because the cursor never moved.
+    expect(rows()).toHaveLength(50);
+    expect(within(panel).getByTestId('report-more')).toBeVisible();
   });
 });
 

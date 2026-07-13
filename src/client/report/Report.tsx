@@ -18,6 +18,7 @@ import { CHIP_CLASS } from '../chip.ts';
 import { Duration } from '../duration.tsx';
 import { enter, SPRING } from '../motion.ts';
 import { ReceiptFacts } from '../receipt.tsx';
+import { localInstant } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import { useIsMobile } from '../viewport.tsx';
 import { DEFAULT_VIEW, isFiltered, type ReportLoader, type ReportView, useReport } from './query.ts';
@@ -54,6 +55,17 @@ const COLUMNS: Record<ReportSort, string> = {
   failures: 'Failures',
 };
 
+/** Every header reads the same, sortable or not — one string, so they cannot drift apart. */
+const HEADER_CLASS = 'px-3 py-2 text-[10px] font-semibold tracking-widest uppercase';
+
+/**
+ * The Agent select's "no agent" option. A `<select>` value is a string, and this one is not a
+ * handle — it is the *absence* of one, and it maps to the presence filter (`agent=missing`)
+ * rather than travelling as a cast handle nobody has. It cannot collide with a real handle:
+ * Orca's are `term_<uuid>`.
+ */
+const NO_AGENT = 'none';
+
 export type ReportProps = {
   event: StreamEvent | null;
   /** The loaded run index — where the run and cast-member filter options come from. */
@@ -66,7 +78,7 @@ export type ReportProps = {
 
 export function Report({ event, runs, load, onSelectRow, onClose }: ReportProps) {
   const [view, setView] = useState<ReportView>(DEFAULT_VIEW);
-  const { ready, rows, total, hasMore, loadMore, failed } = useReport(true, event, view, load);
+  const { ready, rows, total, hasMore, loadMore, failed, moreFailed } = useReport(event, view, load);
 
   // Nine columns do not fit a phone, and the page may not scroll sideways to hide the fact
   // (`docs/design/mobile.md`). Below `lg` the same rows fold into cards — a *behavior* classes
@@ -212,14 +224,25 @@ export function Report({ event, runs, load, onSelectRow, onClose }: ReportProps)
             )}
 
             {hasMore && (
-              <button
-                type="button"
-                data-testid="report-more"
-                onClick={loadMore}
-                className={cn(CHIP_CLASS, 'mx-3 my-3 cursor-pointer max-lg:py-1.5')}
-              >
-                Load older rows
-              </button>
+              <div className="flex flex-wrap items-center gap-2 px-3 py-3">
+                <button
+                  type="button"
+                  data-testid="report-more"
+                  onClick={loadMore}
+                  className={cn(CHIP_CLASS, 'cursor-pointer max-lg:py-1.5')}
+                >
+                  Load older rows
+                </button>
+
+                {/* Pressing the button again *is* the retry — the cursor never moved. What is owed
+                    is that the failure be said: a page of history that silently did not arrive is
+                    history the reader now believes is not there. */}
+                {moreFailed && (
+                  <p role="status" data-testid="report-more-failed" className="text-muted-foreground text-[11px]">
+                    Those rows did not arrive. Try again.
+                  </p>
+                )}
+              </div>
             )}
           </ScrollArea>
         )}
@@ -252,7 +275,7 @@ const Fact = {
       // task, and a blank cell would read as a rendering bug rather than as the answer.
       <Missing>{row.attemptCount === 0 ? 'never dispatched' : 'unknown'}</Missing>
     ) : (
-      <span className="whitespace-nowrap tabular-nums">{formatInstant(row.dispatchedAt)}</span>
+      <span className="whitespace-nowrap tabular-nums">{localInstant(row.dispatchedAt)}</span>
     ),
 
   // #66's observation, whole: the clock it read is in the tooltip, and an open interval ages
@@ -400,7 +423,7 @@ function SortChips({ view, onSort }: { view: ReportView; onSort: (sort: ReportSo
             className={cn(CHIP_CLASS, 'cursor-pointer py-1.5', active && 'text-foreground border-selection/40')}
           >
             {COLUMNS[sort]}
-            {active && (view.dir === 'asc' ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
+            <SortArrow view={view} active={active} />
           </button>
         );
       })}
@@ -421,7 +444,7 @@ function Missing({ children }: { children: string }) {
 }
 
 function Th({ children }: { children: string }) {
-  return <th className="px-3 py-2 text-[10px] font-semibold tracking-widest uppercase">{children}</th>;
+  return <th className={HEADER_CLASS}>{children}</th>;
 }
 
 /** A column that ranks. Clicking it again turns the ranking round; the server does the ranking. */
@@ -437,10 +460,7 @@ function SortableTh({
   const active = view.sort === sort;
 
   return (
-    <th
-      aria-sort={active ? (view.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-      className="px-3 py-2 text-[10px] font-semibold tracking-widest uppercase"
-    >
+    <th aria-sort={active ? (view.dir === 'asc' ? 'ascending' : 'descending') : 'none'} className={HEADER_CLASS}>
       <button
         type="button"
         data-testid={`report-sort-${sort}`}
@@ -451,11 +471,16 @@ function SortableTh({
         )}
       >
         {COLUMNS[sort]}
-        {active &&
-          (view.dir === 'asc' ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
+        <SortArrow view={view} active={active} />
       </button>
     </th>
   );
+}
+
+/** Which way the ranking runs — drawn once, for the header and the folded chip alike. */
+function SortArrow({ view, active }: { view: ReportView; active: boolean }) {
+  if (!active) return null;
+  return view.dir === 'asc' ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />;
 }
 
 function Td({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -523,12 +548,27 @@ function Filters({
         onChange={(status) => onChange({ ...view, status })}
       />
 
+      {/*
+        One control, two query dimensions — because "which agent" and "no agent at all" are two
+        different questions and a select that only offered handles could never ask the second. The
+        options are the cast; `none` asks the presence filter instead (`agent=missing`), which is
+        how a value the column *renders* as missing stays a value a reader can find (SPEC §12.4).
+      */}
       <Select
         testId="report-filter-agent"
         label="Agent"
-        value={view.agent}
-        options={agents.map((agent) => ({ value: agent.handle, label: agent.label }))}
-        onChange={(agent) => onChange({ ...view, agent })}
+        value={view.agent === 'missing' ? NO_AGENT : view.cast}
+        options={[
+          { value: NO_AGENT, label: 'none — no agent on record' },
+          ...agents.map((agent) => ({ value: agent.handle, label: agent.label })),
+        ]}
+        onChange={(chosen) =>
+          onChange({
+            ...view,
+            cast: chosen === NO_AGENT ? null : chosen,
+            agent: chosen === NO_AGENT ? 'missing' : 'any',
+          })
+        }
       />
 
       <Presence
@@ -649,8 +689,3 @@ function Select({
   );
 }
 
-/** An instant a person can place, in their own timezone — the tool's one formatting of a date. */
-function formatInstant(iso: string): string {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
-}

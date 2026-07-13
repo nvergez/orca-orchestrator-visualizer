@@ -172,6 +172,9 @@ export class OrcaDatabase {
     // and disagree with itself the moment Orca wrote a row between the two reads.
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
 
+    /** Memoized behind the getter below: merged at most once per read, and only if asked for. */
+    let receipts: Map<string, ReceiptFact[]> | undefined;
+
     return {
       liveness,
       evidence: {
@@ -190,50 +193,20 @@ export class OrcaDatabase {
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
         // The recognized outcome facts of both evidence columns, per task (#67) — what the
         // report's compact summary is a cap of, and the inspector's receipt is the whole of.
-        receiptsByTask: this.receiptsOf(entries, messages),
+        //
+        // **Merged on first read, and only the report ever reads it** (#70). Every other
+        // projection of this evidence — the stream event, the run index, the selected-run
+        // snapshot, the digests — runs on the poll loop, five seconds apart, for ever; a machine-
+        // wide receipt merge they would all pay for and none of them would look at is exactly the
+        // per-tick cost §12.1 says these features must not add.
+        get receiptsByTask() {
+          return (receipts ??= receiptsOf(entries, messages));
+        },
       },
       messages,
     };
   }
 
-  /**
-   * The whole outcome receipt of every task that has one (#67) — read **once**, for the report
-   * that asks it of every task at once (#70).
-   *
-   * It is the inspector's reading, exactly (`task-detail.ts`): `tasks.result` merged with every
-   * `worker_done` payload that named the task, agreement deduplicating into one fact with two
-   * provenances and conflict staying two facts. The two must be one reading — a row that
-   * summarized an outcome the panel behind it does not show would be the report inventing a
-   * second truth about a task, which is the one thing #70 is not allowed to do.
-   *
-   * The messages are the ones already read for the conversation, so this costs a pass over rows
-   * that are in hand, never a second query — and a per-task scan of the log (O(tasks × messages))
-   * is exactly what building it here avoids.
-   */
-  private receiptsOf(entries: TaskWithHandle[], messages: FeedMessage[]): Map<string, ReceiptFact[]> {
-    const completions = new Map<string, unknown[]>();
-
-    for (const message of messages) {
-      // `taskId` is the attribution the rest of the server already made (SPEC §4.4): a payload
-      // that names no task that still exists names no task, and is not guessed into one here.
-      if (message.type !== 'worker_done' || message.taskId === null) continue;
-      const held = completions.get(message.taskId);
-      if (held) held.push(message.payload);
-      else completions.set(message.taskId, [message.payload]);
-    }
-
-    const receipts = new Map<string, ReceiptFact[]>();
-
-    for (const entry of entries) {
-      const done = completions.get(entry.task.id) ?? [];
-      // The result column was read whole and recognized in `tasks.ts`; the payloads are parsed
-      // already (`readMessages`). Nothing here re-parses either — it merges two readings.
-      const facts = mergeReceipts(entry.resultReceipt, ...done.map((payload) => receiptOfWorkerDone(payload)));
-      if (facts.length > 0) receipts.set(entry.task.id, facts);
-    }
-
-    return receipts;
-  }
 
   /** The header every payload carries. Re-derived on every call, never cached (SPEC §6.1). */
   private metaOf(liveness: LivenessReport): Meta {
@@ -369,6 +342,44 @@ export class OrcaDatabase {
   close(): void {
     this.db.close();
   }
+}
+
+/**
+ * The whole outcome receipt of every task that has one (#67) — merged **once**, for the report
+ * that asks it of every task at once (#70).
+ *
+ * It is the inspector's reading, exactly (`task-detail.ts`): `tasks.result` merged with every
+ * `worker_done` payload that named the task, agreement deduplicating into one fact with two
+ * provenances and conflict staying two facts. The two have to *be* one reading — a row that
+ * summarized an outcome the panel behind it does not show would be the report inventing a second
+ * truth about a task, which is the one thing #70 is not allowed to do.
+ *
+ * Everything it reads is already in hand: the result column was recognized as the tasks were read
+ * (`tasks.ts`), and the payloads were parsed as the messages were (`readMessages`). So it is a
+ * pass over rows, never a second query — and never the per-task scan of the log that a merge done
+ * inside the row loop would be (O(tasks × messages)).
+ */
+function receiptsOf(entries: TaskWithHandle[], messages: FeedMessage[]): Map<string, ReceiptFact[]> {
+  const completions = new Map<string, unknown[]>();
+
+  for (const message of messages) {
+    // `taskId` is the attribution the rest of the server already made (SPEC §4.4): a payload that
+    // names no task that still exists names no task, and is not guessed into one here.
+    if (message.type !== 'worker_done' || message.taskId === null) continue;
+    const held = completions.get(message.taskId);
+    if (held) held.push(message.payload);
+    else completions.set(message.taskId, [message.payload]);
+  }
+
+  const receipts = new Map<string, ReceiptFact[]>();
+
+  for (const entry of entries) {
+    const done = completions.get(entry.task.id) ?? [];
+    const facts = mergeReceipts(entry.resultReceipt, ...done.map((payload) => receiptOfWorkerDone(payload)));
+    if (facts.length > 0) receipts.set(entry.task.id, facts);
+  }
+
+  return receipts;
 }
 
 /**

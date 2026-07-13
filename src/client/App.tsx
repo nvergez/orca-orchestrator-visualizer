@@ -20,6 +20,7 @@ import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/det
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
 import { RunRail } from './rail/RunRail.tsx';
+import { localInstant } from './relative-time.ts';
 import { fetchReport, type ReportLoader } from './report/query.ts';
 import { Report } from './report/Report.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
@@ -628,7 +629,7 @@ function Status({ meta }: { meta: Meta }) {
       <RadarDot live={live} />
       {/* The sentence is the spec's, down to the word (`wording.ts`) — the capital is the
           stylesheet's, because a sentence in a pill still starts like a sentence. */}
-      <span className="first-letter:uppercase">{livenessSentence(meta, formatTime)}.</span>
+      <span className="first-letter:uppercase">{livenessSentence(meta, localInstant)}.</span>
     </p>
   );
 }
@@ -658,7 +659,7 @@ function Source({ meta }: { meta: Meta }) {
 
       <div className="hidden shrink-0 items-center gap-1.5 lg:flex" title="When this database was last written to">
         <dt className="opacity-70">Last write</dt>
-        <dd className="m-0 tabular-nums">{formatTime(meta.dbMtime)}</dd>
+        <dd className="m-0 tabular-nums">{localInstant(meta.dbMtime)}</dd>
       </div>
     </dl>
   );
@@ -814,8 +815,3 @@ function Connecting() {
   );
 }
 
-/** An instant a person can place, in their own timezone. */
-function formatTime(iso: string): string {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
-}

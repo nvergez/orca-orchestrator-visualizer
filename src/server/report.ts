@@ -1,4 +1,5 @@
 import {
+  type DurationObservation,
   REPORT_PRESENCE,
   REPORT_SORTS,
   type ReportDirection,
@@ -64,14 +65,35 @@ export type ReportQuery = {
   cursor: string | null;
   sort: ReportSort;
   dir: ReportDirection;
-  /** Empty ⇒ every run. Several ⇒ any of them (a filter widens; it does not intersect itself). */
+  /**
+   * Empty ⇒ every run. Several ⇒ any of them: a repeated key in a query string is a list, and
+   * reading only the first of them would be the silent ignore this module refuses everywhere else.
+   */
   runIds: string[];
   /** Raw status strings — an Orca status this build never heard of is filterable under its own name. */
   statuses: string[];
   /** Cast-member handles. A row matches on the handle of its **latest** attempt, which is the one it shows. */
-  agents: string[];
-  /** `missing` ⇒ never dispatched. The stalled-work filter, and the reason those rows exist. */
+  castHandles: string[];
+  /**
+   * **A readable dispatch time, present or missing** — and `missing` is the stalled-work filter,
+   * the question a rail of runs cannot be asked.
+   *
+   * It reads the *instant*, not the attempt count, so it catches all three ways a task can fail to
+   * have a dispatch time: nothing ever dispatched it (`attemptCount: 0`), its attempt recorded no
+   * instant, or the instant it recorded is not one a clock can read (`time.ts` passes an
+   * unparseable timestamp through verbatim rather than dropping the row — SPEC §5). All three are
+   * "no dispatch time you can rank or range on", which is what this filter is named after, and it
+   * is the same readability the sort and the time range read. The *row* still shows what the
+   * column held, and says which of the three it is.
+   */
   dispatch: ReportPresence;
+  /**
+   * **A named agent, present or missing.** Missing is a task no terminal is on record as holding:
+   * never dispatched, or dispatched by a `dispatch_contexts` row that named nobody. The cast
+   * refuses to name an empty handle (`cast.ts`), so there is no handle to filter it by — and a
+   * value that renders as missing has to be *findable* as missing (SPEC §12.4).
+   */
+  agent: ReportPresence;
   /** `missing` ⇒ nothing recognized in either evidence column (#67) — not "produced nothing". */
   outcome: ReportPresence;
   /**
@@ -91,12 +113,16 @@ export const DEFAULT_QUERY: ReportQuery = {
   dir: 'desc',
   runIds: [],
   statuses: [],
-  agents: [],
+  castHandles: [],
   dispatch: 'any',
+  agent: 'any',
   outcome: 'any',
   from: null,
   to: null,
 };
+
+/** Every key this endpoint reads. A key that is not one of these is a typo, and it is refused. */
+const QUERY_KEYS = ['cursor', 'sort', 'dir', 'run', 'status', 'cast', 'dispatch', 'agent', 'outcome', 'from', 'to'];
 
 /**
  * Read a query off the URL, and **refuse what it cannot honour** (SPEC §3, the
@@ -104,10 +130,22 @@ export const DEFAULT_QUERY: ReportQuery = {
  * the user a different slice of history than the one they asked for, and nothing on screen would
  * say so — so it is a 400, with the key it did not recognize in it.
  *
+ * An unknown *key* is refused for exactly the same reason a bad *value* is: `?runId=run_x` is a
+ * typo for `?run=run_x`, and the whole unfiltered report answered under it looks like a report
+ * with a filter on. A query string this endpoint half-understands is one it must not answer.
+ *
  * `URLSearchParams` and nothing Node-only, so the client can build the same query it will be
  * answered on.
  */
 export function parseReportQuery(params: URLSearchParams): ReportQuery {
+  for (const key of params.keys()) {
+    if (!QUERY_KEYS.includes(key)) {
+      throw new ReportQueryError(
+        `Not a filter this report knows: ${JSON.stringify(key)}. It reads: ${QUERY_KEYS.join(', ')}.`
+      );
+    }
+  }
+
   const from = instant(params.get('from'), 'from');
   const to = instant(params.get('to'), 'to');
 
@@ -122,8 +160,9 @@ export function parseReportQuery(params: URLSearchParams): ReportQuery {
     dir: oneOf(params.get('dir'), ['asc', 'desc'] as const, DEFAULT_QUERY.dir, 'dir'),
     runIds: params.getAll('run'),
     statuses: params.getAll('status'),
-    agents: params.getAll('agent'),
+    castHandles: params.getAll('cast'),
     dispatch: oneOf(params.get('dispatch'), REPORT_PRESENCE, DEFAULT_QUERY.dispatch, 'dispatch'),
+    agent: oneOf(params.get('agent'), REPORT_PRESENCE, DEFAULT_QUERY.agent, 'agent'),
     outcome: oneOf(params.get('outcome'), REPORT_PRESENCE, DEFAULT_QUERY.outcome, 'outcome'),
     from,
     to,
@@ -238,11 +277,18 @@ function agentOf(handle: string, run: Run | undefined): { handle: string; monogr
 function matches(row: ReportRow, query: ReportQuery): boolean {
   if (query.runIds.length > 0 && !query.runIds.includes(row.runId)) return false;
   if (query.statuses.length > 0 && !query.statuses.includes(row.status)) return false;
-  if (query.agents.length > 0 && (row.agent === null || !query.agents.includes(row.agent.handle))) return false;
+  if (query.castHandles.length > 0 && (row.agent === null || !query.castHandles.includes(row.agent.handle))) {
+    return false;
+  }
 
-  // Never dispatched is `attemptCount: 0` — not "no readable instant", which is a dispatched
-  // task whose column is unreadable, and which `dispatch=present` must keep.
-  if (!present(query.dispatch, row.attemptCount > 0)) return false;
+  // Each presence filter reads the **column it is named after**, so that every value the report
+  // renders as missing is a value it can be *asked* for (SPEC §12.4). "Present" for a dispatch
+  // time means *readable*: it is the same reading the sort and the time range make, so a row this
+  // filter calls present is exactly a row those two can place. Never dispatched, no instant
+  // recorded, and an instant nothing can parse all land together — and the row is where they are
+  // told apart, because it shows what the column actually held.
+  if (!present(query.dispatch, instantOf(row.dispatchedAt) !== null)) return false;
+  if (!present(query.agent, row.agent !== null)) return false;
   if (!present(query.outcome, row.outcome !== undefined)) return false;
 
   if (query.from !== null || query.to !== null) {
@@ -279,10 +325,8 @@ function keyOf(row: ReportRow, sort: ReportSort): string | number | null {
   switch (sort) {
     case 'dispatched':
       return instantOf(row.dispatchedAt);
-    // An *open* interval is not a measured length — "3h so far" on a running task would sort
-    // above a finished 2h one and mean nothing by it. Only a complete observation carries `ms`.
     case 'duration':
-      return row.duration?.complete === true ? (row.duration.ms ?? null) : null;
+      return lengthOf(row.duration);
     case 'attempts':
       return row.attemptCount;
     case 'failures':
@@ -290,6 +334,26 @@ function keyOf(row: ReportRow, sort: ReportSort): string | number | null {
     case 'title':
       return row.title;
   }
+}
+
+/**
+ * How long a *finished* interval ran — the only kind that has a length to rank.
+ *
+ * An **open** interval has none: "3h so far" on a task still running would sort above a finished
+ * 2h one and mean nothing by it, so it ranks as unknown and sorts last, where the absences go.
+ *
+ * `ms` is optional on the wire and must agree with the endpoints it rides with (`types.ts`), so
+ * the endpoints are the fallback and never a second opinion — the same reading the client's
+ * `readDuration` makes of the same object, because two readings of one observation is one more
+ * than this tool is allowed.
+ */
+function lengthOf(duration: DurationObservation | undefined): number | null {
+  if (duration === undefined || !duration.complete) return null;
+  if (duration.ms !== undefined) return duration.ms;
+
+  const start = instantOf(duration.startAt);
+  const end = instantOf(duration.endAt ?? null);
+  return start === null || end === null ? null : end - start;
 }
 
 function comparator(sort: ReportSort, dir: ReportDirection): (a: ReportRow, b: ReportRow) => number {

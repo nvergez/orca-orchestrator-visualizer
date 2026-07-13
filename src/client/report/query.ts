@@ -48,8 +48,14 @@ export type ReportView = {
   dir: ReportDirection;
   runId: string | null;
   status: string | null;
-  /** A cast member's handle. Never-dispatched work has no agent — `dispatch: 'missing'` asks for it. */
-  agent: string | null;
+  /** One cast member's handle. */
+  cast: string | null;
+  /**
+   * Whether the row has a named agent at all. `missing` is what the Agent select's "none" option
+   * asks for — the tasks no terminal is on record as holding, which is the same absence the
+   * column renders and so has to be one a reader can *find* (SPEC §12.4).
+   */
+  agent: ReportPresence;
   dispatch: ReportPresence;
   outcome: ReportPresence;
   /** `yyyy-mm-dd`, as an `<input type="date">` gives it. Both bounds are inclusive days. */
@@ -62,7 +68,8 @@ export const DEFAULT_VIEW: ReportView = {
   dir: 'desc',
   runId: null,
   status: null,
-  agent: null,
+  cast: null,
+  agent: 'any',
   dispatch: 'any',
   outcome: 'any',
   from: null,
@@ -73,7 +80,8 @@ export function isFiltered(view: ReportView): boolean {
   return (
     view.runId !== null ||
     view.status !== null ||
-    view.agent !== null ||
+    view.cast !== null ||
+    view.agent !== 'any' ||
     view.dispatch !== 'any' ||
     view.outcome !== 'any' ||
     view.from !== null ||
@@ -100,7 +108,8 @@ export function searchOf(view: ReportView, cursor: string | null): string {
   params.set('dir', view.dir);
   if (view.runId !== null) params.set('run', view.runId);
   if (view.status !== null) params.set('status', view.status);
-  if (view.agent !== null) params.set('agent', view.agent);
+  if (view.cast !== null) params.set('cast', view.cast);
+  if (view.agent !== 'any') params.set('agent', view.agent);
   if (view.dispatch !== 'any') params.set('dispatch', view.dispatch);
   if (view.outcome !== 'any') params.set('outcome', view.outcome);
   if (view.from !== null) params.set('from', `${view.from}T00:00:00.000Z`);
@@ -121,11 +130,19 @@ export type Report = {
   loadMore(): void;
   /** The read failed and is retrying. The rows already loaded stay on screen; they are not wrong. */
   failed: boolean;
+  /**
+   * The *next page* failed. It carries no retry of its own — the cursor is untouched, so the
+   * button is still standing and the way to try again is the way in was (`useHistory.loadOlder`
+   * runs the same reasoning). What it must not do is fail **silently**: "older rows are explicit"
+   * (SPEC §12.4) is a promise a button that quietly did nothing would break.
+   */
+  moreFailed: boolean;
 };
 
-type Window = { ready: boolean; rows: ReportRow[]; nextCursor: string | null; total: number; pages: number };
+/** The pages the reader has loaded, and where the next one starts. */
+type Loaded = { ready: boolean; rows: ReportRow[]; nextCursor: string | null; total: number; pages: number };
 
-const EMPTY: Window = { ready: false, rows: [], nextCursor: null, total: 0, pages: 0 };
+const EMPTY: Loaded = { ready: false, rows: [], nextCursor: null, total: 0, pages: 0 };
 
 /**
  * One loaded window of the report, kept honest against a database that is still being written to.
@@ -141,15 +158,14 @@ const EMPTY: Window = { ready: false, rows: [], nextCursor: null, total: 0, page
  *   the pages the reader loaded, in order, and replaces them. The cost is bounded by what the
  *   reader chose to load, never by the size of history. Under an unchanged database the re-walk
  *   returns exactly the same rows, which is what the total order is for.
+ *
+ * The panel is *mounted* while the report is open and unmounted when it closes (`App.tsx`), which
+ * is what makes reopening a fresh read — so there is no `open` flag here to get wrong.
  */
-export function useReport(
-  open: boolean,
-  event: StreamEvent | null,
-  view: ReportView,
-  loader: ReportLoader
-): Report {
-  const [window, setWindow] = useState<Window>(EMPTY);
+export function useReport(event: StreamEvent | null, view: ReportView, loader: ReportLoader): Report {
+  const [loaded, setLoaded] = useState<Loaded>(EMPTY);
   const [failed, setFailed] = useState(false);
+  const [moreFailed, setMoreFailed] = useState(false);
 
   // The loader rides in a ref so an inline value is a re-render, not an infinite refetch — the
   // same defence `useHistory` and `useTaskDetail` run.
@@ -161,12 +177,12 @@ export function useReport(
   // The authoritative copy the callbacks read; state is the render's mirror of it. The epoch
   // outdates every in-flight answer the moment a newer question is asked — a page that arrives
   // after the view changed is not information.
-  const windowRef = useRef<Window>(EMPTY);
+  const held = useRef<Loaded>(EMPTY);
   const epoch = useRef(0);
 
-  function apply(next: Window): void {
-    windowRef.current = next;
-    setWindow(next);
+  function apply(next: Loaded): void {
+    held.current = next;
+    setLoaded(next);
   }
 
   /** Re-read `pages` pages from the top, following each page's own cursor. */
@@ -200,7 +216,7 @@ export function useReport(
           if (mine !== epoch.current) return;
           // The rows already on screen are not wrong — they are what the database said. The read
           // is retried behind them rather than replacing them with an error.
-          apply({ ...windowRef.current, ready: true });
+          apply({ ...held.current, ready: true });
           setFailed(true);
           setTimeout(() => {
             if (mine === epoch.current) walk(pages);
@@ -215,35 +231,39 @@ export function useReport(
 
   /** One page further down. The cursor is the server's, followed verbatim. */
   function loadMore(): void {
-    const cursor = windowRef.current.nextCursor;
+    const cursor = held.current.nextCursor;
     if (cursor === null) return;
     const mine = epoch.current;
 
-    settle(load.current(searchOf(view, cursor)), (page) => {
-      // Superseded by a re-walk, or already followed (a double click): either way this answer no
-      // longer extends the window it was asked about.
-      if (mine !== epoch.current || windowRef.current.nextCursor !== cursor) return;
-      apply({
-        ready: true,
-        rows: [...windowRef.current.rows, ...page.rows],
-        nextCursor: page.nextCursor,
-        total: page.total,
-        pages: windowRef.current.pages + 1,
-      });
-    });
+    setMoreFailed(false);
+
+    settle(
+      load.current(searchOf(view, cursor)),
+      (page) => {
+        // Superseded by a re-walk, or already followed (a double click): either way this answer no
+        // longer extends the window it was asked about.
+        if (mine !== epoch.current || held.current.nextCursor !== cursor) return;
+        apply({
+          ready: true,
+          rows: [...held.current.rows, ...page.rows],
+          nextCursor: page.nextCursor,
+          total: page.total,
+          pages: held.current.pages + 1,
+        });
+      },
+      () => {
+        // No retry timer: the cursor is untouched, so the button is still standing and pressing it
+        // again *is* the retry. What is owed is that the failure be **said** — a page of history
+        // that silently did not arrive is history the reader now believes is not there.
+        if (mine === epoch.current) setMoreFailed(true);
+      }
+    );
   }
 
-  // A closed report fetches nothing, and reopening is a fresh read: the rows behind a panel
-  // nobody is looking at are the one thing in this tool that is allowed to be forgotten.
-  const key = open ? searchOf(view, null) : null;
+  // A new sort or filter is a new window, from its first page — `key` is the view, flattened.
+  const key = searchOf(view, null);
   useEffect(() => {
-    if (key === null) {
-      epoch.current++;
-      apply(EMPTY);
-      return;
-    }
     walk(1);
-    // `key` is the view, flattened — a new sort or filter is a new window, from its first page.
   }, [key]);
 
   // The doorbell (#69). Anything that moved may have moved a row: a completed dispatch changes a
@@ -251,18 +271,19 @@ export function useReport(
   // change re-walks the loaded window — over-asking, deliberately, because the alternative is a
   // report that is silently stale.
   useEffect(() => {
-    if (!open || event === null || !windowRef.current.ready) return;
+    if (event === null || !held.current.ready) return;
     const { all, runIds, unplaced } = event.affected;
-    if (all || runIds.length > 0 || unplaced) walk(windowRef.current.pages);
+    if (all || runIds.length > 0 || unplaced) walk(held.current.pages);
   }, [event]);
 
   return {
-    ready: window.ready,
-    rows: window.rows,
-    total: window.total,
-    hasMore: window.nextCursor !== null,
+    ready: loaded.ready,
+    rows: loaded.rows,
+    total: loaded.total,
+    hasMore: loaded.nextCursor !== null,
     loadMore,
     failed,
+    moreFailed,
   };
 }
 

@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ReportPage, ReportRow } from '../../src/shared/types.ts';
 import { FixtureBuilder, handleFor } from '../fixtures/builder.ts';
@@ -54,6 +55,24 @@ async function refused(query: string): Promise<string> {
   const response = await harness!.report(query);
   expect(response.status).toBe(400);
   return ((await response.json()) as { error: string }).error;
+}
+
+/**
+ * The fixture builder writes real timestamps, so a column holding something that is *not* one has
+ * to be forged — the `corruptPayload` trick of the receipts suite, pointed at the two instants an
+ * attempt can be dated by (`tasks.ts`: `dispatched_at`, else `created_at`).
+ */
+function unreadableInstants(dbPath: string, dispatchId: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare('UPDATE dispatch_contexts SET dispatched_at = ?, created_at = ? WHERE id = ?').run(
+      'the beginning of time',
+      'the beginning of time',
+      dispatchId
+    );
+  } finally {
+    db.close();
+  }
 }
 
 function row(page: ReportPage, taskId: string): ReportRow {
@@ -399,11 +418,20 @@ describe('filtering — and a missing value is filterable as missing', () => {
     // Alice held `task_retried` first and lost it to Bob on the retry. The row shows the latest
     // attempt, and the filter matches what the row shows — anything else would return rows whose
     // agent column names somebody else.
-    const bobs = await report(`agent=${encodeURIComponent(BOB)}`);
+    const bobs = await report(`cast=${encodeURIComponent(BOB)}`);
     expect(bobs.rows.map((each) => each.taskId)).toEqual(['task_retried']);
 
-    const alices = await report(`agent=${encodeURIComponent(ALICE)}`);
+    const alices = await report(`cast=${encodeURIComponent(ALICE)}`);
     expect(alices.rows.map((each) => each.taskId)).toEqual(['task_done']);
+  });
+
+  it('reads a repeated filter as a list, rather than honouring the first and dropping the rest', async () => {
+    harness = await serve(corpus().write(tempDbPath()));
+
+    // A repeated key in a query string *is* a list, and answering `?cast=alice&cast=bob` with only
+    // Alice's rows would be the silent ignore this endpoint refuses everywhere else.
+    const both = await report(`cast=${encodeURIComponent(ALICE)}&cast=${encodeURIComponent(BOB)}`);
+    expect(both.rows.map((each) => each.taskId).sort()).toEqual(['task_done', 'task_retried']);
   });
 
   it('filters the never-dispatched work in, and out', async () => {
@@ -414,6 +442,48 @@ describe('filtering — and a missing value is filterable as missing', () => {
 
     const dispatched = await report('dispatch=present');
     expect(dispatched.rows.map((each) => each.taskId).sort()).toEqual(['task_done', 'task_retried']);
+  });
+
+  it('finds a dispatched task whose dispatch instant nothing can read — missing is missing, however it went missing', async () => {
+    // An attempt whose timestamps are not timestamps. `time.ts` passes an unparseable column
+    // through **verbatim** rather than dropping the row (SPEC §5), so the row is here and shows
+    // what the column held — but no clock can place it, so the sort cannot rank it and a range
+    // cannot contain it. The filter named after the dispatch time therefore has to call it
+    // *missing*, or the report renders a value that nothing at all can ask for (SPEC §12.4).
+    const dbPath = corpus()
+      .dispatch({
+        id: 'ctx_unreadable',
+        taskId: 'task_stalled',
+        assigneeHandle: ALICE,
+        status: 'dispatched',
+        dispatchedAt: at(3 * MINUTE),
+      })
+      .write(tempDbPath());
+    unreadableInstants(dbPath, 'ctx_unreadable');
+    harness = await serve(dbPath);
+
+    const missing = await report('dispatch=missing');
+    const row = missing.rows.find((each) => each.taskId === 'task_stalled')!;
+
+    // Not never-dispatched — an attempt exists, and the row says so from the other side.
+    expect(row.attemptCount).toBe(1);
+    expect(row.dispatchedAt).toBe('the beginning of time');
+    // …and it is not in the present half, nor in a range that spans the whole corpus.
+    expect((await report('dispatch=present')).rows.map((each) => each.taskId)).not.toContain('task_stalled');
+    const ranged = await report(`from=${at(-MINUTE).toISOString()}&to=${at(60 * MINUTE).toISOString()}`);
+    expect(ranged.rows.map((each) => each.taskId)).not.toContain('task_stalled');
+  });
+
+  it('finds a task no terminal is on record as holding — the agent column’s own missing value', async () => {
+    harness = await serve(corpus().write(tempDbPath()));
+
+    // `task_stalled` was never dispatched, so no `assignee_handle` names anybody for it. The Agent
+    // column renders "none"; `agent=missing` is what asks for exactly the rows that do.
+    const none = await report('agent=missing');
+    expect(none.rows.map((each) => each.taskId)).toEqual(['task_stalled']);
+
+    const named = await report('agent=present');
+    expect(named.rows.map((each) => each.taskId).sort()).toEqual(['task_done', 'task_retried']);
   });
 
   it('filters by outcome presence — which is "nothing recognized", not "nothing produced"', async () => {
@@ -468,6 +538,17 @@ describe('a query this report cannot honour is refused, never quietly replaced',
     expect(await refused('dir=sideways')).toMatch(/not a dir this report knows/i);
     expect(await refused('dispatch=maybe')).toMatch(/not a dispatch this report knows/i);
     expect(await refused('outcome=maybe')).toMatch(/not an? outcome this report knows/i);
+  });
+
+  it('refuses a filter it does not have, rather than answering the unfiltered report under it', async () => {
+    harness = await serve(corpus().write(tempDbPath()));
+
+    // `?runId=` is a typo for `?run=`, and every retained task answered under it looks exactly
+    // like a filter that matched everything. A query string this endpoint half-understands is one
+    // it must not answer — the same rule the bad values above are refused by.
+    expect(await refused(`runId=${encodeURIComponent(`run_${COORDINATOR}`)}`)).toMatch(
+      /not a filter this report knows/i
+    );
   });
 
   it('refuses a range endpoint that is not an instant, and a range that ends before it starts', async () => {

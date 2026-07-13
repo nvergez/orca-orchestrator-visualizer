@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { DurationClock, DurationObservation } from '../shared/types.ts';
+import { localInstant } from './relative-time.ts';
 
 /**
  * Honest durations, rendered (#66). The server sends a `DurationObservation` — a clock, its
@@ -71,7 +72,7 @@ export function readDuration(observation: DurationObservation, now: number): Dur
     // reads as a start, not a debt.
     return {
       text: `${formatDurationMs(now - start)} so far`,
-      title: `${clock} — started ${local(observation.startAt)}, not finished per retained evidence; measured against your clock`,
+      title: `${clock} — started ${localInstant(observation.startAt)}, not finished per retained evidence; measured against your clock`,
     };
   }
 
@@ -83,7 +84,7 @@ export function readDuration(observation: DurationObservation, now: number): Dur
   if (ms === null || ms < 0) return null;
 
   const label = observation.clock === 'task-span' ? `${formatDurationMs(ms)} task span` : formatDurationMs(ms);
-  return { text: label, title: `${clock} · ${local(observation.startAt)} → ${local(observation.endAt ?? '')}` };
+  return { text: label, title: `${clock} · ${localInstant(observation.startAt)} → ${localInstant(observation.endAt ?? '')}` };
 }
 
 function spanOf({ startAt, endAt }: DurationObservation): number | null {
@@ -98,11 +99,6 @@ function instant(iso: string): number | null {
   return Number.isNaN(at) ? null : at;
 }
 
-/** The exact instant, in the reader's own timezone — the same rendering `ageOf` gives one. */
-function local(iso: string): string {
-  const at = instant(iso);
-  return at === null ? iso : new Date(at).toLocaleString();
-}
 
 /**
  * The reader's clock, re-read every second — but **only while something open is on screen**.
