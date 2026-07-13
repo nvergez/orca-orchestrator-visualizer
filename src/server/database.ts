@@ -9,7 +9,7 @@ import { attachGates, readGates } from './gates.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
-import { detectReset, hasColumn, inspectSchema, MESSAGE_SEQUENCE, type SchemaReport } from './schema.ts';
+import { detectReset, inspectSchema, type SchemaReport } from './schema.ts';
 import { openReadOnly } from './sqlite.ts';
 import { readTaskDetail } from './task-detail.ts';
 import { readTasks } from './tasks.ts';
@@ -31,6 +31,12 @@ export type DatabaseDeps = {
    * against the client's own clock — never computed here (SPEC §12.3).
    */
   now?: () => number;
+  /**
+   * A synchronization point after the message rows have been materialized. Tests use it to
+   * commit through a real second connection at the concurrency boundary; production leaves it
+   * unset. It observes the read without replacing the database driver or any query result.
+   */
+  afterMessagesRead?: () => void;
 };
 
 export class OrcaDatabase {
@@ -41,11 +47,13 @@ export class OrcaDatabase {
   private readonly schema: SchemaReport;
   private readonly probe: ProcessProbe;
   private readonly now: () => number;
+  private readonly afterMessagesRead: () => void;
 
-  constructor(path: string, { probe = probeProcess, now = Date.now }: DatabaseDeps = {}) {
+  constructor(path: string, { probe = probeProcess, now = Date.now, afterMessagesRead = () => {} }: DatabaseDeps = {}) {
     this.path = path;
     this.probe = probe;
     this.now = now;
+    this.afterMessagesRead = afterMessagesRead;
     this.db = open(path);
     try {
       this.schema = inspectSchema(this.db);
@@ -96,9 +104,13 @@ export class OrcaDatabase {
     // client's cursor wants only what it has not seen. Reading the table twice would answer both
     // and disagree with itself the moment Orca wrote a row between the two reads.
     const messages = readMessages(this.db, this.schema.columns, { since: 0, attribution });
+    // The cursor belongs to exactly these rows. A commit after this read stays above `seq`, so a
+    // subscriber cannot skip the new row behind an event id that did not carry it (#49).
+    const seq = messages.at(-1)?.sequence ?? 0;
+    this.afterMessagesRead();
 
     return {
-      seq: this.highWaterMark(),
+      seq,
       meta: {
         dbPath: this.path,
         schemaVersion: this.schema.version,
@@ -221,31 +233,6 @@ export class OrcaDatabase {
    */
   liveness(): Liveness {
     return readLiveness(this.path, this.probe).liveness;
-  }
-
-  /**
-   * **The cursor** (SPEC §6.1): `MAX(messages.sequence)` — AUTOINCREMENT, gap-free,
-   * append-only, the one value in this schema that can be resumed from. It is also the SSE
-   * event id, which is what makes a browser's automatic `Last-Event-ID` replay land exactly
-   * on it with no code of ours in between.
-   *
-   * Guarded on the column really being there, like every other read in this server (#21).
-   * An Orca that renamed `sequence` — or dropped `messages`, which introspects to the same
-   * empty column set — costs the messages and the reset detector, and it must not cost the DAG:
-   * asking SQLite for a column it does not have throws, and that would be a hard-fail this
-   * tool has no right to (SPEC §5 — the DAG core is the only one).
-   *
-   * So the cursor degrades to 0, and the stream degrades with it *coherently*: every event id
-   * is 0, every `Last-Event-ID` resumes from 0, and `readMessages` — guarded on the same
-   * column — returns nothing to resume. A feed that cannot be read is an empty feed, not a
-   * broken stream: the graph still ticks (`dataVersion` needs no column), and the user is told
-   * which feature went missing in `meta.degraded`.
-   */
-  private highWaterMark(): number {
-    if (!hasColumn(this.schema.columns, MESSAGE_SEQUENCE)) return 0;
-
-    const row = this.db.prepare('SELECT MAX(sequence) AS seq FROM messages').get() as { seq: number | null };
-    return row.seq ?? 0;
   }
 
   close(): void {

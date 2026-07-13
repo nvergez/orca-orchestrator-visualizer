@@ -25,8 +25,8 @@ export type TableName = (typeof TABLES)[number];
 /**
  * The one cursor in this schema that can be trusted: AUTOINCREMENT, gap-free, append-only.
  * It spots an `orchestration reset` (`detectReset`), and it is what the message log resumes
- * from (`highWaterMark`, and the SSE event id) — three call sites for one column, so it is
- * named once and guarded by that name.
+ * from (the rows used for the event, and the SSE event id) — three call sites for one column,
+ * so it is named once and guarded by that name.
  */
 export const MESSAGE_SEQUENCE = 'messages.sequence';
 
