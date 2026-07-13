@@ -1,5 +1,5 @@
 import { STALE_HEARTBEAT_MS } from '../shared/run-health.ts';
-import type { DispatchStatus, Task } from '../shared/types.ts';
+import type { CastMember, DispatchStatus, Task } from '../shared/types.ts';
 
 // The one canonical recency threshold (SPEC §12.3): worker health and run health answer the same
 // "is this recent?" question against the same constant, defined once in `shared/run-health.ts`.
@@ -132,4 +132,59 @@ export function workerHealthByAgent(tasks: Task[], now: number): ReadonlyMap<str
   return new Map(
     [...workerEvidenceByAgent(tasks, now)].map(([handle, evidence]) => [handle, evidence.health] as const)
   );
+}
+
+/**
+ * **How a whole orchestration's workers are currently doing** — the worst state among them, and
+ * the tally behind it.
+ *
+ * *Worst*, and here the inversion is deliberate: a single worker speaks with its **freshest**
+ * evidence (`workerEvidenceForTasks` — a worker beating on one task is working, whatever an older
+ * attempt still says), but a *run* speaks with its **worst**, because one silent agent in a cast
+ * of five is the fact a supervisor is scanning for and an average would bury it. The two rules
+ * are opposite on purpose, and they are the same two rules the rail has always applied.
+ *
+ * It is `null` exactly when no attempt is currently active — a run whose work has all settled has
+ * no *current* worker health, and inventing one for it would be the tile claiming evidence the
+ * database does not hold. Callers say that in their own words: the rail row draws nothing, the
+ * kiosk tile says so out loud (#62).
+ *
+ * Shared because it is the one sentence both screens make about a run's workers, and two copies
+ * of it would eventually disagree — which is exactly the drift #62's tests exist to forbid.
+ */
+export type RunWorkerSummary = {
+  /** The worst current state in the cast: `stale` over `quiet` over `working`. */
+  state: 'working' | 'quiet' | 'stale';
+  /** The tally behind it, worst first: `['1 stale without heartbeat', '2 active']`. */
+  parts: string[];
+};
+
+export function runWorkerSummary(
+  cast: CastMember[],
+  healthByAgent: ReadonlyMap<string, WorkerHealth>
+): RunWorkerSummary | null {
+  const active = cast
+    .map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const })
+    .filter(isActiveWorkerHealth);
+  if (active.length === 0) return null;
+
+  // A worker that never sent a beat is counted apart from one that sent some and stopped: both
+  // are stale, and only the second has ever proved it could talk. The distinction is #47's, and
+  // it is the difference between "it went quiet" and "it never said anything".
+  const staleWithoutHeartbeat = active.filter(
+    (health) => health.state === 'stale' && health.heartbeat === 'missing'
+  ).length;
+  const stale = active.filter((health) => health.state === 'stale' && health.heartbeat === 'received').length;
+  const quiet = active.filter((health) => health.state === 'quiet').length;
+  const working = active.filter((health) => health.state === 'working').length;
+
+  return {
+    state: staleWithoutHeartbeat + stale > 0 ? 'stale' : quiet > 0 ? 'quiet' : 'working',
+    parts: [
+      staleWithoutHeartbeat > 0 && `${staleWithoutHeartbeat} stale without heartbeat`,
+      stale > 0 && `${stale} stale`,
+      quiet > 0 && `${quiet} awaiting heartbeat`,
+      working > 0 && `${working} active`,
+    ].filter((part): part is string => part !== false),
+  };
 }

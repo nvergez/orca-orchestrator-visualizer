@@ -6,20 +6,17 @@ import { Spotlight, useSpotlight } from '@/components/fx/spotlight';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { shortHandle } from '../../shared/handles.ts';
-import { runHealth, type RunHealth } from '../../shared/run-health.ts';
+import { runHealth } from '../../shared/run-health.ts';
 import type { CoordinatorRun, Run, Task } from '../../shared/types.ts';
 import type { AttentionItem } from '../attention.ts';
 import { AttentionQueue } from '../attention/AttentionQueue.tsx';
 import { CHIP_CLASS } from '../chip.ts';
+import { HealthDot } from '../health-dot.tsx';
 import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { EASE, enter, SPRING } from '../motion.ts';
 import { useNow } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
-import {
-  isActiveWorkerHealth,
-  type WorkerHealth,
-  workerHealthByAgent,
-} from '../worker-health.ts';
+import { runWorkerSummary, type WorkerHealth, workerHealthByAgent } from '../worker-health.ts';
 import { Cast } from './Cast.tsx';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
@@ -432,6 +429,15 @@ function RunRow({
   );
 }
 
+/**
+ * How this orchestration's workers are doing, on the row that lists it — the worst state in the
+ * cast, and the tally behind it (`runWorkerSummary`, #47).
+ *
+ * The *derivation* is shared with the kiosk tile, which makes the identical claim on a wall
+ * (#62); only the box model is the rail's. A run with no current attempt says nothing here: the
+ * row has already said everything it can prove, and the kiosk — a bigger surface, whose whole
+ * promise is worker health — is where the absence is worth spelling out.
+ */
 function RunWorkerHealth({
   run,
   healthByAgent,
@@ -439,77 +445,25 @@ function RunWorkerHealth({
   run: Run;
   healthByAgent: ReadonlyMap<string, WorkerHealth>;
 }) {
-  const active = run.cast
-    .map((member) => healthByAgent.get(member.handle) ?? { state: 'inactive' as const })
-    .filter(isActiveWorkerHealth);
-  if (active.length === 0) return null;
-
-  const staleWithoutHeartbeat = active.filter(
-    (health) => health.state === 'stale' && health.heartbeat === 'missing'
-  ).length;
-  const stale = active.filter((health) => health.state === 'stale' && health.heartbeat === 'received').length;
-  const quiet = active.filter((health) => health.state === 'quiet').length;
-  const working = active.filter((health) => health.state === 'working').length;
-  const state = staleWithoutHeartbeat + stale > 0 ? 'stale' : quiet > 0 ? 'quiet' : 'working';
-  const parts = [
-    staleWithoutHeartbeat > 0 && `${staleWithoutHeartbeat} stale without heartbeat`,
-    stale > 0 && `${stale} stale`,
-    quiet > 0 && `${quiet} awaiting heartbeat`,
-    working > 0 && `${working} active`,
-  ].filter((part): part is string => part !== false);
+  const summary = runWorkerSummary(run.cast, healthByAgent);
+  if (summary === null) return null;
 
   return (
     <span
       data-testid="run-worker-health"
-      data-health={state}
+      data-health={summary.state}
       className={cn(
         'relative mt-1 ml-4 block text-[10px] tabular-nums',
-        state === 'stale' ? 'font-bold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+        summary.state === 'stale' ? 'font-bold text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
       )}
     >
-      {parts.join(' · ')}
+      {summary.parts.join(' · ')}
     </span>
   );
 }
 
 function Dot() {
   return <span className="opacity-40">·</span>;
-}
-
-/**
- * The three looks of run health, in one table so a state cannot pulse one thing, wear another
- * and say a third. Only `active` moves — the page's one "this is not finished" gesture
- * (SPEC §7.9). `silent` holds still in amber over work that has not converged; `finished` holds
- * still in the muted grey of a story that is over. The words are the glossary's (CONTEXT.md),
- * and nobody else's: a silent run is *not* "ended", "dead" or "stuck" — the model reports
- * retained evidence, and those three are diagnoses the database cannot support (SPEC §12.3).
- */
-const HEALTH_LOOK: Record<RunHealth, { pulses: boolean; dot: string | false; words: string }> = {
-  active: { pulses: true, dot: false, words: 'active — recent activity' },
-  silent: { pulses: false, dot: 'bg-run-silent/70', words: 'silent — unfinished, no recent activity' },
-  finished: { pulses: false, dot: false, words: 'finished' },
-};
-
-/**
- * A run's health, worn as the row's dot — with an sr-only twin saying it in words, because a
- * colour a screen reader cannot reach was never said at all.
- */
-function HealthDot({ health, className }: { health: RunHealth; className?: string }) {
-  const look = HEALTH_LOOK[health];
-
-  return (
-    <>
-      <RadarDot
-        live={look.pulses}
-        className={cn(className, look.dot)}
-        // Not `aria-hidden`, unlike the shell's: on the rail this dot *is* the answer to "how
-        // does this run stand", and the sr-only twin below is how it reaches everyone.
-      />
-      <span data-testid="health-dot" data-health={health} className="sr-only">
-        {look.words}
-      </span>
-    </>
-  );
 }
 
 /**

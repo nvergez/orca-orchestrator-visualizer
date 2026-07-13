@@ -23,6 +23,20 @@ const CONTENT_TYPES: Record<string, string> = {
 /** `GET /api/task/:id` — everything after this prefix is the id (#20). */
 const TASK_ROUTE = '/api/task/';
 
+/**
+ * The paths that are *screens* rather than files: each one is served the single `index.html`
+ * the bundle ships, and the client decides which of them it is looking at (`client/route.ts`).
+ *
+ * Listed rather than fallen-back-to. A blanket "anything that isn't a file gets index.html"
+ * would answer `/kiosc` with a 200 and a main view, and a typo that silently renders the wrong
+ * screen is worse than a 404 that says so. Adding a screen means adding it here — which is the
+ * point: the list is the HTTP surface (SPEC §6.4), and it should be readable in one line.
+ *
+ * `/kiosk` is a route and **not a mode** (#62): no flag, no second process, no separate bundle.
+ * The server does not know what a kiosk is, and does not need to.
+ */
+const APP_ROUTES = new Set(['/', '/kiosk']);
+
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
   // The two things a long-lived push response has to say for itself. There is no proxy on
@@ -99,7 +113,7 @@ export function createServer({
       return;
     }
 
-    const filePath = resolveAsset(clientDir, urlPath === '/' ? '/index.html' : urlPath);
+    const filePath = resolveAsset(clientDir, APP_ROUTES.has(urlPath) ? '/index.html' : urlPath);
 
     if (!filePath) {
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });

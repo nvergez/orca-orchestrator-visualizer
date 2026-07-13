@@ -43,6 +43,17 @@ describe('the web server', () => {
     expect(await response.text()).toContain('orca-viz');
   });
 
+  it('serves the very same document at /kiosk — one app, one bundle, no second mode (#62)', async () => {
+    // The kiosk is a *route*, not a server: no flag turns it on, no second process serves it,
+    // and the document it gets is byte-for-byte the one `/` gets. Everything that makes it a
+    // kiosk happens in the bundle both routes already share (`route.ts`).
+    const kiosk = await fetch(`${origin}/kiosk`);
+
+    expect(kiosk.status).toBe(200);
+    expect(kiosk.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(await kiosk.text()).toBe(await (await fetch(`${origin}/`)).text());
+  });
+
   it('serves the bundle assets with their real content type', async () => {
     const response = await fetch(`${origin}/assets/index.js`);
 

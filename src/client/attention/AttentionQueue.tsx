@@ -24,8 +24,23 @@ import { enter, SPRING } from '../motion.ts';
 export type AttentionQueueProps = {
   /** Ranked, explained and stably identified by `deriveAttention` — rendered verbatim. */
   items: AttentionItem[];
-  /** The selection seam: the shell selects the item's run, and its task when it names one. */
-  onAttend: (item: AttentionItem) => void;
+  /**
+   * The selection seam: the shell selects the item's run, and its task when it names one.
+   *
+   * **Omitted on the kiosk** (#62), which has no canvas to select into and no reader within
+   * arm's reach of it — so every row renders as the fact it is rather than as a button that
+   * would go nowhere. It is the same static row an item with no destination already gets, and
+   * deliberately *not* a `disabled` button: a disabled control is unreachable by keyboard, and
+   * being read is the whole of what these rows still have to do.
+   */
+  onAttend?: (item: AttentionItem) => void;
+  /**
+   * The panel's height budget, for the surface it stands on: the rail lends it 16rem above a
+   * list it must not crowd, a wall display has a column to spare and lets it run. What it *says*
+   * is never a caller's business — the order and the words are `deriveAttention`'s on both
+   * screens, which is the whole of what makes them the same queue.
+   */
+  className?: string;
 };
 
 /**
@@ -46,7 +61,7 @@ const KIND_LOOK: Record<AttentionKind, { icon: LucideIcon; ink: string; label: s
   'fresh-failure': { icon: CircleX, ink: 'text-red-700 dark:text-red-400', label: 'fresh failure' },
 };
 
-export function AttentionQueue({ items, onAttend }: AttentionQueueProps) {
+export function AttentionQueue({ items, onAttend, className }: AttentionQueueProps) {
   if (items.length === 0) return null;
 
   return (
@@ -71,7 +86,10 @@ export function AttentionQueue({ items, onAttend }: AttentionQueueProps) {
         // rail is a 45dvh band that also owes its orchestrator list a place to stand, and a
         // queue that took 16rem of it would leave a sliver. Landscape tightens again, where
         // vertical room is the whole fight (`docs/design/mobile.md`).
-        'max-lg:max-h-40 max-lg:landscape:max-h-28'
+        'max-lg:max-h-40 max-lg:landscape:max-h-28',
+        // Last, so a caller standing it on a different surface can lift the budget the rail set
+        // (`cn` is tailwind-merge: the later class wins). Only the box model — never the list.
+        className
       )}
     >
       <h3 className="text-muted-foreground px-1.5 pb-1 text-[10px] font-semibold tracking-widest uppercase">
@@ -90,17 +108,20 @@ export function AttentionQueue({ items, onAttend }: AttentionQueueProps) {
 
 const ROW_CLASS = 'flex w-full items-start gap-2 rounded-lg px-1.5 py-1 text-left';
 
-function AttentionRow({ item, onAttend }: { item: AttentionItem; onAttend: (item: AttentionItem) => void }) {
+function AttentionRow({ item, onAttend }: { item: AttentionItem; onAttend?: (item: AttentionItem) => void }) {
   // A cause the schema attributed to no run *and* no task offers nowhere to go. It is shown all
   // the same — hiding evidence over a missing join would be the queue lying about the database —
   // as a plain row rather than a dead button: a `disabled` button is unreachable by keyboard, and
   // the one thing this row still has to do is *be read*. It is the GateStrip's rule for a gate
   // that names no task, and it is the same rule.
+  //
+  // A screen with no `onAttend` at all — the kiosk (#62) — takes the same path for every row, and
+  // for the same reason: there is nowhere for the click to land.
   const body = <AttentionBody item={item} />;
 
   return (
     <li>
-      {item.taskId === null && item.runId === null ? (
+      {onAttend === undefined || (item.taskId === null && item.runId === null) ? (
         <div data-testid="attention-item" data-kind={item.kind} data-cause={item.id} className={ROW_CLASS}>
           {body}
         </div>

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { StreamEvent } from '../shared/types.ts';
 import { App } from './App.tsx';
 import type { Connection } from './connection.ts';
+import { Kiosk } from './kiosk/Kiosk.tsx';
+import { routeOf } from './route.ts';
 
 /**
  * The transport — an `EventSource` on `/api/stream`, feeding `<App>` (#17).
@@ -40,10 +42,24 @@ import type { Connection } from './connection.ts';
  * stays the one that knows a network exists and nothing more.
  */
 
+/**
+ * One transport, two screens (#62). The stream neither knows nor cares which of them is reading
+ * it: the kiosk is fed by the identical `StreamEvent`, over the identical `EventSource`, with the
+ * identical connection and apply-time facts riding alongside — which is the only reason the two
+ * screens can be trusted to agree about what the database says.
+ *
+ * The path is read at mount and never again (`route.ts`): these two screens do not link to each
+ * other, so there is no navigation for a listener to hear.
+ */
 export function Live() {
   const { event, connection, appliedAt } = useStream();
+  const [route] = useState(() => routeOf(globalThis.location?.pathname ?? '/'));
 
-  return <App event={event} connection={connection} appliedAt={appliedAt} />;
+  return route === 'kiosk' ? (
+    <Kiosk event={event} connection={connection} appliedAt={appliedAt} />
+  ) : (
+    <App event={event} connection={connection} appliedAt={appliedAt} />
+  );
 }
 
 /** What the stream has delivered, and what it is doing — one state, so the two cannot skew. */
