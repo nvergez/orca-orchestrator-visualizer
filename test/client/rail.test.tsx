@@ -183,6 +183,47 @@ describe('the run rail', () => {
   });
 });
 
+/**
+ * **The export** (#74, ADR 0001) — one run, one explicit click, and a file.
+ *
+ * The ticket's first acceptance criterion is a claim about *when* an archive happens: only after
+ * a user acts, on one selected run, and starting nothing at all afterwards. The rail is where
+ * that is enforced, and it enforces it by shape — the affordance exists on the open row and
+ * nowhere else, and it is a download link, which is the least a click can do.
+ */
+describe('exporting the open orchestrator', () => {
+  it('offers an archive of the run you have open — and of no other', async () => {
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+
+    const links = await screen.findAllByTestId('export-run');
+
+    // One link, on the selected run. Not one per row: an archive is of *one selected run*.
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('data-run', 'run_newer');
+    expect(links[0]).toHaveTextContent('Export archive');
+  });
+
+  it('is a plain download of that run’s archive route — nothing starts, and nothing is held', async () => {
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+
+    const link = await screen.findByTestId('export-run');
+
+    expect(link).toHaveAttribute('href', '/api/run/run_newer/archive');
+    // `download` hands the naming to the server's Content-Disposition — the run, and the instant.
+    expect(link).toHaveAttribute('download');
+  });
+
+  it('follows the selection: opening another orchestrator exports that one', async () => {
+    render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);
+    await screen.findByTestId('export-run');
+
+    await userEvent.click(row('run_older'));
+
+    await waitFor(() => expect(screen.getByTestId('export-run')).toHaveAttribute('data-run', 'run_older'));
+    expect(screen.getByTestId('export-run')).toHaveAttribute('href', '/api/run/run_older/archive');
+  });
+});
+
 describe('the canvas renders exactly one run', () => {
   it('opens on the most recently active run, before you have clicked anything', async () => {
     render(<CannedApp event={event(BOTH_RUNS, BOTH_RUNS_TASKS)} />);

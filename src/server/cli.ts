@@ -9,6 +9,12 @@ export const DEFAULT_POLL_INTERVAL_MS = 5000;
 export type Options = {
   /** `--db`. An explicit database: a hard error if it does not work (SPEC §3). */
   db: string | undefined;
+  /**
+   * `--archive`. A saved run archive to replay (#74) — and the one mode of this tool that opens
+   * **no database at all**. Set ⇒ nothing below `port`/`host`/`open` applies, because there is
+   * nothing to discover, nothing to poll and nothing to be live about.
+   */
+  archive: string | undefined;
   listDbs: boolean;
   port: number;
   host: string;
@@ -28,6 +34,9 @@ Options:
   --db <path>            The orchestration.db to read. A database that does not work is an
                          error — orca-viz will never quietly show you a different one.
                          Also settable as ORCA_VIZ_DB.
+  --archive <path>       Replay a run archive — the JSON file "Export archive" saves for one
+                         orchestrator. Opens no database, polls nothing, and says archived
+                         and offline on every screen. It replaces --db, not accompanies it.
   --list-dbs             Print every database orca-viz can find, with its liveness and
                          mtime, and exit.
   --port <n>             Port to listen on (default ${DEFAULT_PORT}). A port that is taken is an
@@ -66,8 +75,24 @@ export function parseOptions(argv: string[]): Options {
   }
 
   const { values } = parsed;
+
+  // **A flag that cannot work is an error, not a silent preference** (SPEC §3). `--archive` opens
+  // no database and runs no poll loop, so a `--db`, a `--list-dbs` or a `--poll-interval` beside
+  // it is not a request this tool can honour half of: the user is told which two flags disagree
+  // rather than discovering later that one of them did nothing.
+  if (values.archive !== undefined) {
+    for (const flag of ['db', 'list-dbs', 'poll-interval'] as const) {
+      if (values[flag] === undefined) continue;
+      throw new StartupError(
+        `--archive and --${flag} cannot be used together.`,
+        '--archive replays a saved run archive: it opens no Orca database and polls nothing, so there is no database to name and no loop to pace.'
+      );
+    }
+  }
+
   return {
     db: values.db,
+    archive: values.archive,
     listDbs: values['list-dbs'] ?? false,
     // 0 is legal and means "any free port" — the OS picks and orca-viz prints what it got.
     port: values.port === undefined ? DEFAULT_PORT : integerOption('--port', values.port, { min: 0, max: 65535 }),
@@ -84,6 +109,7 @@ export function parseOptions(argv: string[]): Options {
 
 const OPTION_SPEC = {
   db: { type: 'string' },
+  archive: { type: 'string' },
   'list-dbs': { type: 'boolean' },
   port: { type: 'string' },
   host: { type: 'string' },

@@ -1,4 +1,4 @@
-import { ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
+import { Archive, ChevronUp, Database, Moon, Sun, Waypoints } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useMemo, useRef, useState } from 'react';
 import { Beams } from '@/components/fx/beams';
@@ -8,7 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { CastMember, Gate, Meta, StreamEvent, Task, Turn } from '../shared/types.ts';
-import { livenessSentence, schemaSentence } from '../shared/wording.ts';
+import {
+  archiveCompatibilitySentence,
+  archivedSentence,
+  livenessSentence,
+  schemaSentence,
+} from '../shared/wording.ts';
+import type { ArchiveView } from './archive.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
 import { Conversation } from './conversation/Conversation.tsx';
@@ -58,6 +64,13 @@ import { useIsMobile } from './viewport.tsx';
  * There is no history mode. The database is never pruned, so yesterday's orchestration sits in the
  * rail beside today's and renders through the exact same code path; live-ness is a green dot.
  *
+ * **And there is one archived mode, which is this same shell with a file behind it** (#74,
+ * `Replay.tsx`). An `archive` prop swaps the two things that would otherwise be lies — the
+ * liveness bar becomes an *archived* one, and the export link has nothing to export — and changes
+ * nothing else: the rail, the canvas, the gate strip, the conversation and the inspector are the
+ * same components reading the same evidence, because a post-mortem you saved is still a
+ * post-mortem (ADR 0001).
+ *
  * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
  * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a
  * collapsible band at the bottom. Nothing is a new screen and no panel is mounted differently;
@@ -92,14 +105,32 @@ export type AppProps = {
    * `loadTask`'s pattern, grown to the two reads the stream stopped carrying.
    */
   loadHistory?: HistoryLoaders;
+  /**
+   * **The archived replay** (#74, `Replay.tsx`): the saved run this shell is showing, instead of
+   * a database it is connected to. Null — the default — is the live tool.
+   *
+   * It is a *presentation* difference and deliberately nothing more: the rail, the canvas, the
+   * gates, the conversation and the inspector are the same components reading the same evidence
+   * (ADR 0001 — "archived replay uses the ordinary selected-run presentation wherever possible").
+   * What changes is exactly what would otherwise be a lie — the liveness bar becomes an *archived*
+   * one, there is no stream to pulse a node, and there is nothing to export from an export.
+   */
+  archive?: ArchiveView | null;
 };
 
-export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHistory }: AppProps) {
+export function App({
+  event,
+  loadTask = fetchTaskDetail,
+  loadHistory = fetchHistory,
+  archive = null,
+}: AppProps) {
   // The stream is the doorbell, this is the door: pages of summaries for the rail, and the
-  // selected run's complete evidence, each refetched when `event.affected` names it (#69).
+  // selected run's complete evidence, each refetched when `event.affected` names it (#69). An
+  // archived replay has no doorbell at all — the file is read once, on mount, and nothing polls.
   const { ready, runs, coordinatorRuns, hasOlder, loadOlder, selected, select, newRunId, snapshot } = useHistory(
     event,
-    loadHistory
+    loadHistory,
+    archive === null ? 'live' : 'offline'
   );
 
   // The selected run's complete evidence — tasks, gates and turns already scoped to it by the
@@ -277,7 +308,8 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
 
   // Two things have to land before the shell is worth drawing: the stream's first event (the
   // meta bar is its), and the first index page (the rail is its). Both are one blink locally.
-  if (!event || !ready) return <Connecting />;
+  // A replay has no stream — its bar is the archive's — so it waits only for the file.
+  if ((event === null && archive === null) || !ready) return <Connecting />;
 
   return (
     // One switch, at the top, for a reader who has asked their machine to hold still. Every
@@ -286,9 +318,9 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar meta={event.meta} />
+        {archive === null ? <TopBar meta={event!.meta} /> : <ArchiveBar archive={archive} />}
 
-        <Notices meta={event.meta} />
+        {archive === null ? <Notices meta={event!.meta} /> : <ArchiveNotices archive={archive} />}
 
         {/* `max-lg:flex-col` is the fold itself: DOM order rail → centre → dock becomes
             top → middle → bottom, and nothing else about the row changes. */}
@@ -302,6 +334,11 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
             onSelectAgent={selectAgent}
             newRunId={newRunId}
             older={{ hasOlder, loadOlder }}
+            // **The export** (#74): one link, on the run the reader has open, and nowhere else —
+            // an archive is of *one selected run*, and the affordance says so by only ever
+            // existing on one. A replay is already an export: there is nothing here to export
+            // from it, so the rail is handed nothing and renders no link at all.
+            exportHref={archive === null ? archiveHref : undefined}
             fold={isMobile ? { folded: !railOpen, onToggle: () => setRailOpen((open) => !open) } : undefined}
           />
 
@@ -380,6 +417,10 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
               {selectedTask ? (
                 <Inspector
                   task={selectedTask}
+                  // An archive holds one run, so a dependency that leaves it cannot be opened:
+                  // the chip names the task and says where it went, rather than offering a click
+                  // that would land on a run this file does not contain (`Inspector`'s `Deps`).
+                  archived={archive !== null}
                   gates={taskGates}
                   // Every task, not the canvas's: a dep chip that could not see across into another
                   // orchestration would call a task sitting right there in the database deleted.
@@ -414,6 +455,144 @@ export function App({ event, loadTask = fetchTaskDetail, loadHistory = fetchHist
         </div>
       </main>
     </MotionConfig>
+  );
+}
+
+/**
+ * Where the export lives — `GET /api/run/:id/archive` (#74). It is a plain link with `download`
+ * on it, and that is the whole mechanism: the browser saves the file, the server names it, and
+ * nothing in this page holds a copy of an artifact it just handed to the user.
+ */
+function archiveHref(runId: string): string {
+  return `/api/run/${encodeURIComponent(runId)}/archive`;
+}
+
+/**
+ * **The bar an archived replay wears instead of the liveness one** (#74) — and the one thing on
+ * this screen that absolutely may not be mistaken for the live tool.
+ *
+ * So it says the opposite of what the live bar says, in the same place, out of the same sentence
+ * factory (`archivedSentence`, `shared/wording.ts`, printed at boot too): *archived — an offline
+ * export taken on <date>; nothing is running, and nothing here will change.* There is no radar
+ * dot, because a radar dot on this page would mean a process is alive; there is no database path,
+ * because there is no database and the artifact deliberately never carried one; and there is no
+ * "last write", because nothing is writing.
+ *
+ * What it *does* show is the run it holds and the tool that exported it — the provenance a person
+ * needs in order to trust a file somebody sent them.
+ */
+function ArchiveBar({ archive: { archive } }: { archive: ArchiveView }) {
+  const { provenance, run } = archive;
+
+  return (
+    <motion.header
+      initial={enter({ opacity: 0, y: -8 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(
+        PANEL_CLASS,
+        'flex h-13 shrink-0 items-center gap-3 px-4',
+        'max-lg:h-auto max-lg:min-h-13 max-lg:py-2 max-lg:landscape:min-h-11 max-lg:landscape:py-1'
+      )}
+    >
+      <span className="flex shrink-0 items-center gap-2">
+        <span className="bg-muted text-muted-foreground flex size-6 items-center justify-center rounded-md">
+          <Archive className="size-3.5" />
+        </span>
+        <b className="text-sm font-semibold tracking-tight whitespace-nowrap max-lg:hidden">orca-viz</b>
+      </span>
+
+      <Separator orientation="vertical" className="!h-5 max-lg:hidden" />
+
+      {/*
+        `role="status"` and `data-state="archived"` where the live bar puts its liveness pill —
+        the same slot, the opposite claim. Muted, and with no dot at all: every animated ring in
+        this tool means "this is not finished" (SPEC §7.9), and everything here is.
+      */}
+      <p
+        role="status"
+        data-state="archived"
+        className="text-muted-foreground bg-muted flex shrink-0 items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1 text-[11px] font-medium max-lg:min-w-0 max-lg:shrink"
+      >
+        <span className="first-letter:uppercase">{archivedSentence(provenance, formatTime)}.</span>
+      </p>
+
+      <dl className="text-muted-foreground ml-auto flex min-w-0 items-center gap-3 text-[11px]">
+        {/* The run in the file — the only thing this page is about, and the answer to "what am I
+            looking at" that `dbPath` gives on the live bar. */}
+        <div className="flex min-w-0 items-center gap-1.5" title={run.handle ?? undefined}>
+          <dt className="sr-only">Archived run</dt>
+          <dd className="m-0 max-w-[26rem] min-w-0 max-lg:max-w-[30vw]">
+            <span className="block truncate font-semibold">{run.label}</span>
+          </dd>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5" title="The Orca schema this evidence was read through">
+          <dt className="sr-only">Source schema</dt>
+          <dd className="m-0">
+            <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px]">
+              v{provenance.source.schemaVersion}
+            </Badge>
+          </dd>
+        </div>
+
+        <div className="hidden shrink-0 items-center gap-1.5 lg:flex" title="The build that exported this archive">
+          <dt className="opacity-70">Exported by</dt>
+          <dd className="m-0 font-mono">{provenance.tool}</dd>
+        </div>
+      </dl>
+
+      <ThemeToggle />
+    </motion.header>
+  );
+}
+
+/**
+ * What is *wrong*, in a replay — the same slot as the live notices, and two things to say.
+ *
+ * **The compatibility warning** is the ticket's last acceptance criterion made visible: a file a
+ * newer orca-viz wrote is readable and read, and the reader says so out loud rather than showing a
+ * post-mortem quietly missing an unknown amount of what was exported (`archiveCompatibilitySentence`).
+ *
+ * **The source's degradation** is the second, and it is why the exporter recorded it: a column the
+ * *original database* did not have cost a feature at export time, and an absence with no
+ * explanation reads on a replay as a bug in the replay. The archive remembers the reason, so the
+ * screen can still give it — months later, on a machine that never had the database.
+ */
+function ArchiveNotices({ archive: { archive, compatibility } }: { archive: ArchiveView }) {
+  const incompatible = archiveCompatibilitySentence(compatibility, archive.provenance);
+  const { degraded } = archive.provenance.source;
+
+  if (incompatible === null && degraded.length === 0) return null;
+
+  return (
+    <motion.div
+      initial={enter({ opacity: 0, y: -6 })}
+      animate={{ opacity: 1, y: 0 }}
+      transition={SPRING}
+      className={cn(
+        'flex shrink-0 flex-col gap-px overflow-hidden rounded-xl border text-xs shadow-lift-1',
+        'max-lg:max-h-24 max-lg:overflow-y-auto max-lg:landscape:max-h-16',
+        GATE_THEME.surface
+      )}
+    >
+      {incompatible !== null && (
+        <p role="status" data-state="archive-newer" className="px-4 py-2">
+          {incompatible}
+        </p>
+      )}
+
+      {degraded.length > 0 && (
+        <section role="status" data-state="archive-degraded" className="px-4 py-2">
+          <p>The database this run was exported from was missing columns this build reads — these features are reduced:</p>
+          <ul className="mt-1 list-disc pl-5 opacity-90">
+            {degraded.map((feature) => (
+              <li key={feature}>{feature}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </motion.div>
   );
 }
 

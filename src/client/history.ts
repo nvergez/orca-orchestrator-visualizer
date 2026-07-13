@@ -26,11 +26,18 @@ import { useRunSelection } from './rail/selection.ts';
 /** A canned loader answers in place; the real one answers over the network. */
 type MaybePromise<T> = T | Promise<T>;
 
+/**
+ * **Evidence, not headers.** Both loaders traffic in the run index and the selected run *minus*
+ * `meta`: the header is the stream's (`event.meta`), and this hook has never read the copy the
+ * endpoints send. Saying so in the type is what lets an **archived replay** build these two
+ * loaders out of a saved file (`client/archive.ts`, #74) — a file that has no database path, no
+ * liveness and no mtime, and must not be made to invent them to satisfy a shape.
+ */
 export type HistoryLoaders = {
   /** One page of the run index; null cursor ⇒ the newest page. */
-  index(cursor: string | null): MaybePromise<RunIndexPage>;
+  index(cursor: string | null): MaybePromise<Omit<RunIndexPage, 'meta'>>;
   /** One run, complete — or null when no run has this id any more (a 404). */
-  run(runId: string): MaybePromise<RunSnapshot | null>;
+  run(runId: string): MaybePromise<Omit<RunSnapshot, 'meta'> | null>;
 };
 
 /** The real transport: the two GETs of #69. */
@@ -54,6 +61,16 @@ export const fetchHistory: HistoryLoaders = {
 /** A failed fetch retries on its own; the stream cannot be relied on to ring again soon. */
 const RETRY_MS = 5000;
 
+/**
+ * **The doorbell, or the absence of one.**
+ *
+ * `live` is the ordinary tool: the stream rings, `affected` says what moved, and this hook
+ * refetches it. `offline` is the archived replay (#74): there is no stream, nothing can change,
+ * and the evidence is a file that was read once — so history is loaded on mount and never again.
+ * Polling an archive would be inventing a question nothing can answer.
+ */
+export type HistoryMode = 'live' | 'offline';
+
 export type History = {
   /** False until the first index page has landed — the shell shows "connecting" until then. */
   ready: boolean;
@@ -68,11 +85,11 @@ export type History = {
   select(runId: string): void;
   newRunId: string | null;
   /**
-   * The selected run, complete (`RunSnapshot`) — or null while it is first loading, or when
-   * the run vanished under the selection. The previous run's evidence is never shown under a
-   * new run's header.
+   * The selected run, complete (`RunSnapshot`, minus the header the shell takes from the stream)
+   * — or null while it is first loading, or when the run vanished under the selection. The
+   * previous run's evidence is never shown under a new run's header.
    */
-  snapshot: RunSnapshot | null;
+  snapshot: Omit<RunSnapshot, 'meta'> | null;
 };
 
 type IndexState = {
@@ -84,9 +101,9 @@ type IndexState = {
 
 const EMPTY_INDEX: IndexState = { ready: false, runs: [], nextCursor: null, coordinatorRuns: [] };
 
-export function useHistory(event: StreamEvent | null, loaders: HistoryLoaders): History {
+export function useHistory(event: StreamEvent | null, loaders: HistoryLoaders, mode: HistoryMode = 'live'): History {
   const [index, setIndex] = useState<IndexState>(EMPTY_INDEX);
-  const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<Omit<RunSnapshot, 'meta'> | null>(null);
 
   // The loaders ride in a ref so an inline object is a re-render, not an infinite refetch —
   // the same defence `useTaskDetail` runs.
@@ -217,6 +234,13 @@ export function useHistory(event: StreamEvent | null, loaders: HistoryLoaders): 
     }
     fetchSnapshot(selectedId, false);
   }, [selectedId]);
+
+  // **An archived replay has no doorbell** (#74). Nothing is going to ring, because nothing can
+  // change: the evidence is a file, and it was read before the page loaded. So the one read
+  // happens here, on mount, and the effect below never fires because no event ever arrives.
+  useEffect(() => {
+    if (mode === 'offline') refreshWindow();
+  }, [mode]);
 
   // The doorbell. Each push is handled once: `affected` says whether the window and the
   // selected run are worth asking about again, and nothing is refetched that it did not name.

@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, OctagonAlert, X } from 'lucide-react';
+import { ArrowUp, ChevronDown, Download, OctagonAlert, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { RadarDot } from '@/components/fx/radar-dot';
@@ -86,6 +86,13 @@ export type RunRailProps = {
   newRunId: string | null;
   /** "Load older history" — absent when the caller has no pages to offer (canned shells). */
   older?: RailPaging;
+  /**
+   * Where "Export archive" points for a run (#74) — and **absent in an archived replay**, which
+   * is already an export and has nothing to export from. Undefined renders no link at all rather
+   * than a disabled one: a control that cannot be used is furniture, and this one would be lying
+   * about a database that is not there.
+   */
+  exportHref?: (runId: string) => string;
   /** Present only on mobile, where the rail is a foldable band. Desktop passes nothing. */
   fold?: RailFold;
 };
@@ -99,6 +106,7 @@ export function RunRail({
   onSelectAgent,
   newRunId,
   older,
+  exportHref,
   fold,
 }: RunRailProps) {
   // Which row the pointer is on. The *only* reason this is state: the sliding highlight is one
@@ -270,7 +278,13 @@ export function RunRail({
                   {/* The cast, under the one that is open — the hierarchy the database has always had,
                       drawn as a hierarchy for the first time. */}
                   {run.id === selectedId && (
-                    <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
+                    <>
+                      {/* Above the cast, not below it: the export is an action on *this run*, and a
+                          run with nineteen agents would otherwise bury it under nineteen rows of
+                          somebody else. */}
+                      {exportHref && <ExportRun run={run} href={exportHref(run.id)} />}
+                      <Cast run={run} selectedAgent={selectedAgent} onSelectAgent={onSelectAgent} now={now} />
+                    </>
                   )}
                 </li>
               ))}
@@ -410,6 +424,40 @@ function RunRow({
 
 function Dot() {
   return <span className="opacity-40">·</span>;
+}
+
+/**
+ * **Export this orchestrator** (#74, ADR 0001) — under the open row, beside its cast, because the
+ * thing being exported is *the run you have open* and nothing else.
+ *
+ * It is a link, not a button, and that is the design rather than an implementation detail:
+ *
+ * - **It happens once, when a person asks.** A link is the least a click can do — the browser
+ *   saves a file and the page does not change. No watcher is started, no recorder, no retention:
+ *   the archive is a photograph, taken because somebody pressed the shutter (ADR 0001).
+ * - **It is one run.** The affordance only exists on the selected row, so "export exactly one
+ *   selected orchestrator run" is a thing the UI *cannot* get wrong.
+ * - **The file names itself.** `download` lets the server's `Content-Disposition` — the run and
+ *   the instant — decide what lands in the downloads folder, so the page never has to hold a copy
+ *   of the artifact to name it.
+ *
+ * It sits *outside* `RunRow`'s button, not inside it: a link inside a button is not a thing HTML
+ * has (the same rule the mobile band's agent chip follows).
+ */
+function ExportRun({ run, href }: { run: Run; href: string }) {
+  return (
+    <a
+      data-testid="export-run"
+      data-run={run.id}
+      href={href}
+      download
+      title={`Save ${run.label}’s retained evidence — its tasks, attempts, gates and conversation — as an offline archive you can replay with orca-viz --archive`}
+      className={cn(CHIP_CLASS, 'mx-3 my-1.5 cursor-pointer max-lg:py-1.5')}
+    >
+      <Download className="size-3" />
+      Export archive
+    </a>
+  );
 }
 
 /**

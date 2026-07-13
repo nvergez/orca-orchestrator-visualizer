@@ -101,6 +101,13 @@ export type InspectorProps = {
    * nothing.
    */
   hoppedFrom?: string | null;
+  /**
+   * True in an **archived replay** (#74): the evidence is one exported run, and there is no
+   * database behind it to walk into. It costs exactly one thing — a dependency chip whose task
+   * lives in *another* orchestrator names it and stops, instead of offering a click that would
+   * land on a run this file does not contain (`Deps`).
+   */
+  archived?: boolean;
 };
 
 export function Inspector({
@@ -114,6 +121,7 @@ export function Inspector({
   onClose,
   onSelectTask,
   hoppedFrom = null,
+  archived = false,
 }: InspectorProps) {
   const isMobile = useIsMobile();
 
@@ -229,6 +237,8 @@ export function Inspector({
             testId="deps-in"
             ids={task.deps}
             tasks={tasks}
+            runId={task.runId}
+            archived={archived}
             onSelectTask={onSelectTask}
             empty="Nothing — this task waited for nobody."
           />
@@ -239,6 +249,8 @@ export function Inspector({
             testId="deps-out"
             ids={dependents}
             tasks={tasks}
+            runId={task.runId}
+            archived={archived}
             onSelectTask={onSelectTask}
             empty="Nothing — no task in this run waited for it."
           />
@@ -554,21 +566,33 @@ function GateQA({ gate }: { gate: Gate }) {
 }
 
 /**
- * The DAG, one hop at a time. A chip is a **button** when the neighbour is a task on this canvas,
- * and plain text when it is not: `deps` can name a task an `orchestration reset` deleted, and
- * there are no foreign keys in this schema to stop it (SPEC §4.2, trap 8). The canvas drops that
- * edge; the chip admits it rather than offering a click that goes nowhere.
+ * The DAG, one hop at a time. A chip is a **button** when the neighbour is a task the reader can
+ * actually go to, and plain text when it is not — and there are two ways it is not:
+ *
+ * - **The task is gone.** `deps` can name a task an `orchestration reset` deleted, and there are
+ *   no foreign keys in this schema to stop it (SPEC §4.2, trap 8). The canvas drops that edge; the
+ *   chip admits it rather than offering a click that goes nowhere.
+ * - **The task is in another orchestrator, and this is an archive** (#74). A run archive holds one
+ *   run — that is the boundary ADR 0001 draws — so the far end of an edge that leaves it is *in
+ *   the file* (its title, its status: that is what `linkedTasks` is for) but there is no run to
+ *   open it in. The chip says which of those two things happened, because "gone" would be a lie
+ *   about a task that is sitting right there in somebody's database.
  */
 function Deps({
   testId,
   ids,
   tasks,
+  runId,
+  archived,
   onSelectTask,
   empty,
 }: {
   testId: string;
   ids: string[];
   tasks: Task[];
+  /** The run the task being inspected belongs to — what makes a neighbour "another run's". */
+  runId: string;
+  archived: boolean;
   onSelectTask: (taskId: string) => void;
   empty: string;
 }) {
@@ -585,15 +609,33 @@ function Deps({
       {ids.map((id) => {
         const neighbour = tasks.find((candidate) => candidate.id === id);
 
-        return neighbour === undefined ? (
-          <span
-            key={id}
-            title="This task is not in the database any more — a reset deleted it."
-            className="border-border bg-muted/50 text-muted-foreground inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
-          >
-            <span className="truncate">{id}</span> · gone
-          </span>
-        ) : (
+        if (neighbour === undefined) {
+          return (
+            <span
+              key={id}
+              title="This task is not in the database any more — a reset deleted it."
+              className={UNREACHABLE_CHIP_CLASS}
+            >
+              <span className="truncate">{id}</span> · gone
+            </span>
+          );
+        }
+
+        if (archived && neighbour.runId !== runId) {
+          return (
+            <span
+              key={id}
+              data-testid="dep-outside-archive"
+              title="This task belongs to another orchestrator. This archive holds one run, so there is nothing here to open it in."
+              className={UNREACHABLE_CHIP_CLASS}
+            >
+              <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', themeOf(neighbour.status).dot)} />
+              <span className="truncate">{neighbour.title}</span> · not in this archive
+            </span>
+          );
+        }
+
+        return (
           <button
             key={id}
             type="button"
@@ -609,6 +651,10 @@ function Deps({
     </div>
   );
 }
+
+/** A neighbour that is named but cannot be opened — a chip that is deliberately not a button. */
+const UNREACHABLE_CHIP_CLASS =
+  'border-border bg-muted/50 text-muted-foreground inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]';
 
 /**
  * One section, and its place in the order the panel arrives in. The `index` is the stagger's, and

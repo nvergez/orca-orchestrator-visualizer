@@ -1,3 +1,4 @@
+import { ARCHIVE_VERSION, type ArchiveCompatibility, type ArchiveProvenance } from './archive.ts';
 import type { Meta } from './types.ts';
 
 /**
@@ -53,4 +54,42 @@ export function schemaSentence({ schemaSupport, degraded }: Pick<Meta, 'schemaSu
   return schemaSupport === 'older'
     ? 'This database is from an older Orca schema — these features are reduced:'
     : 'This Orca is missing columns this build expects — these features are reduced:';
+}
+
+/**
+ * **What an archived replay is looking at** (#74) — and the sentence that has to be unmistakable,
+ * because the thing it exists to prevent is somebody reading a saved file as current state.
+ *
+ * It says *archived*, it says *offline*, it says **when** the evidence was taken, and it makes no
+ * claim about now — there is no process to be connected to, and nothing here is going to change.
+ * The terminal prints it at boot and the page carries it in the bar it prints instead of the
+ * liveness pill, out of this one function, for the same reason `livenessSentence` is one
+ * function: two copies of a promise are two promises, and one of them eventually lies.
+ */
+export function archivedSentence(
+  { exportedAt }: Pick<ArchiveProvenance, 'exportedAt'>,
+  formatTime: FormatTime = (iso) => iso
+): string {
+  return `archived — an offline export taken on ${formatTime(exportedAt)}; nothing is running, and nothing here will change`;
+}
+
+/**
+ * A file a *newer* orca-viz wrote, and this build opened anyway (#74).
+ *
+ * The evidence it recognizes is on screen; the fields it does not know are in the file, unread
+ * and unaltered. Saying so is the whole of the compatibility contract: the alternative — showing
+ * a partial archive silently — would be a post-mortem quietly missing an unknown amount of what
+ * was exported. Null when the archive is one this build fully understands.
+ */
+export function archiveCompatibilitySentence(
+  compatibility: ArchiveCompatibility,
+  { version }: Pick<ArchiveProvenance, 'version'>
+): string | null {
+  if (compatibility !== 'newer') return null;
+
+  return (
+    `This archive was written by a newer orca-viz (archive format v${version}; this build reads ` +
+    `v${ARCHIVE_VERSION}). Everything it recognizes is shown as it was written, and anything this ` +
+    `version added is in the file but not on this screen — upgrade orca-viz to read it.`
+  );
 }

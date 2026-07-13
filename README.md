@@ -56,6 +56,7 @@ npx orca-viz@latest --port 8080 --no-open
 | Flag | |
 |---|---|
 | `--db <path>` | The `orchestration.db` to read. A path that does not work is a **hard error** — orca-viz will never quietly fall back to a different database than the one you named. Also settable as `ORCA_VIZ_DB`. |
+| `--archive <path>` | Replay a saved **run archive** instead of reading a database — see [Exporting one run, and replaying it offline](#exporting-one-run-and-replaying-it-offline). Opens no database and polls nothing, so it cannot be combined with `--db`, `--list-dbs` or `--poll-interval`. |
 | `--list-dbs` | Print every candidate database, in the order orca-viz would choose them, with its liveness, schema version and mtime. Then exit. |
 | `--port <n>` | Port to listen on (default `4269`). A port that is already taken is an error, **not** a hop to another one — a hunted port would break the URL orca-viz just opened and any bookmark of it. |
 | `--host <host>` | Address to bind (default `127.0.0.1`). Loopback by design; see the warning above before changing it. |
@@ -126,9 +127,45 @@ explanation rather than silently misread.
 - **The inspector** — the spec that was dispatched, the result that came back, **every** dispatch
   attempt (the only place the retry-and-circuit-breaker story is visible), and that task's exchange
   end to end.
+- **Export archive** — under the open orchestrator, and only there: one click saves that run's
+  evidence as a file you can replay offline, later, or somewhere else. See below.
 
 It follows your system's light or dark theme, and the toggle in the top right overrides that and
 is remembered.
+
+## Exporting one run, and replaying it offline
+
+Open an orchestrator in the rail and click **Export archive**. You get one JSON file: that run's
+retained evidence — every task with its spec and result in full, every dispatch attempt, its gates,
+its whole reconstructed conversation, and the raw messages attributed to it. Open it later, or on
+another machine, with no Orca anywhere in sight:
+
+```bash
+npx orca-viz --archive ~/Downloads/orca-viz-run_term_2ffffb19-2026-07-12T09-30-00-000Z.json
+```
+
+The replay is the same screen — the same rail, canvas, conversation and inspector, reading the
+same evidence — and it says **archived** where the live tool says *connected*. It opens no
+database, makes no request after the first one, and never claims anything is running.
+
+What is deliberately **not** in the file:
+
+- **Your machine's database.** An archive is one run. Not the other orchestrators, not the global
+  or unattributed messages, not the `orchestration.db`, and **not its path** — a path is where the
+  evidence came from on somebody's laptop, and it is not what the file *is*.
+- **A recorder.** Nothing is watched, scheduled, or captured after the click. The export is a
+  photograph of what the database already held at the instant you asked, which is the whole of what
+  this tool is allowed to do (`docs/adr/0001-one-shot-retained-run-archives.md`).
+- **A liveness claim.** A run that was still running when you exported it is archived as *ended*,
+  because "live" means *now*, and now is not when the file gets opened.
+
+The file records its own format version, so a newer orca-viz's archive still opens in an older
+one — under a visible warning, with anything it does not understand preserved in the file and shown
+as it was written. An archive whose core it genuinely cannot read fails in the terminal, with the
+reason, rather than as an empty screen.
+
+*Note that an archive is a copy of your task specs, agent prompts and message bodies. It is
+evidence, not a redaction format — read what you are sending before you send it.*
 
 ## What it infers, and where that can be wrong
 
