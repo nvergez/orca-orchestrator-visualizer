@@ -165,7 +165,15 @@ function Agent({
       className={cn(
         // `pr-9` is the room the copy button rides in (`Cast`, above) — kept clear at all times, so
         // the last-seen badge does not jump sideways the moment the pointer arrives.
-        'hover:bg-accent/60 relative flex w-full cursor-pointer items-center gap-2.5 py-1.5 pr-9 pl-7 text-left transition-colors',
+        //
+        // `flex-wrap` is what keeps the name on the row. The no-heartbeat badge is `shrink-0` and
+        // its honest sentence ("dispatched 16h ago · no heartbeat", #47) runs to ~207px — wider than
+        // what an 18rem rail has left once the monogram and the copy button are paid for. Against a
+        // `min-w-0` name that resolves by crushing the name to *zero*: the agent that most needs
+        // identifying is the one whose identity disappears. So the name is given a floor (below) and
+        // the badge is allowed to wrap beneath it instead. Healthy rows are unchanged — their badge
+        // is "1 task" and everything still fits on one line.
+        'hover:bg-accent/60 relative flex w-full cursor-pointer flex-wrap items-center gap-2.5 py-1.5 pr-9 pl-7 text-left transition-colors',
         'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
         selected && 'bg-selection-soft/70'
       )}
@@ -182,7 +190,10 @@ function Agent({
         {member.monogram}
       </span>
 
-      <span className="min-w-0 flex-1">
+      {/* The floor `flex-wrap` needs to act on: with a `min-w-0` basis the name would sooner shrink
+          to nothing than push the badge onto a second line. 6rem is "Agent 12" plus its truncated
+          handle — enough to name the worker, never enough to crowd the badge off a healthy row. */}
+      <span className="min-w-[6rem] flex-1">
         <b className="block truncate text-[12.5px] font-semibold">
           Agent {member.monogram.slice(1)}
           {/* The kind hint (SPEC §14.4) — worn with its question mark, because the uncertainty is
