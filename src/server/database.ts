@@ -24,6 +24,7 @@ import { StartupError } from './errors.ts';
 import { attachGates, readGates } from './gates.ts';
 import { detectHistoryLoss } from './history-loss.ts';
 import { pageRuns, type RunEvidence, snapshotRun } from './history.ts';
+import { attachHints, readHintEvidence } from './hints.ts';
 import { type LivenessReport, type ProcessProbe, probeProcess, readLiveness } from './liveness.ts';
 import { readMessages } from './messages.ts';
 import { buildReport, type ReportQuery } from './report.ts';
@@ -267,14 +268,25 @@ export class OrcaDatabase {
     // attributed message log, which can only be read once the runs exist to attribute against.
     const scored = attachScoreboards(gated.runs, { entries, messages, columns: this.schema.columns });
 
+    // The evidence hints (SPEC §12.4), last, because they consume what everything above decided
+    // and decide nothing back: an uncertain `claude?` on a cast member, an uncertain project on
+    // a run — read from retained spec/result/branch evidence, refused on any ambiguity, and
+    // never touching the identities (run ids, monograms, attribution) already settled.
+    //
+    // It hints the *scored* runs, not `gated.runs`: this is the last link of a chain of run
+    // passes (gates → scoreboards → hints), each spreading the last one's runs, and handing it
+    // the pre-scoreboard list would quietly hand the client back a cast with no metrics on it.
+    const hinted = attachHints(scored, readHintEvidence(this.db, this.schema.columns, entries), messages);
+
     return {
       liveness,
       evidence: {
-        // The scored runs, never `gated.runs` — the scoreboard rides on `run.cast[].score`, and
-        // both projections that serve a run to the client cut from this one list: the run index
-        // pages it (`pageRuns`) and the selected-run snapshot indexes it (`snapshotRun`). Handing
-        // either the unscored list would give one of them a cast with no metrics on it.
-        runs: scored,
+        // The scored *and hinted* runs, never `gated.runs` — the scoreboard rides on
+        // `run.cast[].score` and the hints on `run.repoHint` / `run.cast[].kindHint`, and both
+        // projections that serve a run to the client cut from this one list: the run index pages
+        // it (`pageRuns`) and the selected-run snapshot indexes it (`snapshotRun`). Handing
+        // either an earlier list would give one of them a cast with no metrics and no kinds on it.
+        runs: hinted,
         tasks: gated.tasks,
         // Oldest attempt first, as `tasks.ts` reads them — the selected-run snapshot's
         // append-only retry record (SPEC §12), and the same rows the cast was built from.
@@ -284,7 +296,7 @@ export class OrcaDatabase {
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
         // report out of `tasks.result`. It is the whole of what this screen is for, and the client
         // does nothing to it but choose a scope.
-        turns: conversationOf({ entries, runs: scored, gates: gated.gates, messages }),
+        turns: conversationOf({ entries, runs: hinted, gates: gated.gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
         // The recognized outcome facts of both evidence columns, per task (#67) — what the

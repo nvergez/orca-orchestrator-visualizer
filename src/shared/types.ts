@@ -162,6 +162,29 @@ export type Scorecard = {
 };
 
 /**
+ * **An evidence hint** (SPEC §12.4, and the domain glossary): an explicitly uncertain label —
+ * an agent kind on a cast member, a project name on a run — derived from unambiguous retained
+ * evidence, carrying the provenance it was read from.
+ *
+ * The schema has no agent-kind column and no repository column, and this type is not an attempt
+ * to invent either. It exists only when **exactly one** candidate survived every high-confidence
+ * evidence position the server inspected (`server/hints.ts`); conflicting, casual, malformed or
+ * absent evidence produces no hint at all, and the field is simply not on the wire. The client
+ * renders the value with a `?` — the uncertainty is the point, not a caveat — and never uses it
+ * as a join key, a grouping, or navigation: identity stays with the handle and the run id.
+ */
+export type EvidenceHint = {
+  /** The one candidate that survived: an allowlisted agent kind, or a project directory name. */
+  value: string;
+  /**
+   * Where it was read from, worded for the screen ("branch", "spec", "task specs") — the client
+   * prefixes "from". Insertion-ordered by the derivation, so an unchanged database cannot
+   * reorder a provenance between two polls.
+   */
+  sources: string[];
+};
+
+/**
  * One agent an orchestrator spawned — a terminal that was dispatched at least one of its tasks
  * (SPEC §4.3a). Derived from the `assignee_handle`s of that orchestrator's dispatch contexts,
  * which is the only place in the schema that records who did the work.
@@ -189,6 +212,13 @@ export type CastMember = {
    * needs the runs the cast is part of. Optional so the pure cast derivation owes it nothing.
    */
   score?: Scorecard;
+  /**
+   * What kind of agent this terminal *probably* was — `claude`, `codex`, … — when exactly one
+   * allowlisted kind survives its retained evidence (SPEC §12.4). Absent otherwise, and absent
+   * means absent: the snapshot is re-sent whole every tick, and a `null` on every member of
+   * every cast would be bytes of nothing (the `Turn` rule).
+   */
+  kindHint?: EvidenceHint;
 };
 
 /**
@@ -280,6 +310,13 @@ export type Run = {
    * completion/creation — open while the run is live. Absent when no task creation is readable.
    */
   duration?: DurationObservation;
+  /**
+   * The project this orchestrator was *probably* working in, when every piece of absolute-path
+   * evidence retained across its tasks agrees on one candidate (SPEC §12.4). Never the run key,
+   * never navigation — the rail groups by handle, whatever this says. Absent when the evidence
+   * is missing or names two projects, and absent means absent (the `Turn` rule).
+   */
+  repoHint?: EvidenceHint;
 };
 
 /** The latest dispatch attempt — `MAX(rowid)` for the task, as Orca's own queries do. */

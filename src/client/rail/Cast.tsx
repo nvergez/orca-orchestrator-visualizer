@@ -11,6 +11,7 @@ import { COPY_ON_HOVER, CopyButton } from '../copy.tsx';
 import { enter, SECTION_IN } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
 import type { WorkerHealth } from '../worker-health.ts';
+import { provenanceOf } from './provenance.ts';
 
 /**
  * **The cast — and the tool's central gesture.**
@@ -182,9 +183,34 @@ function Agent({
       </span>
 
       <span className="min-w-0 flex-1">
-        <b className="block text-[12.5px] font-semibold">Agent {member.monogram.slice(1)}</b>
+        <b className="block truncate text-[12.5px] font-semibold">
+          Agent {member.monogram.slice(1)}
+          {/* The kind hint (SPEC §12.4) — worn with its question mark, because the uncertainty is
+              the point: the schema has no agent-kind column, and this is one surviving reading of
+              retained evidence, not an identity. The provenance sits on the line below, beside the
+              handle, so the inference and its source are read together. */}
+          {member.kindHint && (
+            <span data-testid="agent-kind-hint" className="text-muted-foreground font-normal">
+              {' '}
+              · {member.kindHint.value}?
+            </span>
+          )}
+        </b>
         <code className="text-muted-foreground block truncate font-mono text-[10px]">
           {shortHandle(member.handle)}
+          {member.kindHint && (
+            // The 18rem rail can truncate the visible copy after the handle; the title keeps the
+            // full sentence one hover away. (The row's own title stays the handle — this span is
+            // above it in the tree, so the more specific wording wins under the pointer.)
+            <span
+              data-testid="agent-kind-provenance"
+              title={`Kind hint — uncertain, read ${provenanceOf(member.kindHint)}. Not an identity.`}
+              className="opacity-75"
+            >
+              {' '}
+              · {provenanceOf(member.kindHint)}
+            </span>
+          )}
         </code>
         <OrcaContext worker={worker} owner="agent" />
       </span>

@@ -20,6 +20,7 @@ import {
   workerHealthByAgent,
 } from '../worker-health.ts';
 import { Cast } from './Cast.tsx';
+import { provenanceOf } from './provenance.ts';
 import { formatRunDate, statusBreakdown } from './summary.ts';
 
 /**
@@ -461,6 +462,22 @@ function RunRow({
           <>
             <Dot />
             <span>{breakdown}</span>
+          </>
+        )}
+        {/* The repository hint (SPEC §12.4): the project every absolute path retained across this
+            run's tasks agrees on — question-marked, with the provenance said in place, because it
+            is a reading of evidence and not a column. It is a caption on the row the *handle*
+            keys; it never groups, sorts or selects anything (the rail's order is activity, its
+            identity is the handle, and both are decided before hints exist). */}
+        {run.repoHint && (
+          <>
+            <Dot />
+            <span
+              data-testid="run-repo-hint"
+              title={`Repository hint — uncertain, read ${provenanceOf(run.repoHint)}. Never used to group or identify runs.`}
+            >
+              {run.repoHint.value}?<span className="opacity-70"> · {provenanceOf(run.repoHint)}</span>
+            </span>
           </>
         )}
       </span>

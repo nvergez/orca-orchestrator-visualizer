@@ -646,3 +646,78 @@ describe('the cast', () => {
     expect(screen.getByRole('button', { name: `Copy the agent handle ${ALICE}` })).toBeVisible();
   });
 });
+
+/**
+ * **Evidence hints** (SPEC §12.4) — the two labels the schema does not have, worn with a question
+ * mark when the server found exactly one surviving candidate, and *not worn at all* otherwise.
+ *
+ * The client's whole obligation here is epistemic wording: `claude?` with its provenance beside it,
+ * never `claude` as if a column had said so. Absence needs no rendering decision — the field is
+ * simply not on the wire — but the tests pin it anyway, because a default (`unknown?`, an empty
+ * chip) sneaking in later is exactly the guess the feature exists to refuse.
+ */
+describe('evidence hints', () => {
+  const ALICE = 'term_a11ce000-1234-4321-8888-aabbccddeeff';
+  const BOB = 'term_b0b00000-1234-4321-8888-aabbccddeeff';
+
+  const HINTED: CastMember = {
+    handle: ALICE,
+    monogram: 'A1',
+    taskIds: ['task_1'],
+    taskCount: 1,
+    lastHeartbeatAt: null,
+    kindHint: { value: 'claude', sources: ['spec', 'branch'] },
+  };
+  const UNHINTED: CastMember = { handle: BOB, monogram: 'A2', taskIds: ['task_2'], taskCount: 1, lastHeartbeatAt: null };
+
+  it('says what an agent probably was — question mark first, provenance beside it', () => {
+    render(
+      <CannedApp
+        event={event(
+          [run({ id: 'run_crew', cast: [HINTED, UNHINTED] })],
+          [task({ id: 'task_1', runId: 'run_crew' }), task({ id: 'task_2', runId: 'run_crew' })]
+        )}
+      />
+    );
+
+    const [alice] = screen.getAllByTestId('agent-row');
+
+    // "A1 · claude?" — the uncertainty is rendered, not implied, and the sources the server read
+    // are said in place rather than hidden behind an interaction.
+    expect(within(alice!).getByTestId('agent-kind-hint')).toHaveTextContent('· claude?');
+    expect(within(alice!).getByTestId('agent-kind-provenance')).toHaveTextContent('from spec + branch');
+  });
+
+  it('says nothing about an agent whose evidence was absent or conflicting', () => {
+    render(
+      <CannedApp
+        event={event(
+          [run({ id: 'run_crew', cast: [HINTED, UNHINTED] })],
+          [task({ id: 'task_1', runId: 'run_crew' }), task({ id: 'task_2', runId: 'run_crew' })]
+        )}
+      />
+    );
+
+    const [, bob] = screen.getAllByTestId('agent-row');
+
+    // The refusal is the server's; the client's job is to not invent a placeholder for it.
+    expect(within(bob!).queryByTestId('agent-kind-hint')).toBeNull();
+    expect(within(bob!).queryByTestId('agent-kind-provenance')).toBeNull();
+  });
+
+  it('captions a run with the project its evidence agrees on — uncertain, sourced', () => {
+    const hinted = run({ id: 'run_hinted', repoHint: { value: 'orca-viz', sources: ['task specs'] } });
+
+    render(<CannedApp event={event([hinted], [task({ runId: 'run_hinted' })])} />);
+
+    const hint = within(row('run_hinted')).getByTestId('run-repo-hint');
+    expect(hint).toHaveTextContent('orca-viz?');
+    expect(hint).toHaveTextContent('from task specs');
+  });
+
+  it('captions nothing when the run has no repository hint', () => {
+    render(<CannedApp event={event([run({ id: 'run_plain' })], [task({ runId: 'run_plain' })])} />);
+
+    expect(within(row('run_plain')).queryByTestId('run-repo-hint')).toBeNull();
+  });
+});
