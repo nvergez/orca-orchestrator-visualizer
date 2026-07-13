@@ -5,10 +5,10 @@ import type { DurationObservation, Meta, Run, Task } from '../../src/shared/type
 import { type CannedEvent, CannedApp } from './canned.tsx';
 
 /**
- * The critical path (#71, SPEC §12.4): a duration-weighted longest path over the selected
+ * The critical path (#71, SPEC §14.4): a duration-weighted longest path over the selected
  * completed run's in-run dependency edges, highlighted statically on the DAG.
  *
- * Two seams, one file. The **pure derivation** has the dense error surface SPEC §12.5 names —
+ * Two seams, one file. The **pure derivation** has the dense error surface SPEC §14.5 names —
  * missing dependency endpoints, zero weights, deterministic ties, edgeless graphs, cycles — and
  * is tested value by value. The **presentation** is `<CannedApp>` fed a canned world, asserting
  * the DOM the user reads: which nodes wear the highlight, and the sentence that explains a shape
@@ -93,7 +93,7 @@ describe('criticalPathOf — the pure derivation', () => {
 
   it('keeps unknown-duration tasks traversable at zero weight', () => {
     // The connective task retains no readable clock at all. Missing timing must cost the
-    // number, never the dependency (SPEC §12.3, story 16).
+    // number, never the dependency (SPEC §14.3, story 16).
     const tasks = [
       task('task_a', [], { duration: dispatchClock(10) }),
       task('task_z', ['task_a'], { status: 'failed', completedAt: null }),
@@ -186,7 +186,7 @@ describe('criticalPathOf — the pure derivation', () => {
 
   it('resolves equal paths by retained order, never by how many tasks they cross', () => {
     // Two source-to-sink roads of equal weight, one longer: retained order and id are the
-    // tie-break SPEC §12.4 pins, and a preference for length would be a rule it does not name.
+    // tie-break SPEC §14.4 pins, and a preference for length would be a rule it does not name.
     const tasks = [
       task('task_a', [], { duration: dispatchClock(10) }),
       task('task_b', ['task_a'], { duration: dispatchClock(20) }),

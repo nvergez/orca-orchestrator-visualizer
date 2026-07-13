@@ -2,7 +2,7 @@ import { agentOfTurn, type DurationObservation, type RunSnapshot, type Task } fr
 import { instantOf } from '../relative-time.ts';
 
 /**
- * **The dispatch timeline** (#72, SPEC §12.4) — one selected run, read along the clock.
+ * **The dispatch timeline** (#72, SPEC §14.4) — one selected run, read along the clock.
  *
  * The DAG answers *what depended on what*. This answers the two questions it structurally cannot:
  * **who was working when**, and **how many times we had to ask**. Both are already in the file —
@@ -11,9 +11,9 @@ import { instantOf } from '../relative-time.ts';
  *
  * ## It reads the selected-run snapshot, and nothing else
  *
- * No new endpoint, and that is a consequence rather than a shortcut. ADR 0002 made the selected run
+ * No new endpoint, and that is a consequence rather than a shortcut. ADR 0004 made the selected run
  * **complete** — every task, every attempt, every gate, the whole conversation, never windowed and
- * never truncated — which is exactly why SPEC §12.4 can say *"every retained dispatch attempt is a
+ * never truncated — which is exactly why SPEC §14.4 can say *"every retained dispatch attempt is a
  * separate bar **because** the selected-run snapshot is complete and attempts are already the retry
  * record."* A second server-side derivation of the same rows would be a second copy of a truth that
  * can disagree with the first, which is the mistake `GET /api/task/:id` was cured of when its

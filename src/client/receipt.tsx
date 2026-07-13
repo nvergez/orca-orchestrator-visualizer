@@ -18,7 +18,7 @@ import { CopyId } from './copy.tsx';
  *   receipt is untrusted text out of a database anyone can write to.
  * - **Everything else is copyable text** — a path, a branch, a ticket id, an agent handle.
  *   A path is *not* linkified: it was true on the worker's machine at completion time, and
- *   this machine was never promised to have it (SPEC §12.4). Copying is the one act that
+ *   this machine was never promised to have it (SPEC §14.4). Copying is the one act that
  *   makes no further claim, and it is the same affordance every Orca id already wears
  *   (`copy.tsx`).
  *

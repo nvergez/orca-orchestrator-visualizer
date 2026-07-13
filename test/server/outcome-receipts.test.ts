@@ -6,7 +6,7 @@ import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * Outcome receipts over the wire (#67, SPEC §12.4) — seam 1, real HTTP against a real
+ * Outcome receipts over the wire (#67, SPEC §14.4) — seam 1, real HTTP against a real
  * fixture database.
  *
  * The reader itself is proven pure (`receipt.test.ts`); what this suite pins is the
@@ -356,7 +356,7 @@ describe('a missing column costs exactly the receipts it held, by name', () => {
     // carries no delta (#69) — and the claim below is about the messages still flowing.
     const event = await harness.snapshot(0);
 
-    // Named, for a human, in meta.degraded (SPEC §12.4) — receipt enhancement, not just the
+    // Named, for a human, in meta.degraded (SPEC §14.4) — receipt enhancement, not just the
     // result body the older entry already covers.
     expect(event.meta.degraded.some((entry) => entry.includes('Outcome receipts from task results'))).toBe(true);
 
@@ -419,7 +419,7 @@ describe('a missing column costs exactly the receipts it held, by name', () => {
         .write(tempDbPath())
     );
 
-    // Unknown receipt shapes are ordinary retained evidence, not schema drift (SPEC §12.4).
+    // Unknown receipt shapes are ordinary retained evidence, not schema drift (SPEC §14.4).
     expect((await harness.snapshot()).meta.degraded).toEqual([]);
   });
 });

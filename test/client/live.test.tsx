@@ -15,7 +15,7 @@ import type { Affected, Meta, Run, StreamEvent, Task } from '../../src/shared/ty
  * test pushes down, a fake `fetch` serving a mutable canned world — because jsdom has neither,
  * and the server's half of both is asserted over real HTTP in `test/server/history.test.ts`.
  *
- * The contract under test is #69's (ADR 0002): the stream is the doorbell and the fetches are
+ * The contract under test is #69's (ADR 0004): the stream is the doorbell and the fetches are
  * the data. A push that names a run refetches it; one that names another run does not; a
  * reconnect-shaped push (`affected.all`) re-reads what is on screen — which is how growth
  * while disconnected reaches the reader — and older history arrives only when "Load older

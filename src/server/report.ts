@@ -14,14 +14,14 @@ import type { RunEvidence } from './history.ts';
 import { instantOf } from './time.ts';
 
 /**
- * **The cross-history dispatch report** (#70, SPEC §12.4) — one row per retained task, across
+ * **The cross-history dispatch report** (#70, SPEC §14.4) — one row per retained task, across
  * every orchestrator run in the database, sorted and filtered and paged *here*, on the server.
  *
  * The tool can already draw one run and tell one task's story. What it could not do was answer
  * the questions that are about *history* rather than about a run: which task took longest, who
  * is carrying the failures, what did last Tuesday actually produce, and — the one a rail can
  * never answer — **what was never dispatched at all**. Those are a search, not a graph, and the
- * whole design follows from refusing to draw a second graph to answer them (SPEC §12.6).
+ * whole design follows from refusing to draw a second graph to answer them (SPEC §14.6).
  *
  * Three things this module is careful about, and each is a way it could have lied:
  *
@@ -91,7 +91,7 @@ export type ReportQuery = {
    * **A named agent, present or missing.** Missing is a task no terminal is on record as holding:
    * never dispatched, or dispatched by a `dispatch_contexts` row that named nobody. The cast
    * refuses to name an empty handle (`cast.ts`), so there is no handle to filter it by — and a
-   * value that renders as missing has to be *findable* as missing (SPEC §12.4).
+   * value that renders as missing has to be *findable* as missing (SPEC §14.4).
    */
   agent: ReportPresence;
   /** `missing` ⇒ nothing recognized in either evidence column (#67) — not "produced nothing". */
@@ -248,7 +248,7 @@ function rowOf(task: Task, run: Run | undefined, evidence: RunEvidence): ReportR
     dispatchedAt: latest === null || latest.dispatchedAt === '' ? null : latest.dispatchedAt,
     attemptCount: task.attemptCount,
     // The maximum, never the sum: `failure_count` is cumulative, so adding it across a task's
-    // attempts counts the first failure again for every retry that followed it (SPEC §12.4).
+    // attempts counts the first failure again for every retry that followed it (SPEC §14.4).
     failureCount: attempts.reduce((most, attempt) => Math.max(most, attempt.failureCount), 0),
   };
 
@@ -282,7 +282,7 @@ function matches(row: ReportRow, query: ReportQuery): boolean {
   }
 
   // Each presence filter reads the **column it is named after**, so that every value the report
-  // renders as missing is a value it can be *asked* for (SPEC §12.4). "Present" for a dispatch
+  // renders as missing is a value it can be *asked* for (SPEC §14.4). "Present" for a dispatch
   // time means *readable*: it is the same reading the sort and the time range make, so a row this
   // filter calls present is exactly a row those two can place. Never dispatched, no instant
   // recorded, and an instant nothing can parse all land together — and the row is where they are

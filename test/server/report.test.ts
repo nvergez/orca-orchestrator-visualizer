@@ -7,7 +7,7 @@ import { type Harness, serve } from './harness.ts';
 
 /**
  * Seam 1 (#12): the **cross-history dispatch report** of #70, over real HTTP against a real
- * fixture database (SPEC §12.4, §12.5).
+ * fixture database (SPEC §14.4, §14.5).
  *
  * The report is the one surface in this tool that reads *across* orchestrator runs, and the
  * temptation it exists to refuse is to become a second graph of everything. It is a table: one
@@ -185,7 +185,7 @@ describe('one row per retained task', () => {
 
     // `dispatch_contexts.failure_count` is **cumulative** — the circuit breaker counts up in it.
     // The attempts hold 1 and 2, and the honest answer is 2: summing them would report 3 failures
-    // for a task that failed twice, and every retry would inflate the next number (SPEC §12.4).
+    // for a task that failed twice, and every retry would inflate the next number (SPEC §14.4).
     expect(retried.failureCount).toBe(2);
     expect(retried.attemptCount).toBe(2);
     // The **latest** attempt's assignee: the one the node badge shows, and the one still holding it.
@@ -449,7 +449,7 @@ describe('filtering — and a missing value is filterable as missing', () => {
     // through **verbatim** rather than dropping the row (SPEC §5), so the row is here and shows
     // what the column held — but no clock can place it, so the sort cannot rank it and a range
     // cannot contain it. The filter named after the dispatch time therefore has to call it
-    // *missing*, or the report renders a value that nothing at all can ask for (SPEC §12.4).
+    // *missing*, or the report renders a value that nothing at all can ask for (SPEC §14.4).
     const dbPath = corpus()
       .dispatch({
         id: 'ctx_unreadable',

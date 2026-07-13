@@ -152,7 +152,7 @@ export class OrcaDatabase {
 
   /**
    * The **selected-run snapshot** — `GET /api/run/:id` (#69): one run's complete retained
-   * evidence, never windowed, never truncated (ADR 0002). Null when no run has this id — a
+   * evidence, never windowed, never truncated (ADR 0004). Null when no run has this id — a
    * 404, because an id that names nothing is not a run with nothing to say.
    */
   runSnapshot(id: string): RunSnapshot | null {
@@ -168,7 +168,7 @@ export class OrcaDatabase {
    * that would have to hold the whole of history to do it.
    *
    * It is a fourth projection of the same evidence pass, and it reads nothing the other three do
-   * not: no second task-detail truth, and — deliberately — no graph (SPEC §12.6).
+   * not: no second task-detail truth, and — deliberately — no graph (SPEC §14.6).
    */
   report(query: ReportQuery): ReportPage {
     const { liveness, evidence } = this.readEvidence();
@@ -177,7 +177,7 @@ export class OrcaDatabase {
   }
 
   /**
-   * **The run archive** — `GET /api/run/:id/archive` (#74, ADR 0001): one selected run's retained
+   * **The run archive** — `GET /api/run/:id/archive` (#74, ADR 0005): one selected run's retained
    * evidence, as a versioned, self-contained file the user asked for. Null when no run has this
    * id, exactly as `runSnapshot` is: a 404, not an empty archive.
    *
@@ -202,7 +202,7 @@ export class OrcaDatabase {
       bodies: readBodies(this.db, this.schema.columns, snapshot.tasks.map((task) => task.id)),
       // The schema this evidence was read *through*, so a replay can explain an absence the
       // source database caused. Deliberately not `meta`: a database path is where this file came
-      // from on somebody's laptop, and an archive is not allowed to carry one (SPEC §12.4).
+      // from on somebody's laptop, and an archive is not allowed to carry one (SPEC §14.4).
       source: {
         schemaVersion: this.schema.version,
         schemaSupport: this.schema.support,
@@ -268,7 +268,7 @@ export class OrcaDatabase {
     // attributed message log, which can only be read once the runs exist to attribute against.
     const scored = attachScoreboards(gated.runs, { entries, messages, columns: this.schema.columns });
 
-    // The evidence hints (SPEC §12.4), last, because they consume what everything above decided
+    // The evidence hints (SPEC §14.4), last, because they consume what everything above decided
     // and decide nothing back: an uncertain `claude?` on a cast member, an uncertain project on
     // a run — read from retained spec/result/branch evidence, refused on any ambiguity, and
     // never touching the identities (run ids, monograms, attribution) already settled.
@@ -289,7 +289,7 @@ export class OrcaDatabase {
         runs: hinted,
         tasks: gated.tasks,
         // Oldest attempt first, as `tasks.ts` reads them — the selected-run snapshot's
-        // append-only retry record (SPEC §12), and the same rows the cast was built from.
+        // append-only retry record (SPEC §14), and the same rows the cast was built from.
         attemptsByTask: new Map(entries.map((entry) => [entry.task.id, entry.attempts])),
         gates: gated.gates,
         // The four-source merge (SPEC §4.7) — the orchestrator's prompts out of `tasks.spec`, the
@@ -306,7 +306,7 @@ export class OrcaDatabase {
         // projection of this evidence — the stream event, the run index, the selected-run
         // snapshot, the digests — runs on the poll loop, five seconds apart, for ever; a machine-
         // wide receipt merge they would all pay for and none of them would look at is exactly the
-        // per-tick cost §12.1 says these features must not add.
+        // per-tick cost §14.1 says these features must not add.
         get receiptsByTask() {
           return (receipts ??= receiptsOf(entries, messages));
         },

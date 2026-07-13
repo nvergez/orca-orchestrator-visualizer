@@ -19,11 +19,11 @@ import { CannedApp, type CannedEvent } from './canned.tsx';
  * the dependency edges.
  *
  * The feature is a **derivation over the selected-run snapshot and nothing else**, which is not an
- * accident of convenience: ADR 0002 made that snapshot complete — every task, **every attempt**,
- * every gate and the whole conversation, never windowed and never truncated — and SPEC §12.4 says
+ * accident of convenience: ADR 0004 made that snapshot complete — every task, **every attempt**,
+ * every gate and the whole conversation, never windowed and never truncated — and SPEC §14.4 says
  * every retained attempt is its own bar *because* of it. So the server needed nothing new, and the
  * two halves of this suite say so from both sides: the pure block below drives `deriveTimeline`
- * value by value (a dense error surface, SPEC §12.5), and `test/server/timeline.test.ts` proves
+ * value by value (a dense error surface, SPEC §14.5), and `test/server/timeline.test.ts` proves
  * over real HTTP that the evidence it reads actually survives the wire.
  *
  * What the timeline may never do is the thing the whole roadmap is against: **it synthesizes no
@@ -756,7 +756,7 @@ describe('the timeline on screen', () => {
     fireEvent.click(entry);
 
     // The whole point of the list: a missing timestamp costs the task its *placement*, not its
-    // story (SPEC §12.4).
+    // story (SPEC §14.4).
     await waitFor(() => expect(screen.queryByTestId('inspector')).not.toBeNull());
     inspectorFor('Never dispatched');
   });

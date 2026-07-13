@@ -41,7 +41,7 @@ import { UNPLACED_KEY } from './digests.ts';
  *
  * The `digests` and the `handles` are both things the read *already had in its hands*, handed
  * over rather than re-derived by whoever wants them: a second full pass per push is exactly the
- * per-tick cost SPEC §12.1 says these features must not add.
+ * per-tick cost SPEC §14.1 says these features must not add.
  */
 export type PushResult = {
   event: StreamEvent;

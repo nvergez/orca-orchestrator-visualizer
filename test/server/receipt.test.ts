@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { mergeReceipts, receiptOfResult, receiptOfWorkerDone } from '../../src/shared/receipt.ts';
 
 /**
- * The outcome-receipt readers (#67, SPEC §12.4) — pure derivation over the two columns that
+ * The outcome-receipt readers (#67, SPEC §14.4) — pure derivation over the two columns that
  * hold what a task produced: `tasks.result` and a `worker_done` message's `payload`.
  *
- * A pure suite is justified here for the same reason SPEC §12.5 names this exact surface:
+ * A pure suite is justified here for the same reason SPEC §14.5 names this exact surface:
  * a small algorithm with a dense error surface. The columns are TEXT with nothing anywhere
  * enforcing shape, so every reading is a shape check and never a cast — and the shapes
  * asserted below are the live database's own (worker payloads with `filesModified` and
@@ -29,7 +29,7 @@ describe('receiptOfWorkerDone — the shapes real workers send', () => {
     const facts = receiptOfWorkerDone({
       taskId: 'task_d37f35d1d159',
       dispatchId: 'ctx_4c065741dae2',
-      filesModified: ['SPEC.md', 'CONTEXT.md', 'docs/adr/0001-one-shot-retained-run-archives.md'],
+      filesModified: ['SPEC.md', 'CONTEXT.md', 'docs/adr/0005-one-shot-retained-run-archives.md'],
       reportPath: 'SPEC.md',
     });
 
@@ -39,7 +39,7 @@ describe('receiptOfWorkerDone — the shapes real workers send', () => {
       { kind: 'file', value: 'CONTEXT.md', sources: ['worker_done.payload · filesModified'] },
       {
         kind: 'file',
-        value: 'docs/adr/0001-one-shot-retained-run-archives.md',
+        value: 'docs/adr/0005-one-shot-retained-run-archives.md',
         sources: ['worker_done.payload · filesModified'],
       },
     ]);
@@ -145,7 +145,7 @@ describe('links — provider-neutral, validated, and never executable', () => {
 
   it('linkifies a URL sitting in a recognized path field, rather than calling it a path', () => {
     // "File and path facts are copyable text, not claims that the current machine can open
-    // them" (SPEC §12.4) — and a URL is the reverse: a claim the *network* can open it. The
+    // them" (SPEC §14.4) — and a URL is the reverse: a claim the *network* can open it. The
     // stronger recognition wins, once.
     const facts = receiptOfWorkerDone({ reportPath: 'https://ci.example.com/runs/42/report.html' });
 

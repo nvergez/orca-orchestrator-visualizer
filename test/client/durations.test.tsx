@@ -192,7 +192,7 @@ describe('the run span on the rail', () => {
 
     const reading = within(railRow(RUN_ID)).getByTestId('run-span');
     expect(reading).toHaveTextContent('1h 40m');
-    // The provenance rides with the number (SPEC §12.4): which clock, and which endpoints.
+    // The provenance rides with the number (SPEC §14.4): which clock, and which endpoints.
     expect(reading.getAttribute('title')).toMatch(/run span/i);
   });
 

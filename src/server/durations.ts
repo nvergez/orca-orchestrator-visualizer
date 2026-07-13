@@ -2,7 +2,7 @@ import type { Dispatch, DispatchStatus, DurationClock, DurationObservation, Task
 import { instantOf } from './time.ts';
 
 /**
- * Honest durations (#66, SPEC §12.4). A duration observation carries its **clock** — which
+ * Honest durations (#66, SPEC §14.4). A duration observation carries its **clock** — which
  * retained columns it read — beside the number, because "25 minutes" is three different facts
  * depending on whether it measured the worker's attempt, the task's whole lifetime, or the
  * run's occupancy of the calendar. The clocks, in order of preference:
@@ -21,7 +21,7 @@ import { instantOf } from './time.ts';
  * because `instantOf` reads the garbage back as null and the observation simply is not made.
  *
  * The module is pure — normalized values in, observations out, no SQLite — which is what makes
- * its dense error surface testable value by value (SPEC §12.5).
+ * its dense error surface testable value by value (SPEC §14.5).
  */
 
 /** The one dispatch status that says an attempt is still running (HANDOFF.md enums). */
@@ -82,7 +82,7 @@ function pick(instants: readonly (string | null)[], wins: (candidate: number, he
 
 /**
  * One attempt's own clock — both endpoints from the **same** `dispatch_contexts` row, never a
- * start from one attempt against an end from another (SPEC §12.4).
+ * start from one attempt against an end from another (SPEC §14.4).
  *
  * An attempt with no `completed_at` is *open* only while its status says the worker is still
  * out there. A terminal status with no end instant — and a status this build cannot read at
@@ -101,7 +101,7 @@ export function dispatchDuration(
 
 /**
  * The task's own clock, on the strongest evidence it retains — and the preference order is the
- * feature (SPEC §12.4, stories 2–4):
+ * feature (SPEC §14.4, stories 2–4):
  *
  * 1. The **latest attempt's completed dispatch clock**. The latest attempt is the one the node
  *    badge shows (`MAX(rowid)`, `tasks.ts`); an earlier attempt's clock measures a retry that
@@ -129,7 +129,7 @@ type Reading = { at: number; iso: string };
 
 /**
  * The run's wall-clock span: earliest **readable** task creation to latest **readable**
- * completion/creation (SPEC §12.4). It measures how long the orchestration occupied the
+ * completion/creation (SPEC §14.4). It measures how long the orchestration occupied the
  * calendar — never summed agent time, never compute time.
  *
  * Open while the run is **unfinished** — `!converged`, the same fact run health reads (`runs.ts`,

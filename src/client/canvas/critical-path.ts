@@ -1,13 +1,13 @@
 import type { Task } from '../../shared/types.ts';
 
 /**
- * The critical path (#71, SPEC §12.4): **where the retained duration of a completed run
+ * The critical path (#71, SPEC §14.4): **where the retained duration of a completed run
  * accumulated** — the duration-weighted longest path over its in-run dependency edges.
  *
  * It is derived *here*, on the client, from the selected run's tasks and nothing else. The
  * snapshot already carries everything the analysis needs — the edges (`Task.deps`) and each
  * task's honest duration observation (#66) — and a per-run result computed server-side would
- * grow the unbounded snapshot that SPEC §12.1 says quantitative features must not grow.
+ * grow the unbounded snapshot that SPEC §14.1 says quantitative features must not grow.
  *
  * The rules, each one a refusal to claim more than the rows do:
  *
@@ -86,7 +86,7 @@ export function criticalPathOf(tasks: readonly Task[]): CriticalPath {
 
   /**
    * The deterministic choice, made the same way everywhere this function chooses: heavier
-   * retained duration first, then **retained task order, then id** — the tie-break SPEC §12.4
+   * retained duration first, then **retained task order, then id** — the tie-break SPEC §14.4
    * pins, applied to the upstream chain a task attaches and to the sink the path ends at.
    */
   const beats = (a: string, b: string): boolean => {

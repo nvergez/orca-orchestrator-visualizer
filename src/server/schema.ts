@@ -254,7 +254,7 @@ const FEATURES: Feature[] = [
     // the recognized facts that body would have carried, and only the facts read from this
     // column: the worker's own completion payloads still summarize. An ordinary result the
     // readers do not recognize is NOT this — unknown shapes render verbatim and degrade
-    // nothing (SPEC §12.4).
+    // nothing (SPEC §14.4).
     anyOf: ['tasks.result'],
     degraded:
       'Outcome receipts from task results — this Orca has no tasks.result column, so no files, branches, tickets or links can be recognized in what a task reported back; receipts from worker completion messages are unaffected.',
@@ -418,7 +418,7 @@ const FEATURES: Feature[] = [
   {
     // The hints are best-effort by design — a missing hint is their ordinary answer — so losing
     // one evidence source is just fewer hints, and only losing every source is a degraded
-    // feature: there is then nothing left for the readers to read (SPEC §12.4, `hints.ts`).
+    // feature: there is then nothing left for the readers to read (SPEC §14.4, `hints.ts`).
     //
     // The message-branch source strictly also needs `messages.type` and `from_handle`, which
     // this entry does not name: both are v1 columns whose absence already degrades the log and

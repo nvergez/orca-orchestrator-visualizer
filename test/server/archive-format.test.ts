@@ -9,7 +9,7 @@ import {
 
 /**
  * The archive **reader** — the pure half of #74, and the one with the dense error surface
- * (SPEC §12.5): what a file has to be before a replay of it is worth opening, what it may
+ * (SPEC §14.5): what a file has to be before a replay of it is worth opening, what it may
  * contain that this build has never heard of, and what it may not.
  *
  * The rule under test is the last acceptance criterion of the ticket, and it has two sides that

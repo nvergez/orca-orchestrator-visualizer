@@ -492,7 +492,7 @@ describe('scope', () => {
     // A message the server could not place belongs to no orchestrator (SPEC §4.4, rule 3). It must
     // still *appear* — attached to nobody — rather than be guessed into somebody's conversation.
     //
-    // The scope was called "All" until #69, and the rename is the honesty: since ADR 0002 the
+    // The scope was called "All" until #69, and the rename is the honesty: since ADR 0004 the
     // client holds one selected run and the turns nothing places, so a button marked "All" would
     // have shown one orchestration and called it every one.
     const user = userEvent.setup();

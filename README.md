@@ -157,7 +157,7 @@ What is deliberately **not** in the file:
   evidence came from on somebody's laptop, and it is not what the file *is*.
 - **A recorder.** Nothing is watched, scheduled, or captured after the click. The export is a
   photograph of what the database already held at the instant you asked, which is the whole of what
-  this tool is allowed to do (`docs/adr/0001-one-shot-retained-run-archives.md`).
+  this tool is allowed to do (`docs/adr/0005-one-shot-retained-run-archives.md`).
 - **A liveness claim.** A run that was still running when you exported it is archived as *ended*,
   because "live" means *now*, and now is not when the file gets opened.
 

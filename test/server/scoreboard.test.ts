@@ -6,7 +6,7 @@ import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * The per-agent scoreboard (#68, SPEC §12.4): the cast, quantified — what each member of one
+ * The per-agent scoreboard (#68, SPEC §14.4): the cast, quantified — what each member of one
  * orchestrator's cast cost and produced, derived from **all retained attempts and attributed
  * messages** and never from a guess.
  *
@@ -22,7 +22,7 @@ import { type Harness, serve } from './harness.ts';
  * - escalations are *attributed* escalation messages, and an ambiguous message counts nowhere;
  * - outcome links are deduplicated recognized receipt URLs (#67's readers, re-used verbatim).
  *
- * The pure seam walks the dense error surfaces value by value (SPEC §12.5); the HTTP seam
+ * The pure seam walks the dense error surfaces value by value (SPEC §14.5); the HTTP seam
  * covers single-agent, multi-agent, retried, ambiguous-attribution and missing-evidence runs
  * against real fixture databases, exactly as `curl` would see them.
  */
@@ -248,7 +248,7 @@ describe('the scoreboard on the wire — a multi-agent run', () => {
       ms: 2 * 60_000,
     });
 
-    // No retained heartbeat: the fact is absent, never `0` (SPEC §12.4).
+    // No retained heartbeat: the fact is absent, never `0` (SPEC §14.4).
     expect(member(cast, SECOND_AGENT).score?.firstHeartbeat).toBeUndefined();
   });
 

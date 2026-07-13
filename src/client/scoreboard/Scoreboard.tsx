@@ -13,7 +13,7 @@ import { DOCK_CLASS, PANEL_HEADER_CLASS, PANEL_TITLE_CLASS } from '../surface.ts
 import { useIsMobile } from '../viewport.tsx';
 
 /**
- * **The scoreboard: the cast, compared** (#68, SPEC §12.4). The dock's third panel — it swaps
+ * **The scoreboard: the cast, compared** (#68, SPEC §14.4). The dock's third panel — it swaps
  * in over the conversation the way the inspector does, and swaps back out the way it came.
  *
  * The server derived every number (`server/scoreboard.ts`); this panel's whole job is
@@ -27,7 +27,7 @@ import { useIsMobile } from '../viewport.tsx';
  *   panel says so out loud rather than merely omitting it.
  * - **Unknown and none are different, and they read differently.** An absent count, span or
  *   heartbeat time is *unknown* — an em dash whose tooltip says the database could not answer —
- *   and it never renders or sorts as zero (SPEC §12.4). A metric that was read and found nothing
+ *   and it never renders or sorts as zero (SPEC §14.4). A metric that was read and found nothing
  *   says "none", and sorts as the zero it honestly is. The server already refused to invent the
  *   number; collapsing the two here would undo the refusal at the last possible moment.
  *
@@ -197,7 +197,7 @@ export function Scoreboard({ run, onClose }: ScoreboardProps) {
           </Button>
         </div>
 
-        {/* The refusal, said out loud (SPEC §12.6). Omitting a winner quietly would leave the
+        {/* The refusal, said out loud (SPEC §14.6). Omitting a winner quietly would leave the
             reader free to crown one; a panel that *says* its columns do not add up will not. */}
         <p className="text-muted-foreground/70 text-[11px] text-balance">
           Cast members were dispatched different work — each metric stands alone, and none of them is a ranking.
@@ -291,7 +291,7 @@ const HEADER_CELL = 'border-b border-panel-border/70 px-2 py-1.5 text-right alig
 const BODY_CELL = 'border-b border-panel-border/40 px-2 py-1.5 text-right align-top tabular-nums whitespace-nowrap';
 
 /**
- * The same facts, one agent, no table (SPEC §12.4): a comparison grid with a single row is an
+ * The same facts, one agent, no table (SPEC §14.4): a comparison grid with a single row is an
  * empty page wearing column headers, so the rollup reads top to bottom instead — through the
  * *same* `METRICS` cells, so the two presentations cannot disagree about a value.
  */
@@ -464,7 +464,7 @@ function OutcomeLinks({ score }: { score: Scorecard | undefined }) {
   );
 }
 
-/** Unknown, and *why* — never a zero, never an empty cell that reads as one (SPEC §12.4). */
+/** Unknown, and *why* — never a zero, never an empty cell that reads as one (SPEC §14.4). */
 function Unknown({ testId, why }: { testId: string; why: string }) {
   return (
     <span data-testid={testId} title={why} className="text-muted-foreground/60">

@@ -8,7 +8,7 @@ import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * `GET /api/run/:id/archive` — **the export** (#74, ADR 0001, SPEC §12.4), over real HTTP against
+ * `GET /api/run/:id/archive` — **the export** (#74, ADR 0005, SPEC §14.4), over real HTTP against
  * a real database, because the artifact *is* the contract.
  *
  * The ticket's acceptance criteria are boundary claims, and every one of them is a claim about
@@ -156,7 +156,7 @@ describe('the artifact: one selected run, complete', () => {
 
     // …and as *nothing more*. A `Task` also carries who held it, when they were dispatched, how
     // many times it was retried and what gate it answered — which is orchestrator B's evidence,
-    // and exporting it would be exporting another run (ADR 0001).
+    // and exporting it would be exporting another run (ADR 0005).
     expect(linked?.dispatch).toBeNull();
     expect(linked?.attemptCount).toBe(0);
     expect(linked?.gate).toBeNull();
@@ -179,7 +179,7 @@ describe('the boundary: what an archive is forbidden to carry', () => {
 
     // The same rule for the *conversation*: a live selected-run snapshot carries the turns nothing
     // places, because on screen they must appear somewhere. In a file they would be exactly the
-    // unattributed machine history ADR 0001 forbids exporting.
+    // unattributed machine history ADR 0005 forbids exporting.
     for (const turn of archive.turns) expect(turn.runId).toBe(RUN);
     const snapshot = await selected();
     expect(snapshot.turns.some((turn) => turn.runId === null)).toBe(true);

@@ -185,7 +185,7 @@ function Agent({
       <span className="min-w-0 flex-1">
         <b className="block truncate text-[12.5px] font-semibold">
           Agent {member.monogram.slice(1)}
-          {/* The kind hint (SPEC §12.4) — worn with its question mark, because the uncertainty is
+          {/* The kind hint (SPEC §14.4) — worn with its question mark, because the uncertainty is
               the point: the schema has no agent-kind column, and this is one surviving reading of
               retained evidence, not an identity. The provenance sits on the line below, beside the
               handle, so the inference and its source are read together. */}

@@ -12,7 +12,7 @@ import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * **The archived replay** (#74, ADR 0001) — `orca-viz --archive <file>`, and the round trip that
+ * **The archived replay** (#74, ADR 0005) — `orca-viz --archive <file>`, and the round trip that
  * is the whole ticket: *export one run, open the file, and find the run.*
  *
  * The claims under test are the ones a saved artifact could most easily break:

@@ -4,7 +4,7 @@ import { type Columns, selectPresent, text } from './rows.ts';
 import type { TaskWithHandle } from './runs.ts';
 
 /**
- * **Evidence hints** (SPEC §12.4): the two labels this schema does not have, offered only when
+ * **Evidence hints** (SPEC §14.4): the two labels this schema does not have, offered only when
  * the retained evidence could not be clearer — and refused otherwise.
  *
  * No column anywhere says what *kind* of agent a terminal was, or which *repository* an
@@ -280,7 +280,7 @@ class Candidates {
 
   /**
    * The hint, iff exactly one candidate survived. Two candidates is conflicting evidence and
-   * zero is none — both are the same honest answer, which is no answer at all (SPEC §12.4).
+   * zero is none — both are the same honest answer, which is no answer at all (SPEC §14.4).
    */
   solitary(): EvidenceHint | null {
     if (this.sourcesOf.size !== 1) return null;

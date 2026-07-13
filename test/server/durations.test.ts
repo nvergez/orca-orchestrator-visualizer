@@ -9,11 +9,11 @@ import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * Honest durations (#66, SPEC §12.4): a duration observation carries its clock and its
+ * Honest durations (#66, SPEC §14.4): a duration observation carries its clock and its
  * provenance, not just a number — and when the retained endpoints cannot support one, there
  * is **no observation** rather than a zero, an epoch date or a negative interval.
  *
- * This file is the pure seam SPEC §12.5 asks for: the derivation has a dense error surface
+ * This file is the pure seam SPEC §14.5 asks for: the derivation has a dense error surface
  * (dispatch versus task-span provenance, unreadable timestamps, negative intervals,
  * incomplete "so far" clocks), and these tests walk it value by value. The HTTP seam —
  * where the observations actually reach the wire — is covered beside the routes they ride
@@ -53,7 +53,7 @@ describe('the dispatch clock', () => {
     const observation = dispatchDuration(attempt({ status: 'dispatched', completedAt: null }));
 
     // No `ms` and no `endAt`: an open interval has nothing final to say, and a number here
-    // would be a duration the server computed once and let go stale (SPEC §12.4).
+    // would be a duration the server computed once and let go stale (SPEC §14.4).
     expect(observation).toEqual({ clock: 'dispatch', startAt: DISPATCHED, complete: false });
   });
 
@@ -135,7 +135,7 @@ describe("the task's clock, and its provenance", () => {
     const observation = taskDuration(doneTask({ dispatch: attempt({ status: 'failed', completedAt: null }) }));
 
     // The clock is the label: the client words a `task-span` differently on screen, so a broader
-    // measurement is never presented as dispatch time (SPEC §12.4, story 3).
+    // measurement is never presented as dispatch time (SPEC §14.4, story 3).
     expect(observation).toEqual({
       clock: 'task-span',
       startAt: CREATED,
@@ -151,7 +151,7 @@ describe("the task's clock, and its provenance", () => {
   });
 
   it('leaves an undispatched, uncompleted task without any observation — nothing has started', () => {
-    // created → now would measure queue time and call it work (SPEC §12.3, story 2).
+    // created → now would measure queue time and call it work (SPEC §14.3, story 2).
     expect(taskDuration(doneTask({ dispatch: null, attemptCount: 0, completedAt: null }))).toBeUndefined();
   });
 
@@ -253,7 +253,7 @@ describe('the run span', () => {
 });
 
 /**
- * The HTTP seam (SPEC §12.5): observable wire behavior against real fixture databases —
+ * The HTTP seam (SPEC §14.5): observable wire behavior against real fixture databases —
  * what `curl /api/snapshot` and `curl /api/task/:id` actually say, both Orca timestamp
  * formats included.
  */

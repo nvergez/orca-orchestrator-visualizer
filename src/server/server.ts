@@ -216,7 +216,7 @@ export type ReplayOptions = {
 };
 
 /**
- * **The archived replay** (#74, ADR 0001) — `orca-viz --archive <file>`, and a completely
+ * **The archived replay** (#74, ADR 0005) — `orca-viz --archive <file>`, and a completely
  * different server from the one above.
  *
  * It is different by *construction*, which is the point. There is no `OrcaDatabase` in this
@@ -419,7 +419,7 @@ function sendReport(database: OrcaDatabase, params: URLSearchParams, res: Server
 
 /**
  * **The two routes that fetch one thing by an id somebody typed** — `GET /api/run/:id`, the
- * selected-run snapshot (#69, never windowed, never truncated — ADR 0002), and `GET
+ * selected-run snapshot (#69, never windowed, never truncated — ADR 0004), and `GET
  * /api/task/:id`, the two bodies and every dispatch attempt (#20).
  *
  * They are one function because they are one shape, and the shape is three answers, each of

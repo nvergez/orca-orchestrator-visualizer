@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import { PANEL_CLASS } from '../surface.ts';
 
 /**
- * **The centre's two views** (#72, SPEC §12.4) — the same selected run, read two ways.
+ * **The centre's two views** (#72, SPEC §14.4) — the same selected run, read two ways.
  *
  * The DAG stays the default, and that is a ruling rather than a preference: the dependency graph is
  * what the tool *is*, and the timeline answers questions you go looking for (who overlapped whom;

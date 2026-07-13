@@ -464,7 +464,7 @@ function RunRow({
             <span>{breakdown}</span>
           </>
         )}
-        {/* The repository hint (SPEC §12.4): the project every absolute path retained across this
+        {/* The repository hint (SPEC §14.4): the project every absolute path retained across this
             run's tasks agrees on — question-marked, with the provenance said in place, because it
             is a reading of evidence and not a column. It is a caption on the row the *handle*
             keys; it never groups, sorts or selects anything (the rail's order is activity, its
@@ -568,14 +568,14 @@ function HealthDot({ health, className }: { health: RunHealth; className?: strin
 }
 
 /**
- * **Export this orchestrator** (#74, ADR 0001) — under the open row, beside its cast, because the
+ * **Export this orchestrator** (#74, ADR 0005) — under the open row, beside its cast, because the
  * thing being exported is *the run you have open* and nothing else.
  *
  * It is a link, not a button, and that is the design rather than an implementation detail:
  *
  * - **It happens once, when a person asks.** A link is the least a click can do — the browser
  *   saves a file and the page does not change. No watcher is started, no recorder, no retention:
- *   the archive is a photograph, taken because somebody pressed the shutter (ADR 0001).
+ *   the archive is a photograph, taken because somebody pressed the shutter (ADR 0005).
  * - **It is one run.** The affordance only exists on the selected row, so "export exactly one
  *   selected orchestrator run" is a thing the UI *cannot* get wrong.
  * - **The file names itself.** `download` lets the server's `Content-Disposition` — the run and

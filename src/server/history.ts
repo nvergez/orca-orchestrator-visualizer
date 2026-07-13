@@ -12,7 +12,7 @@ import type {
 import { byInstant } from './time.ts';
 
 /**
- * **History that pages, and selected runs that never do** (SPEC §12, ADR 0002, #69).
+ * **History that pages, and selected runs that never do** (SPEC §14, ADR 0004, #69).
  *
  * The database is never pruned, so "send everything on every tick" grows without bound. This
  * module is the replacement contract, in three pure pieces:
@@ -55,7 +55,7 @@ export function byMostRecentActivity(a: RunOrderKeys, b: RunOrderKeys): number {
   );
 }
 
-/** The first page is the 50 most recently active summaries (SPEC §12). */
+/** The first page is the 50 most recently active summaries (SPEC §14). */
 export const RUN_PAGE_SIZE = 50;
 
 /** A named refusal the HTTP edge can turn into a 400 rather than a 500. */

@@ -8,7 +8,7 @@ import { Splash } from './Splash.tsx';
 import { FIELD_BACKDROP_STYLE } from './surface.ts';
 
 /**
- * **The archived replay** (#74, ADR 0001) — `orca-viz --archive <file>`, and the twin of
+ * **The archived replay** (#74, ADR 0005) — `orca-viz --archive <file>`, and the twin of
  * `Live.tsx` with everything live taken out of it.
  *
  * `Live` is an `EventSource` feeding `<App>`. This is **one fetch** feeding the same `<App>`: the

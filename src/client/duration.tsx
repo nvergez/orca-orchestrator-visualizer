@@ -8,7 +8,7 @@ import { instantOf, localInstant } from './relative-time.ts';
  * place those observations become words, so the rail and the inspector cannot read the same
  * span as two different numbers.
  *
- * The wording *is* the provenance (SPEC §12.4):
+ * The wording *is* the provenance (SPEC §14.4):
  *
  * - a **dispatch** duration is a bare number — the preferred clock needs no qualifier;
  * - the **task-span** fallback says "task span" in the text itself, because a broader clock
@@ -22,7 +22,7 @@ import { instantOf, localInstant } from './relative-time.ts';
 /** What the reader's clock is re-read at while an open interval is on screen. */
 const WALL_CLOCK_TICK_MS = 1000;
 
-/** How each clock is named in the tooltip — the provenance, spelled out (SPEC §12.4). */
+/** How each clock is named in the tooltip — the provenance, spelled out (SPEC §14.4). */
 const CLOCK_NAMES: Record<DurationClock, string> = {
   dispatch: 'dispatch clock — dispatched → completed, from one attempt’s own row',
   'task-span': 'task span — created → completed; no completed dispatch clock was retained',

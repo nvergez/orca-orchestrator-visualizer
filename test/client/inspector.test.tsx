@@ -791,7 +791,7 @@ describe('the dependencies', () => {
 });
 
 /**
- * The outcome receipts (#67, SPEC §12.4): the inspector is where the *whole* receipt lives —
+ * The outcome receipts (#67, SPEC §14.4): the inspector is where the *whole* receipt lives —
  * every recognized fact from both evidence sources, merged with its provenance on screen, and
  * the complete raw evidence beside it. The conversation's compact summary points here.
  */

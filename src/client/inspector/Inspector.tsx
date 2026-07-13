@@ -188,7 +188,7 @@ export function Inspector({
             </Section>
 
             {/*
-              **The outcome receipts** (#67, SPEC §12.4) — what the two evidence columns
+              **The outcome receipts** (#67, SPEC §14.4) — what the two evidence columns
               verifiably said this task produced, and the raw evidence itself. The facts are the
               server's one reading, merged across `tasks.result` and every `worker_done` payload
               that named the task, with each fact's provenance *on screen* — which is what makes
@@ -684,7 +684,7 @@ function GateFate({ gate }: { gate: Gate }) {
  *   no foreign keys in this schema to stop it (SPEC §4.2, trap 8). The canvas drops that edge; the
  *   chip admits it rather than offering a click that goes nowhere.
  * - **The task is in another orchestrator, and this is an archive** (#74). A run archive holds one
- *   run — that is the boundary ADR 0001 draws — so the far end of an edge that leaves it is *in
+ *   run — that is the boundary ADR 0005 draws — so the far end of an edge that leaves it is *in
  *   the file* (its title, its status: that is what `linkedTasks` is for) but there is no run to
  *   open it in. The chip says which of those two things happened, because "gone" would be a lie
  *   about a task that is sitting right there in somebody's database.

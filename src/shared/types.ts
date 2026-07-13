@@ -70,7 +70,7 @@ export type Meta = {
 
 /**
  * Which retained columns a duration observation read — its provenance, on the wire and on the
- * screen (SPEC §12.4, #66).
+ * screen (SPEC §14.4, #66).
  *
  * - `dispatch` — one attempt's own `dispatch_contexts.dispatched_at → completed_at`. The
  *   preferred clock: it measures the worker's attempt, not task setup time.
@@ -88,7 +88,7 @@ export type DurationClock = 'dispatch' | 'task-span' | 'run-span' | 'agent-span'
 /**
  * A wall-clock span this tool can actually stand behind — and **absence is the honest value**:
  * a missing, unreadable, negative or contradictory endpoint produces no observation at all,
- * never a zero, an epoch date or a negative interval (SPEC §12.4).
+ * never a zero, an epoch date or a negative interval (SPEC §14.4).
  *
  * An *open* interval (`complete: false`) carries a start and no end. The client ages it against
  * its own wall clock as "so far" — advancing without waiting for an SSE push, and stopping the
@@ -107,14 +107,14 @@ export type DurationObservation = {
 };
 
 /**
- * One cast member's scoreboard row (#68, SPEC §12.4) — what the retained evidence says this
+ * One cast member's scoreboard row (#68, SPEC §14.4) — what the retained evidence says this
  * agent cost and produced, and nothing the evidence does not say. Every field is **absent when
  * the evidence cannot carry it**: a missing count is a column this Orca does not have, never a
  * zero nobody measured, and a missing span or heartbeat time is unknown, never `0s`.
  *
  * There is deliberately no composite score, no rank and no winner anywhere in this shape: the
  * agents were dispatched *different work*, and a single number over them would be a false
- * equivalence (SPEC §12.6). The grid sorts by one fact at a time, and that is all.
+ * equivalence (SPEC §14.6). The grid sorts by one fact at a time, and that is all.
  */
 export type Scorecard = {
   /**
@@ -162,7 +162,7 @@ export type Scorecard = {
 };
 
 /**
- * **An evidence hint** (SPEC §12.4, and the domain glossary): an explicitly uncertain label —
+ * **An evidence hint** (SPEC §14.4, and the domain glossary): an explicitly uncertain label —
  * an agent kind on a cast member, a project name on a run — derived from unambiguous retained
  * evidence, carrying the provenance it was read from.
  *
@@ -214,7 +214,7 @@ export type CastMember = {
   score?: Scorecard;
   /**
    * What kind of agent this terminal *probably* was — `claude`, `codex`, … — when exactly one
-   * allowlisted kind survives its retained evidence (SPEC §12.4). Absent otherwise, and absent
+   * allowlisted kind survives its retained evidence (SPEC §14.4). Absent otherwise, and absent
    * means absent: the snapshot is re-sent whole every tick, and a `null` on every member of
    * every cast would be bytes of nothing (the `Turn` rule).
    */
@@ -312,7 +312,7 @@ export type Run = {
   duration?: DurationObservation;
   /**
    * The project this orchestrator was *probably* working in, when every piece of absolute-path
-   * evidence retained across its tasks agrees on one candidate (SPEC §12.4). Never the run key,
+   * evidence retained across its tasks agrees on one candidate (SPEC §14.4). Never the run key,
    * never navigation — the rail groups by handle, whatever this says. Absent when the evidence
    * is missing or names two projects, and absent means absent (the `Turn` rule).
    */
@@ -355,7 +355,7 @@ export type Dispatch = {
  *   with no instant cannot be ordered against one that has one.
  *
  * And #45 split what used to be one ambiguous `open | resolved` pair into **two separate
- * facts** (CONTEXT.md, ADR 0001): `status` is the gate's recorded lifecycle, and `blocking` is
+ * facts** (CONTEXT.md, ADR 0002): `status` is the gate's recorded lifecycle, and `blocking` is
  * its present effect. The database cannot distinguish an ask that is still waiting from one
  * that timed out unrecorded, so "no reply" stopped being treated as proof of a block.
  */
@@ -455,7 +455,7 @@ export type FeedMessage = {
 };
 
 /**
- * One recognized outcome fact (#67, SPEC §12.4) — a thing a task verifiably produced, read out
+ * One recognized outcome fact (#67, SPEC §14.4) — a thing a task verifiably produced, read out
  * of `tasks.result` or a `worker_done` message's `payload` by the never-throw readers in
  * `receipt.ts`.
  *
@@ -591,7 +591,7 @@ export function agentOfTurn(turn: Turn): string | null {
 
 /**
  * **The invalidation notice** (`CONTEXT.md`): what changed since this client's previous event —
- * identity to refetch by, never the data itself (SPEC §12, ADR 0002, #69).
+ * identity to refetch by, never the data itself (SPEC §14, ADR 0004, #69).
  *
  * The stream used to re-send every retained run, task and turn on every push, and the database
  * is never pruned — so the wire and the browser paid for the whole of history on every tick.
@@ -622,7 +622,7 @@ export type Affected = {
 };
 
 /**
- * One page of the **run index** — `GET /api/runs` (SPEC §12, ADR 0002, #69).
+ * One page of the **run index** — `GET /api/runs` (SPEC §14, ADR 0004, #69).
  *
  * The navigation surface for retained history: the summaries the rail lists, most recently
  * active first, fifty at a time. It is deliberately the same `Run` shape the stream used to
@@ -645,11 +645,11 @@ export type RunIndexPage = {
 };
 
 /**
- * The **selected-run snapshot** — `GET /api/run/:id` (SPEC §12, ADR 0002, #69).
+ * The **selected-run snapshot** — `GET /api/run/:id` (SPEC §14, ADR 0004, #69).
  *
  * The complete retained evidence for one orchestrator run, fetched as a unit: **never
  * time-windowed, never truncated**, however old or large the run is. Scaling bounded the
- * *index*; it is not allowed to weaken a post-mortem (the whole point of ADR 0002).
+ * *index*; it is not allowed to weaken a post-mortem (the whole point of ADR 0004).
  */
 export type RunSnapshot = {
   meta: Meta;
@@ -683,7 +683,7 @@ export type RunSnapshot = {
 };
 
 /**
- * **The cross-history dispatch report** — `GET /api/report` (SPEC §12.4, #70).
+ * **The cross-history dispatch report** — `GET /api/report` (SPEC §14.4, #70).
  *
  * One row per retained task, across every run in the database: a *ranking and search
  * instrument*, and deliberately **not** a second graph. The tool already draws one run's tasks
@@ -756,7 +756,7 @@ export type ReportRow = {
   /** 0 ⇒ never dispatched. */
   attemptCount: number;
   /**
-   * **The task's failures, not the sum of its retries' running totals** (SPEC §12.4).
+   * **The task's failures, not the sum of its retries' running totals** (SPEC §14.4).
    * `dispatch_contexts.failure_count` is *cumulative* — the circuit breaker counts up to 3 in
    * it — so adding it across attempts counts the same failure once per attempt that followed.
    * The maximum retained value is the count; the sum is the overcount this row refuses.
@@ -782,7 +782,7 @@ export type ReportRow = {
 /**
  * One page of the report — `GET /api/report` (#70).
  *
- * Paginated on the server, independently of the run index (SPEC §12.4): the report ranks *tasks*
+ * Paginated on the server, independently of the run index (SPEC §14.4): the report ranks *tasks*
  * across history, and a database that is never pruned would otherwise make it grow without bound.
  */
 export type ReportPage = {
@@ -829,7 +829,7 @@ export type ReportPage = {
  * them. A `JSON.parse → stringify` round trip looks the same and is not: it silently
  * collapses a duplicated key, reformats a number, and re-orders nothing you can prove. The
  * readers parse a *copy* to recognize facts; what reaches the screen is the evidence itself,
- * which is the only rendering the word "verbatim" allows (SPEC §12.4).
+ * which is the only rendering the word "verbatim" allows (SPEC §14.4).
  */
 export type WorkerCompletion = {
   /** The message's own id — real, Orca-written, and so copyable (SPEC §7.9). */
@@ -861,7 +861,7 @@ export type TaskDetail = {
 
 /**
  * **Live Orca context, joined to an exact worker identity** (#61 — the live-supervision
- * roadmap #51; its SPEC §12 chapter lands with #65).
+ * roadmap #51; its SPEC §13 chapter lands with #65).
  *
  * Everything above this type is SQLite's. This is the one thing on the wire that is not: an
  * explicitly opt-in adapter asks the `orca` CLI — `worktree ps --json`, plus `terminal list
@@ -934,10 +934,10 @@ export type Enrichment = {
  * there is no separate resync path to get wrong (SPEC §6.2).
  *
  * It used to carry the whole of retained history — every run, task, gate and turn, re-sent on
- * every push — and the database is never pruned, so that payload grew without bound (§12.1).
+ * every push — and the database is never pruned, so that payload grew without bound (§14.1).
  * The event is now the **doorbell**: `affected` names what moved, and the data lives behind
  * `GET /api/runs` (the paged index) and `GET /api/run/:id` (one run, complete), fetched for
- * what is actually on screen (#69, ADR 0002).
+ * what is actually on screen (#69, ADR 0004).
  */
 export type StreamEvent = {
   /** The message high-water mark — also the SSE event id. */

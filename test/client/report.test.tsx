@@ -9,7 +9,7 @@ import type { ReportLoader } from '../../src/client/report/query.ts';
 import type { CastMember, Dispatch, Meta, Run, Task, TaskDetail, Turn } from '../../src/shared/types.ts';
 
 /**
- * Seam 2 (#12): the **cross-history report** on screen (#70, SPEC §12.4).
+ * Seam 2 (#12): the **cross-history report** on screen (#70, SPEC §14.4).
  *
  * The panel is deliberately thin — it ranks nothing, filters nothing and pages nothing itself;
  * every one of those is a new query, and the server answers it (`server/report.ts`). So what
@@ -364,7 +364,7 @@ describe('a page that did not arrive says so', () => {
     const loader = reportOf(world);
     // The first page lands; the page behind the cursor does not. A button that quietly did nothing
     // would leave the reader believing those rows are not there — which is the one thing "older
-    // history is explicit" (SPEC §12.4) exists to prevent.
+    // history is explicit" (SPEC §14.4) exists to prevent.
     const flaky: ReportLoader = (search) =>
       search.includes('cursor=') ? Promise.reject(new Error('the wire hung up')) : loader(search);
 

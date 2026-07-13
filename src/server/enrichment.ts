@@ -9,7 +9,7 @@ import type {
 import type { PushResult, StreamSource } from './stream.ts';
 
 /**
- * Live Orca context (#61 — the live-supervision roadmap #51; its SPEC §12 chapter lands
+ * Live Orca context (#61 — the live-supervision roadmap #51; its SPEC §13 chapter lands
  * with #65) — the one feature in this tool that is allowed to spawn the `orca` CLI, and
  * everything about how it is allowed to.
  *

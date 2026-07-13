@@ -3,7 +3,7 @@ import type { CoordinatorRun, Run, RunIndexPage, RunSnapshot, StreamEvent } from
 import { useRunSelection } from './rail/selection.ts';
 
 /**
- * How the client holds history now that the stream no longer carries it (#69, ADR 0002).
+ * How the client holds history now that the stream no longer carries it (#69, ADR 0004).
  *
  * The stream used to re-send every retained run, task and turn on every push, and the page
  * kept the whole of it in memory. It is now the **doorbell**: each event says *what changed*

@@ -293,7 +293,7 @@ describe('run health on the rail', () => {
 });
 
 /**
- * **The export** (#74, ADR 0001) — one run, one explicit click, and a file.
+ * **The export** (#74, ADR 0005) — one run, one explicit click, and a file.
  *
  * The ticket's first acceptance criterion is a claim about *when* an archive happens: only after
  * a user acts, on one selected run, and starting nothing at all afterwards. The rail is where
@@ -648,7 +648,7 @@ describe('the cast', () => {
 });
 
 /**
- * **Evidence hints** (SPEC §12.4) — the two labels the schema does not have, worn with a question
+ * **Evidence hints** (SPEC §14.4) — the two labels the schema does not have, worn with a question
  * mark when the server found exactly one surviving candidate, and *not worn at all* otherwise.
  *
  * The client's whole obligation here is epistemic wording: `claude?` with its provenance beside it,

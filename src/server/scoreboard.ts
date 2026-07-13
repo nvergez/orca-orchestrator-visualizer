@@ -22,7 +22,7 @@ import {
 } from './schema.ts';
 
 /**
- * **The scoreboard: the cast, quantified** (#68, SPEC §12.4).
+ * **The scoreboard: the cast, quantified** (#68, SPEC §14.4).
  *
  * The cast said *who* an orchestrator's agents were (`cast.ts`); this says what each of them
  * cost and produced, from the two kinds of evidence the schema retains about an agent — its
@@ -47,7 +47,7 @@ import {
  *   (SPEC §4.4 rule 3), and a null `runId` is in no run's scoreboard — a metric quietly fed by
  *   a guess would be a lie with a number on it.
  * - **No composite, no winner.** The module computes facts one at a time and never an
- *   aggregate over them: the agents were dispatched different work (SPEC §12.6).
+ *   aggregate over them: the agents were dispatched different work (SPEC §14.6).
  */
 
 export type ScoreboardEvidence = {
@@ -66,7 +66,7 @@ function firstDispatch(attempts: readonly Pick<Dispatch, 'dispatchedAt'>[]): str
 
 /**
  * The agent's wall-clock span: **first dispatch → latest retained completion**, across every
- * attempt it ever held (SPEC §12.4). Open — the client ages it as "so far" — while any of its
+ * attempt it ever held (SPEC §14.4). Open — the client ages it as "so far" — while any of its
  * attempts is still in flight; absent when the endpoints cannot carry it. It is occupancy of
  * the calendar, not summed task time: two attempts running in parallel are one interval.
  *
@@ -92,7 +92,7 @@ export function agentSpan(
 }
 
 /**
- * **Time to first heartbeat**, measured from the first dispatch (SPEC §12.4) — how long the
+ * **Time to first heartbeat**, measured from the first dispatch (SPEC §14.4) — how long the
  * orchestrator waited before its agent first showed life. Closed by construction: it exists
  * only when a heartbeat was retained and both instants read, and **no retained heartbeat is
  * unknown, never zero** — an agent that never beat did not respond instantly.
@@ -115,7 +115,7 @@ export function timeToFirstHeartbeat(
  * The failure total: the **maximum** cumulative `failure_count` per task, summed across the
  * tasks — never summed across retry rows. The column is cumulative on a task's attempts (the
  * breaker trips at 3), so a task whose rows read 2 then 3 failed three times, and adding the
- * rows would count the first two failures twice (SPEC §12.4).
+ * rows would count the first two failures twice (SPEC §14.4).
  */
 export function failureTotal(heldTasks: readonly (readonly Pick<Dispatch, 'failureCount'>[])[]): number {
   let total = 0;

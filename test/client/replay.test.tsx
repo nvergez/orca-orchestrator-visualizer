@@ -7,7 +7,7 @@ import { ARCHIVE_FORMAT, ARCHIVE_VERSION, ArchiveError, readArchive, type RunArc
 import type { Run, Task, Turn } from '../../src/shared/types.ts';
 
 /**
- * **The archived replay** (#74, ADR 0001) — the same shell, reading a saved file.
+ * **The archived replay** (#74, ADR 0005) — the same shell, reading a saved file.
  *
  * The presentation claims of the ticket are all *negative*, and each of them is a thing the live
  * screen says that this one may not:

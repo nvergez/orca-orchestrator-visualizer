@@ -10,9 +10,9 @@ import { type Harness, serve } from './harness.ts';
  * the wire, from a real fixture database, through `GET /api/run/:id`.
  *
  * The timeline itself is a client derivation (`src/client/timeline/derive.ts`, and the suite beside
- * it) — deliberately, because ADR 0002 already made the selected-run snapshot **complete**: every
+ * it) — deliberately, because ADR 0004 already made the selected-run snapshot **complete**: every
  * task, **every attempt**, every gate and the whole conversation, never windowed and never
- * truncated. That is precisely why SPEC §12.4 can say every retained attempt is its own bar. A
+ * truncated. That is precisely why SPEC §14.4 can say every retained attempt is its own bar. A
  * second server-side derivation of the same rows would be a second copy of a truth that can
  * disagree with the first, which is the mistake `GET /api/task/:id` was cured of (SPEC §6.4).
  *
@@ -29,7 +29,7 @@ import { type Harness, serve } from './harness.ts';
  * | **nothing else** | a schema that timestamps no status transition, and a wire that invents none |
  *
  * A regression in any row of that table would empty or falsify the timeline in a way its own canned
- * tests, fed a canned world, could never catch. This is the seam SPEC §12.5 asks for: requests
+ * tests, fed a canned world, could never catch. This is the seam SPEC §14.5 asks for: requests
  * against live-shaped fixture databases, asserting user-visible contract behavior.
  */
 
@@ -129,7 +129,7 @@ describe('the selected-run contract, read as the timeline reads it', () => {
     expect(attempts.map((attempt) => attempt.id)).toEqual(['ctx_first', 'ctx_second']);
 
     // Two attempts, two *agents* — and each timed on its own row's clock, never a start from one
-    // against an end from another (SPEC §12.4, #66).
+    // against an end from another (SPEC §14.4, #66).
     expect(attempts[0]).toMatchObject({
       assigneeHandle: FIRST,
       status: 'failed',

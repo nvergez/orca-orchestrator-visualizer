@@ -23,7 +23,7 @@ import { agentOfTurn, type Turn } from '../../shared/types.ts';
 
 export type TurnScope = {
   /**
-   * The orchestrator, or **null for every turn the client is holding** — which, since ADR 0002,
+   * The orchestrator, or **null for every turn the client is holding** — which, since ADR 0004,
    * is one selected run's and the ones nothing places (#69), never the machine's.
    *
    * The turns nothing places have a scope of their own now (`unplacedTurns`), because that is
@@ -53,7 +53,7 @@ export function selectTurns(turns: readonly Turn[], scope: TurnScope): Turn[] {
  *
  * A message can name handles no orchestrator claims, so the server honestly leaves its `runId`
  * null rather than guessing it into somebody's thread. Null cannot be *shown* by any run-scoped
- * view, so it needs a scope of its own — and since ADR 0002 the client holds one selected run
+ * view, so it needs a scope of its own — and since ADR 0004 the client holds one selected run
  * plus exactly these (`RunSnapshot.turns`), this is that scope, whole and by name (#69).
  */
 export function unplacedTurns(turns: readonly Turn[]): Turn[] {

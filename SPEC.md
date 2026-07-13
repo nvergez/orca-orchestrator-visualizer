@@ -475,7 +475,7 @@ The two halves of the data have opposite shapes, so they get opposite treatments
 >
 > **The opt-in live enrichment (#61) also grows it, and says so here:** one `StreamEvent.enrichment` object, only behind `--orca-enrichment`, carrying one entry per *joined* handle the retained runs name (a couple of dozen at most — it is bounded by the cast, not the database) with every free-text field capped at the same 240 characters (`ENRICHMENT_PREVIEW_CHARS`, `src/server/enrichment.ts`). Off, it costs the wire nothing at all: the field is absent, not empty.
 >
-> **The evidence hints (§12.4) come and say so too.** Their readers scan the full `spec`/`result` bodies **at the SQLite boundary** — a declaration sits mid-prompt, a worktree path wherever the orchestrator typed it, so the 240-char previews are the wrong strings to read — once per *changed* tick, reduced to the hint and dropped (`hints.ts`). What reaches the **wire** is a few bytes per hint (`kindHint` / `repoHint`), optional and absent-when-default like every other optional snapshot field, on objects (cast members, runs) that number in the tens, not the hundreds.
+> **The evidence hints (§14.4) come and say so too.** Their readers scan the full `spec`/`result` bodies **at the SQLite boundary** — a declaration sits mid-prompt, a worktree path wherever the orchestrator typed it, so the 240-char previews are the wrong strings to read — once per *changed* tick, reduced to the hint and dropped (`hints.ts`). What reaches the **wire** is a few bytes per hint (`kindHint` / `repoHint`), optional and absent-when-default like every other optional snapshot field, on objects (cast members, runs) that number in the tens, not the hundreds.
 >
 > **The paged history transport (#69) then changed what "the snapshot" even means:** the full-history arrays came off the stream event entirely. The budget above is now the ceiling on the *selected-run snapshot* (`GET /api/run/:id`, one run, never windowed) rather than on every push, and a tick carries only `affected` plus the message delta.
 
@@ -705,7 +705,7 @@ The DB never prunes; 13 runs across 4 days sit in it right now. There is **no "h
 
 - **No auto-jump.** A new run appearing while you read an old one shows a **"new run started ↑"** chip on the rail. The canvas is never yanked out from under you.
 - **Feed scope toggle: "This run" (default) / "All."** The global `sequence` timeline is the only true total-order history in the schema and costs nothing extra to expose — one click away, never the default.
-  > **Superseded by §12.4 (#69).** The global scope is retired, and the second toggle is now **"Unattributed"**. It costs nothing extra to expose only while the client is *holding* the whole database, and ADR 0002 stopped it doing that: the client fetches one selected run whole and pages the rest, so a button marked "All" would show one orchestration and call it every one. What that scope is *for* — a turn nothing places must still appear, attached to nobody (§4.4 rule 3, §7.7) — is unchanged and is exactly what the new name says. Another orchestrator's conversation is a rail click away.
+  > **Superseded by §14.4 (#69).** The global scope is retired, and the second toggle is now **"Unattributed"**. It costs nothing extra to expose only while the client is *holding* the whole database, and ADR 0004 stopped it doing that: the client fetches one selected run whole and pages the rest, so a button marked "All" would show one orchestration and call it every one. What that scope is *for* — a turn nothing places must still appear, attached to nobody (§4.4 rule 3, §7.7) — is unchanged and is exactly what the new name says. Another orchestrator's conversation is a rail click away.
 
 ### 7.4 The gate strip (#7 §4, §8)
 
@@ -792,7 +792,7 @@ So instead:
 - **Every turn carries its `source`** — the columns it was reconstructed from, in small grey type under the bubble. Four of these turns are not messages, and a bubble that pretended otherwise would be a lie. This is not a footnote; it is the point.
 - **Heartbeats collapse to one line per task** — 302 of 466 messages, all saying "alive". *"18 heartbeats · every ~5 min"*, with the cadence **measured** from two instants and a count rather than read off Orca's documentation. There is no "show heartbeats" toggle any more, and nothing is hidden: the two hundred rows the line replaces all say the same word, and their value — *liveness* — already reached the screen as the last-seen badge (§4.6).
 - **Scope: "This orchestrator" (default) / "All."** An agent selected in the rail narrows it further. "All" is not a convenience: a turn the server could not place belongs to no orchestrator (§4.4, rule 3), and it must still **appear, attached to nobody**, rather than be guessed into somebody's thread.
-  > **Superseded by §12.4 (#69): the second scope is now "Unattributed",** and it shows exactly the turns nothing places — which is precisely the job this bullet gives it, and now the only job it can honestly do. The client holds one selected run and those turns (ADR 0002), so "All" would have been a name for something the panel no longer has.
+  > **Superseded by §14.4 (#69): the second scope is now "Unattributed",** and it shows exactly the turns nothing places — which is precisely the job this bullet gives it, and now the only job it can honestly do. The client holds one selected run and those turns (ADR 0004), so "All" would have been a name for something the panel no longer has.
 - A turn whose `taskId` does not resolve to a live task (post-reset orphan — §4.2, trap 8) still renders, simply unlinked. `read` / `delivered_at` are **not rendered** (#8 §3).
 
 ### 7.8 The node inspector (#7 §8)
@@ -898,83 +898,6 @@ Three places in this document fill a mechanical gap the tickets did not need to 
 
 ---
 
-## 12. Approved live-supervision extension (#51)
-
-This section is an approved multi-session plan, not one implementation ticket. The seven tracer bullets are published as child issues of #51; each must fit a fresh context and preserve every hard invariant in §1.2.
-
-### Problem Statement
-
-The live screen reconstructs orchestration history but does not reliably answer a supervisor's first question: **does anything need intervention now?** Quiet or never-heartbeating workers can look healthy, unfinished gate-blocked work can look finished, old dispatches can look active merely because Orca is running, and urgent facts remain scattered across selected-run surfaces. The browser also cannot distinguish a reconnecting stream from old-but-still-rendered data, narrate unrecorded status transitions during the open session, or offer a glanceable multi-run view.
-
-### Solution
-
-Build supervision on corrected, shared evidence models, then expose one ranked attention queue across orchestrators. Add explicit connection and data-age feedback, bounded session activity, opt-in notification affordances, an optional WAL early-wake hint, optional live Orca context, and a DAG-free kiosk. SQLite remains authoritative and read-only throughout; client clocks, filesystem watches, snapshot diffs, browser notifications, and CLI output are fallible presentation aids around that authority.
-
-### User Stories
-
-1. As a supervisor, I want recently active, unfinished-but-silent, and finished orchestrations to look different, so that a running Orca process does not make abandoned work look healthy.
-2. As a supervisor, I want pending and gate-blocked work treated as unfinished, so that quiet waiting is not mistaken for convergence.
-3. As a supervisor, I want every worker-health surface to use the same evidence and clock, so that a node, cast row, and overview cannot disagree.
-4. As a supervisor, I want missing heartbeats described as missing evidence, so that the tool never claims a terminal is dead.
-5. As a supervisor, I want only genuinely blocking gates to demand intervention, so that unanswered, timed-out, superseded, or already-resolved questions do not create permanent noise.
-6. As a supervisor, I want one cross-orchestrator attention queue, so that I do not need to inspect every run to find a blocker.
-7. As a supervisor, I want an attention item to open its orchestrator and task when available, so that triage takes one action.
-8. As a supervisor, I want unresolved escalations to remain visible after their animation ends, so that a one-second pulse cannot hide a request for help.
-9. As a supervisor, I want repeated snapshots to preserve one attention cause rather than duplicate it, so that the queue stays trustworthy.
-10. As a supervisor, I want the page title and favicon to reflect current attention even when the tab is backgrounded.
-11. As a supervisor, I want desktop notifications to be explicit opt-in and non-repeating, so that supervision does not become notification spam.
-12. As a supervisor, I want to see whether the stream is connected or reconnecting while the last good state remains visible.
-13. As a supervisor, I want data age to advance with wall time, so that I know when the displayed snapshot last changed even on a quiet stream.
-14. As a supervisor, I want transitions observed after I opened the page narrated in a ticker, so that task dispatch, retry, and status changes are legible even when Orca wrote no message row.
-15. As a supervisor, I want the ticker to identify itself as session activity, so that I do not mistake it for durable replay.
-16. As a supervisor, I want an optional low-latency wake path, so that urgent changes may surface before the next five-second poll without weakening correctness.
-17. As a supervisor, I want optional live worktree and current-activity context when Orca can provide an exact match, so that I can understand what an active worker is doing.
-18. As a supervisor, I want CLI enrichment failure to leave the SQLite view intact, so that an optional convenience cannot take down supervision.
-19. As a supervisor using a wall display, I want a non-interactive overview of unfinished orchestrations, so that active and silent work is readable at a glance.
-20. As a post-mortem user, I want every live-only feature to disappear or degrade honestly when Orca is closed, so that historical inspection keeps working.
-
-### Implementation Decisions
-
-- **Foundations stay separate.** Gate fidelity and triage tiers belong to #45; shared worker health and the client wall clock belong to #47; three-state run semantics and activity evidence belong to #48. Section 12 consumes those contracts. It does not independently choose #48's field name, evidence set, threshold application, or compatibility path.
-- **Three-state semantics are locked.** An unfinished orchestration contains at least one `pending`, `ready`, `dispatched`, or `blocked` task. Unfinished work is either recently active or silent according to #48's evidence contract; an orchestration with no unfinished work is finished. `Meta.liveness` remains the separate Orca-process fact.
-- **Attention is a pure derivation over the latest snapshot plus wall time and bounded session state.** Each attention cause has a stable identity, kind, explanation, severity inputs, `runId`, optional `taskId`, and occurrence time. Re-reading the same cause never duplicates it.
-- **Attention rank is deterministic.** The precedence is: blocking gates, ordered oldest first; stale or never-heartbeating workers, ordered by longest silence; current dispatches with `failureCount >= 2`, highest count first; unresolved escalations, oldest first; then fresh failures, newest first. Stable ids break remaining ties. Distinct causes may coexist for one task rather than hiding evidence behind a lossy task-level merge.
-- **Attention lifetimes follow evidence.** A blocking gate leaves when #45 no longer classifies it as blocking. Worker and retry-risk items follow the current health/attempt. An escalation persists until its task reaches a terminal state or starts a later dispatch attempt. A fresh failure remains fresh for the shared attention freshness window. Orphaned historical messages without a current unfinished task do not demand intervention.
-- **Selection is the navigation seam.** Clicking an attention item selects its orchestrator and, when present, its task through the existing selection model; it does not introduce a parallel router or mutate Orca.
-- **Notification affordances consume attention; they never derive urgency independently.** Title and favicon state reflect the queue. Desktop notifications default off, persist the user's opt-in locally, request browser permission only from a user gesture, establish the current queue as a no-notify baseline, and notify once when a trusted cause first enters. They never replay historical attention on load or on reconnect.
-- **Freshness has two dimensions.** The client reports `connected` or `reconnecting` from `EventSource` lifecycle and separately shows data age from the last successfully applied snapshot. `EventSource.onerror` preserves the last good snapshot. A wall-clock ticker advances the age without requiring an SSE push; quiet data is not described as a broken connection.
-- **Session activity starts from a baseline.** The first snapshot and any explicit resynchronization establish state without narrating history. Later snapshots synthesize dispatch, retry, and task-status transitions, then merge them with coherent gate, escalation, and worker-done deltas. The in-memory list is bounded to the most recent 100 entries, clears on reload, and is never persisted in browser storage, on the server, or in SQLite. #49 is required so real message deltas cannot be skipped behind their cursor.
-- **The WAL path is an explicit optional wake hint.** A debounced watcher may observe the database directory so `-wal`/`-shm` deletion and recreation do not strand a file watcher, but it may only schedule the normal `data_version` tick early. The five-second poll remains authoritative and continues unchanged after watch failure; a warning explains the fallback. No watcher event becomes a snapshot fact or SSE event by itself.
-- **Live enrichment is explicit opt-in and off the SQLite hot path.** A separately timed, timeout-bounded adapter may call `orca worktree ps --json` and the minimum read-only Orca metadata needed to join its result. It runs only while `Meta.liveness` is live, caches the last success, and never delays or replaces a SQLite snapshot. Worktree context is attached only through an exact terminal-handle join; current agent activity is attached only when that join is unambiguous. Ambiguous or failed joins render no activity rather than guessing. Failure retains the last SQLite snapshot and labels enrichment unavailable.
-- **Kiosk is a route, not a second application.** `/kiosk` is a non-interactive, continuously updating overview of unfinished orchestrations. It shows active/silent tiles, each tile's worst worker health and blocking-gate age, the shared attention queue, and session activity. It excludes the DAG, inspector, conversation, historical finished runs, task controls, forced browser fullscreen, and a new server mode.
-- **Read-only remains absolute.** No supervision feature writes to `orchestration.db`, resolves a gate, retries a task, marks a message read, or treats an Orca CLI mutation as enrichment. The server still opens every database connection with `readOnly: true`.
-- **The approved delivery order is seven tracer bullets.** (1) attention derivation/queue and persistent escalation in #56, blocked by #45, #47, and #48; (2) independent stream freshness in #57; (3) session activity in #58, blocked by #49; (4) the WAL wake hint in #59, blocked by #57 so latency is observable; (5) notifications in #60, blocked by #56; (6) live enrichment in #61, blocked by #46 because enrichment pushes must not remount the DAG; and (7) kiosk in #62, blocked by #56, #57, and #58. #50 is important but is not a blocker unless a later implementation directly consumes reset-shape metadata.
-
-### Testing Decisions
-
-- Test external behavior at the highest existing seam and keep the number of seams small: pure derivations for evidence/ranking rules, the real SQLite/SSE server harness for transport and wake scheduling, and canned-event `App`/jsdom tests for browser behavior.
-- Pure tests use an injected instant and cover threshold crossings without sleeping: never-heartbeating and stale workers, pending-only and gate-blocked orchestrations, overlapping attention causes, deterministic ranking, escalation clearing, and the no-notify baseline.
-- Server tests use real fixture databases and prove that poll-only and watch-woken paths produce the same snapshots, watch failure returns to polling, optional enrichment timeout cannot delay SQLite delivery, and no tested path opens a writable database.
-- Client tests drive `EventSource` open/error/message transitions, wall-clock advancement, session baseline and 100-entry bound, selection from attention, notification permission/opt-in/deduplication, ambiguous enrichment, and kiosk rendering without a DAG.
-- Integration coverage must include a quiet connected stream, a reconnect retaining the last good event, a coherent message delta from #49, and a post-mortem snapshot with every live-only adapter unavailable.
-- Existing prior art is the run/gate derivation suites, real database snapshot and stream harnesses, and `Live`/`App`/rail jsdom suites. New behavior extends those seams rather than adding implementation-specific tests.
-
-### Out of Scope
-
-- Diagnosing whether a worker terminal is alive, dead, hung, or safe to kill.
-- Any mutation of Orca state, including acknowledgement or dismissal stored back into Orca.
-- Durable replay, an audit log, an event store, or reconstruction of transitions that occurred before the browser session.
-- Notification delivery when no browser page is open, push services, email, mobile notifications, or service-worker background operation.
-- Making CLI enrichment authoritative, required, available post-mortem, or guessed across ambiguous terminal/worktree relationships.
-- Replacing the poll loop with filesystem watching, changing SSE transport, or promising sub-second delivery.
-- A kiosk DAG, interaction, historical browser, forced fullscreen, independent server process, or saved kiosk configuration.
-- Implementing #50 as part of this roadmap unless a future ticket explicitly adopts reset-shape metadata.
-
-### Further Notes
-
-The MVP clauses that say there is no WAL watcher, zero CLI spawning, a boolean `Run.live`, and message-only gate resolution describe the shipped MVP and are intentionally refined by this extension and its foundational bugs. The dependency edges prevent an implementation session from applying the new UI semantics before the underlying evidence is trustworthy. Ticket bodies are the agent-sized execution briefs; this section is the cross-session specification of record.
----
-
 ## 12. Post-MVP amendment: run health (#48)
 
 This section supersedes the MVP's boolean `Run.live`, its misleading `endedAt` name, the `ready | dispatched`-only in-flight set, and every UI rule that labels `live === false` as "ended." It does not change run identity, waves, task health (#47), Orca process detection, or the six-hour attribution grace.
@@ -1072,11 +995,88 @@ The window becomes `[startedAt, lastActivityAt + 6 hours]`. The six-hour value r
 
 ---
 
-## 12. Quantitative post-mortem roadmap (#52)
+## 13. Approved live-supervision extension (#51)
+
+This section is an approved multi-session plan, not one implementation ticket. The seven tracer bullets are published as child issues of #51; each must fit a fresh context and preserve every hard invariant in §1.2.
+
+### Problem Statement
+
+The live screen reconstructs orchestration history but does not reliably answer a supervisor's first question: **does anything need intervention now?** Quiet or never-heartbeating workers can look healthy, unfinished gate-blocked work can look finished, old dispatches can look active merely because Orca is running, and urgent facts remain scattered across selected-run surfaces. The browser also cannot distinguish a reconnecting stream from old-but-still-rendered data, narrate unrecorded status transitions during the open session, or offer a glanceable multi-run view.
+
+### Solution
+
+Build supervision on corrected, shared evidence models, then expose one ranked attention queue across orchestrators. Add explicit connection and data-age feedback, bounded session activity, opt-in notification affordances, an optional WAL early-wake hint, optional live Orca context, and a DAG-free kiosk. SQLite remains authoritative and read-only throughout; client clocks, filesystem watches, snapshot diffs, browser notifications, and CLI output are fallible presentation aids around that authority.
+
+### User Stories
+
+1. As a supervisor, I want recently active, unfinished-but-silent, and finished orchestrations to look different, so that a running Orca process does not make abandoned work look healthy.
+2. As a supervisor, I want pending and gate-blocked work treated as unfinished, so that quiet waiting is not mistaken for convergence.
+3. As a supervisor, I want every worker-health surface to use the same evidence and clock, so that a node, cast row, and overview cannot disagree.
+4. As a supervisor, I want missing heartbeats described as missing evidence, so that the tool never claims a terminal is dead.
+5. As a supervisor, I want only genuinely blocking gates to demand intervention, so that unanswered, timed-out, superseded, or already-resolved questions do not create permanent noise.
+6. As a supervisor, I want one cross-orchestrator attention queue, so that I do not need to inspect every run to find a blocker.
+7. As a supervisor, I want an attention item to open its orchestrator and task when available, so that triage takes one action.
+8. As a supervisor, I want unresolved escalations to remain visible after their animation ends, so that a one-second pulse cannot hide a request for help.
+9. As a supervisor, I want repeated snapshots to preserve one attention cause rather than duplicate it, so that the queue stays trustworthy.
+10. As a supervisor, I want the page title and favicon to reflect current attention even when the tab is backgrounded.
+11. As a supervisor, I want desktop notifications to be explicit opt-in and non-repeating, so that supervision does not become notification spam.
+12. As a supervisor, I want to see whether the stream is connected or reconnecting while the last good state remains visible.
+13. As a supervisor, I want data age to advance with wall time, so that I know when the displayed snapshot last changed even on a quiet stream.
+14. As a supervisor, I want transitions observed after I opened the page narrated in a ticker, so that task dispatch, retry, and status changes are legible even when Orca wrote no message row.
+15. As a supervisor, I want the ticker to identify itself as session activity, so that I do not mistake it for durable replay.
+16. As a supervisor, I want an optional low-latency wake path, so that urgent changes may surface before the next five-second poll without weakening correctness.
+17. As a supervisor, I want optional live worktree and current-activity context when Orca can provide an exact match, so that I can understand what an active worker is doing.
+18. As a supervisor, I want CLI enrichment failure to leave the SQLite view intact, so that an optional convenience cannot take down supervision.
+19. As a supervisor using a wall display, I want a non-interactive overview of unfinished orchestrations, so that active and silent work is readable at a glance.
+20. As a post-mortem user, I want every live-only feature to disappear or degrade honestly when Orca is closed, so that historical inspection keeps working.
+
+### Implementation Decisions
+
+- **Foundations stay separate.** Gate fidelity and triage tiers belong to #45; shared worker health and the client wall clock belong to #47; three-state run semantics and activity evidence belong to #48. Section 12 consumes those contracts. It does not independently choose #48's field name, evidence set, threshold application, or compatibility path.
+- **Three-state semantics are locked.** An unfinished orchestration contains at least one `pending`, `ready`, `dispatched`, or `blocked` task. Unfinished work is either recently active or silent according to #48's evidence contract; an orchestration with no unfinished work is finished. `Meta.liveness` remains the separate Orca-process fact.
+- **Attention is a pure derivation over the latest snapshot plus wall time and bounded session state.** Each attention cause has a stable identity, kind, explanation, severity inputs, `runId`, optional `taskId`, and occurrence time. Re-reading the same cause never duplicates it.
+- **Attention rank is deterministic.** The precedence is: blocking gates, ordered oldest first; stale or never-heartbeating workers, ordered by longest silence; current dispatches with `failureCount >= 2`, highest count first; unresolved escalations, oldest first; then fresh failures, newest first. Stable ids break remaining ties. Distinct causes may coexist for one task rather than hiding evidence behind a lossy task-level merge.
+- **Attention lifetimes follow evidence.** A blocking gate leaves when #45 no longer classifies it as blocking. Worker and retry-risk items follow the current health/attempt. An escalation persists until its task reaches a terminal state or starts a later dispatch attempt. A fresh failure remains fresh for the shared attention freshness window. Orphaned historical messages without a current unfinished task do not demand intervention.
+- **Selection is the navigation seam.** Clicking an attention item selects its orchestrator and, when present, its task through the existing selection model; it does not introduce a parallel router or mutate Orca.
+- **Notification affordances consume attention; they never derive urgency independently.** Title and favicon state reflect the queue. Desktop notifications default off, persist the user's opt-in locally, request browser permission only from a user gesture, establish the current queue as a no-notify baseline, and notify once when a trusted cause first enters. They never replay historical attention on load or on reconnect.
+- **Freshness has two dimensions.** The client reports `connected` or `reconnecting` from `EventSource` lifecycle and separately shows data age from the last successfully applied snapshot. `EventSource.onerror` preserves the last good snapshot. A wall-clock ticker advances the age without requiring an SSE push; quiet data is not described as a broken connection.
+- **Session activity starts from a baseline.** The first snapshot and any explicit resynchronization establish state without narrating history. Later snapshots synthesize dispatch, retry, and task-status transitions, then merge them with coherent gate, escalation, and worker-done deltas. The in-memory list is bounded to the most recent 100 entries, clears on reload, and is never persisted in browser storage, on the server, or in SQLite. #49 is required so real message deltas cannot be skipped behind their cursor.
+- **The WAL path is an explicit optional wake hint.** A debounced watcher may observe the database directory so `-wal`/`-shm` deletion and recreation do not strand a file watcher, but it may only schedule the normal `data_version` tick early. The five-second poll remains authoritative and continues unchanged after watch failure; a warning explains the fallback. No watcher event becomes a snapshot fact or SSE event by itself.
+- **Live enrichment is explicit opt-in and off the SQLite hot path.** A separately timed, timeout-bounded adapter may call `orca worktree ps --json` and the minimum read-only Orca metadata needed to join its result. It runs only while `Meta.liveness` is live, caches the last success, and never delays or replaces a SQLite snapshot. Worktree context is attached only through an exact terminal-handle join; current agent activity is attached only when that join is unambiguous. Ambiguous or failed joins render no activity rather than guessing. Failure retains the last SQLite snapshot and labels enrichment unavailable.
+- **Kiosk is a route, not a second application.** `/kiosk` is a non-interactive, continuously updating overview of unfinished orchestrations. It shows active/silent tiles, each tile's worst worker health and blocking-gate age, the shared attention queue, and session activity. It excludes the DAG, inspector, conversation, historical finished runs, task controls, forced browser fullscreen, and a new server mode.
+- **Read-only remains absolute.** No supervision feature writes to `orchestration.db`, resolves a gate, retries a task, marks a message read, or treats an Orca CLI mutation as enrichment. The server still opens every database connection with `readOnly: true`.
+- **The approved delivery order is seven tracer bullets.** (1) attention derivation/queue and persistent escalation in #56, blocked by #45, #47, and #48; (2) independent stream freshness in #57; (3) session activity in #58, blocked by #49; (4) the WAL wake hint in #59, blocked by #57 so latency is observable; (5) notifications in #60, blocked by #56; (6) live enrichment in #61, blocked by #46 because enrichment pushes must not remount the DAG; and (7) kiosk in #62, blocked by #56, #57, and #58. #50 is important but is not a blocker unless a later implementation directly consumes reset-shape metadata.
+
+### Testing Decisions
+
+- Test external behavior at the highest existing seam and keep the number of seams small: pure derivations for evidence/ranking rules, the real SQLite/SSE server harness for transport and wake scheduling, and canned-event `App`/jsdom tests for browser behavior.
+- Pure tests use an injected instant and cover threshold crossings without sleeping: never-heartbeating and stale workers, pending-only and gate-blocked orchestrations, overlapping attention causes, deterministic ranking, escalation clearing, and the no-notify baseline.
+- Server tests use real fixture databases and prove that poll-only and watch-woken paths produce the same snapshots, watch failure returns to polling, optional enrichment timeout cannot delay SQLite delivery, and no tested path opens a writable database.
+- Client tests drive `EventSource` open/error/message transitions, wall-clock advancement, session baseline and 100-entry bound, selection from attention, notification permission/opt-in/deduplication, ambiguous enrichment, and kiosk rendering without a DAG.
+- Integration coverage must include a quiet connected stream, a reconnect retaining the last good event, a coherent message delta from #49, and a post-mortem snapshot with every live-only adapter unavailable.
+- Existing prior art is the run/gate derivation suites, real database snapshot and stream harnesses, and `Live`/`App`/rail jsdom suites. New behavior extends those seams rather than adding implementation-specific tests.
+
+### Out of Scope
+
+- Diagnosing whether a worker terminal is alive, dead, hung, or safe to kill.
+- Any mutation of Orca state, including acknowledgement or dismissal stored back into Orca.
+- Durable replay, an audit log, an event store, or reconstruction of transitions that occurred before the browser session.
+- Notification delivery when no browser page is open, push services, email, mobile notifications, or service-worker background operation.
+- Making CLI enrichment authoritative, required, available post-mortem, or guessed across ambiguous terminal/worktree relationships.
+- Replacing the poll loop with filesystem watching, changing SSE transport, or promising sub-second delivery.
+- A kiosk DAG, interaction, historical browser, forced fullscreen, independent server process, or saved kiosk configuration.
+- Implementing #50 as part of this roadmap unless a future ticket explicitly adopts reset-shape metadata.
+
+### Further Notes
+
+The MVP clauses that say there is no WAL watcher, zero CLI spawning, a boolean `Run.live`, and message-only gate resolution describe the shipped MVP and are intentionally refined by this extension and its foundational bugs. The dependency edges prevent an implementation session from applying the new UI semantics before the underlying evidence is trustworthy. Ticket bodies are the agent-sized execution briefs; this section is the cross-session specification of record.
+---
+
+## 14. Quantitative post-mortem roadmap (#52)
 
 This section is an approved multi-session roadmap. Its slices are independently shippable and must land through separate implementation tickets; it is not permission to build the roadmap in one branch. The hard invariants in §1.2 continue to govern every slice.
 
-### 12.1 Problem Statement
+### 14.1 Problem Statement
 
 orca-viz reconstructs a strong qualitative account of an orchestrator run: its DAG, cast, gates, attempts, and conversation. It does not yet turn the retained evidence into answers for the common post-mortem questions: how long the work took, when an agent first showed life, which agent finished sooner, what each task produced, where time accumulated along dependencies, or how one task compares with the rest of retained history.
 
@@ -1084,13 +1084,13 @@ Those answers already exist in the retained timestamps, messages, task results, 
 
 The current transport also re-derives and re-sends all retained tasks and conversation turns whenever the database changes. Because the database is never pruned, quantitative history features must not make that unbounded snapshot larger.
 
-### 12.2 Solution
+### 14.2 Solution
 
 Add a post-mortem report for each orchestrator run, beginning with three slices: honest duration observations, structured outcome receipts, and a per-agent scoreboard. Then add critical-path analysis, a paginated cross-history dispatch report, a dispatch timeline, evidence hints, and a versioned one-shot run archive with unmistakably offline replay.
 
 Scale history through a cursor-paginated run index and complete on-demand selected-run snapshots. A selected run remains whole: its tasks, attempts, gates, conversation, and archive are never silently time-windowed or truncated. The live stream carries lossless message deltas and enough invalidation identity to refresh affected summaries, report pages, and the selected run without re-shipping the machine's full history.
 
-### 12.3 User Stories
+### 14.3 User Stories
 
 1. As an Orca user reading a completed run, I want to see its elapsed span, so that I know how long the orchestration occupied wall-clock time.
 2. As an Orca user reading a task, I want to see a dispatch duration when both dispatch timestamps exist, so that the clock reflects the worker attempt rather than task setup time.
@@ -1128,7 +1128,7 @@ Scale history through a cursor-paginated run index and complete on-demand select
 34. As an Orca user, I want archives to include full task bodies and attempts plus only messages attributed to that run, so that they are self-contained without including unrelated or unattributed machine history.
 35. As an Orca user, I want archive format mismatches to degrade visibly and safely, so that an older replay reader never crashes or silently mislabels evidence.
 
-### 12.4 Implementation Decisions
+### 14.4 Implementation Decisions
 
 #### First milestone: duration + outcomes + scoreboard
 
@@ -1212,7 +1212,7 @@ The first milestone answers: **who finished first, what did they produce, and at
 - Archived replay opens the artifact without an Orca database and uses the ordinary selected-run presentation wherever possible. It is visibly **archived/offline**, has no liveness badge that implies a process is running, performs no polling, and offers no mutation.
 - A newer artifact version degrades under a visible compatibility warning. An unreadable required core fails with an actionable archive error; optional unknown fields and receipt shapes render verbatim.
 
-### 12.5 Testing Decisions
+### 14.5 Testing Decisions
 
 The primary server seam is observable HTTP behavior: the selected-run contract, paginated run index, paginated cross-history report, and archive export/replay contract. Tests should make requests against live-shaped fixture databases and assert user-visible contract behavior, rather than private query structure.
 
@@ -1228,7 +1228,7 @@ Client presentation continues to use canned wire events and HTTP responses. It m
 
 Archive tests perform an export-to-replay round trip and assert that full selected-run evidence survives while unrelated and unattributed messages do not. Existing fixture/schema-degradation suites remain the prior art: each missing optional column must cost only the feature that reads it, with a visible degradation reason.
 
-### 12.6 Out of Scope
+### 14.6 Out of Scope
 
 - Background recording, a shadow event store, automatic snapshots, future-row capture, or recovery of evidence Orca overwrote or deleted.
 - Exporting the machine-global database, unrelated runs, unattributed/global messages, or claiming an archive is a security redaction format.
@@ -1240,9 +1240,9 @@ Archive tests perform an export-to-replay round trip and assert that full select
 - Live-supervision attention queues, notifications, kiosk mode, or task-health changes tracked by #51.
 - Fixing reset-shape detection tracked by #50.
 
-### 12.7 Further Notes
+### 14.7 Further Notes
 
 The implementation order is nine tracer-bullet sessions: durations; structured outcomes; scoreboard; scalable history transport; cross-history dispatch report; critical path; timeline; evidence hints; archive and replay. Durations and outcomes can begin independently, while the scoreboard requires both. Later slices declare only their genuine data-contract blockers; roadmap order alone is not a blocking edge.
 
-The archive boundary is recorded in ADR 0001. The complete-selected-run history boundary is recorded in ADR 0002. The domain glossary defines retained evidence, post-mortem report, outcome receipt, run archive, archived replay, run index, selected-run snapshot, and evidence hint.
+The archive boundary is recorded in ADR 0005. The complete-selected-run history boundary is recorded in ADR 0004. The domain glossary defines retained evidence, post-mortem report, outcome receipt, run archive, archived replay, run index, selected-run snapshot, and evidence hint.
 

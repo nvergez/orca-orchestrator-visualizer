@@ -1,7 +1,7 @@
 import type { FeedMessage, RunSnapshot, SchemaSupport } from './types.ts';
 
 /**
- * **The run archive** (`CONTEXT.md`, ADR 0001, SPEC §12.4, #74) — the file, and the one reader
+ * **The run archive** (`CONTEXT.md`, ADR 0005, SPEC §14.4, #74) — the file, and the one reader
  * that decides whether a file is one.
  *
  * A run archive is a *versioned, self-contained, one-shot export of exactly one selected
@@ -10,7 +10,7 @@ import type { FeedMessage, RunSnapshot, SchemaSupport } from './types.ts';
  * which serves an **archived replay**: the ordinary selected-run screen, with no database behind
  * it, nothing polling, and no claim that anything is still running.
  *
- * Four rules make it the thing ADR 0001 approved rather than the shadow event store it forbids:
+ * Four rules make it the thing ADR 0005 approved rather than the shadow event store it forbids:
  *
  * - **One run, and only what the database already held.** The selected-run snapshot, the two
  *   bodies of each of its tasks, every dispatch attempt, and the raw messages **attributed to
@@ -42,7 +42,7 @@ export const ARCHIVE_VERSION = 1;
 export type ArchiveCompatibility = 'supported' | 'newer';
 
 /**
- * The database this evidence was read from, **as a shape rather than as a place** (SPEC §12.4).
+ * The database this evidence was read from, **as a shape rather than as a place** (SPEC §14.4).
  *
  * Its schema version, how that compared with the build that exported it, and the features a
  * missing column had already cost the reader — so a replay can say "there are no attempt

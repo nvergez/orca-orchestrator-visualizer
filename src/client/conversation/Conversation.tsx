@@ -46,7 +46,7 @@ import { TurnRow } from './TurnRow.tsx';
  *
  * **That scope used to be called "All", and it is now called "Unattributed"** (#69). The name was
  * the whole of what changed, and it changed because the panel no longer holds the machine: since
- * ADR 0002 the client fetches *one selected run* whole and the rail pages the rest, so a button
+ * ADR 0004 the client fetches *one selected run* whole and the rail pages the rest, so a button
  * marked "All" would have shown the reader one orchestration and called it every one — the exact
  * class of lie the `source` caption under every bubble exists to prevent. What that button was
  * *for* is untouched (SPEC §7.7: "'All' is not a convenience: a turn the server could not place

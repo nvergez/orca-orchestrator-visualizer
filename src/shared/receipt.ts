@@ -2,7 +2,7 @@ import { parsePayload } from './payload.ts';
 import type { ReceiptFact } from './types.ts';
 
 /**
- * The outcome-receipt readers (#67, SPEC §12.4): what a task verifiably produced, read out of
+ * The outcome-receipt readers (#67, SPEC §14.4): what a task verifiably produced, read out of
  * the two columns that ever say — `tasks.result` and a `worker_done` message's `payload`.
  *
  * Both columns are TEXT holding whatever a worker or coordinator chose to write, with nothing
@@ -12,7 +12,7 @@ import type { ReceiptFact } from './types.ts';
  *
  * - **Never throw.** A value that cannot be read produces no facts. Not a lesser receipt, not
  *   a guess — nothing, and the raw value stays on screen where it always was. Unknown shapes
- *   are ordinary here, not schema drift: they never touch `meta.degraded` (SPEC §12.4).
+ *   are ordinary here, not schema drift: they never touch `meta.degraded` (SPEC §14.4).
  * - **Additive, top-level, allowlisted.** A fact comes from a top-level field whose *name* is
  *   recognized (below) or whose *value* is a valid URL. Nested objects, arrays of objects and
  *   prose are never mined — a reader that went hunting through arbitrary structure would be

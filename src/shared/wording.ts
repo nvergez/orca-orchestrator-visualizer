@@ -30,7 +30,7 @@ export function livenessSentence(
  * One notice per lost history surface, in the order `Meta.historyLoss` already promises
  * (SPEC §5.1) — and in these exact words, spec'd like the liveness sentence above. Each
  * names the evidence first and then says the shape **matches** a reset: "matches" is
- * load-bearing, because the database proves the loss shape and never its cause (ADR 0001).
+ * load-bearing, because the database proves the loss shape and never its cause (ADR 0003).
  * Rendered verbatim on both surfaces — backticks and all, like the `meta.degraded` entries —
  * because a paraphrase on either side is the drift this module exists to prevent.
  */

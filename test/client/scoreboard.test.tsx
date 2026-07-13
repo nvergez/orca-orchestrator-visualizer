@@ -5,7 +5,7 @@ import { CannedApp, type CannedEvent } from './canned.tsx';
 import { FakeMatchMedia, MOBILE_QUERY } from './fake-match-media.ts';
 
 /**
- * The scoreboard, on screen (#68, SPEC §12.4). The server sends one scorecard per cast member
+ * The scoreboard, on screen (#68, SPEC §14.4). The server sends one scorecard per cast member
  * (`server/scoreboard.ts`) and the client's whole job is presentation without editorial:
  *
  * - a **multi-agent** cast is a comparison grid, one row per agent, each metric its own column;
@@ -171,7 +171,7 @@ describe('the comparison grid', () => {
       .getAllByTestId('scoreboard-row')
       .find((row) => row.dataset.agent === 'A1')!;
 
-    // Heartbeats and other messages are separate facts in separate cells (SPEC §12.4).
+    // Heartbeats and other messages are separate facts in separate cells (SPEC §14.4).
     expect(within(first).getByTestId('score-heartbeats')).toHaveTextContent('5');
     expect(within(first).getByTestId('score-messages')).toHaveTextContent('2');
     expect(within(first).getByTestId('score-failures')).toHaveTextContent('1');
@@ -187,7 +187,7 @@ describe('the comparison grid', () => {
 
     const second = rows.find((row) => row.dataset.agent === 'A2')!;
     expect(within(second).getByTestId('score-span')).toHaveTextContent(/so far/);
-    // No retained heartbeat: unknown, and explained — never `0s` (SPEC §12.4).
+    // No retained heartbeat: unknown, and explained — never `0s` (SPEC §14.4).
     const firstBeat = within(second).getByTestId('score-first-heartbeat');
     expect(firstBeat).toHaveTextContent('—');
     expect(firstBeat).not.toHaveTextContent(/^0/);
@@ -226,7 +226,7 @@ describe('the comparison grid', () => {
     expect(measured).toHaveTextContent('none');
 
     // A3's could not be read at all. Rendering that as "none" would be a verdict on an agent
-    // out of a database that cannot pass judgement (SPEC §12.4).
+    // out of a database that cannot pass judgement (SPEC §14.4).
     const unknown = within(rows.find((row) => row.dataset.agent === 'A3')!).getByTestId('score-outcomes');
     expect(unknown).toHaveTextContent('—');
     expect(unknown).not.toHaveTextContent(/none/);

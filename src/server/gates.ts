@@ -24,7 +24,7 @@ import { byInstant, isoInstant } from './time.ts';
  *   identity, attribution, question and options stay the message's; **lifecycle status and
  *   resolution come from the row, which is authoritative whenever it exists.** A row with no
  *   twin is still added (never primary, always additive), so CLI-driven runs lose nothing.
- * - **Lifecycle state is not blocking effect** (CONTEXT.md, ADR 0001). `status` records what
+ * - **Lifecycle state is not blocking effect** (CONTEXT.md, ADR 0002). `status` records what
  *   the database proves — `pending | resolved | timeout` from a row, `resolved` from a threaded
  *   reply, `unanswered` from silence — and never infers `timeout` from age or the absence of a
  *   reply, because `orchestration.ask` does not persist its timeout (SPEC §4.2, trap 9).

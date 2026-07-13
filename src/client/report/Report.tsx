@@ -24,13 +24,13 @@ import { useIsMobile } from '../viewport.tsx';
 import { DEFAULT_VIEW, isFiltered, type ReportLoader, type ReportView, useReport } from './query.ts';
 
 /**
- * **The cross-history report** (#70, SPEC §12.4): one row per retained task, across every
+ * **The cross-history report** (#70, SPEC §14.4): one row per retained task, across every
  * orchestrator this database remembers — and an entry point *into* the tool, never a second one.
  *
  * The rail lists orchestrators and the canvas draws one of them. Neither can answer a question
  * that is about history rather than about a run — *which task took longest, who carries the
  * failures, what did last week actually produce, and what did we never start at all* — and the
- * answer to none of those is another graph (SPEC §12.6). It is a table you can rank and search,
+ * answer to none of those is another graph (SPEC §14.6). It is a table you can rank and search,
  * and a row you click is the ordinary selected run opening at the ordinary inspector.
  *
  * Three things it is careful about:
@@ -287,7 +287,7 @@ const Fact = {
       <Missing>unknown</Missing>
     ),
 
-  // The maximum retained cumulative count, never the sum across retries (SPEC §12.4).
+  // The maximum retained cumulative count, never the sum across retries (SPEC §14.4).
   failures: (row: ReportRow) => (
     <span
       data-testid="report-failures"
@@ -552,7 +552,7 @@ function Filters({
         One control, two query dimensions — because "which agent" and "no agent at all" are two
         different questions and a select that only offered handles could never ask the second. The
         options are the cast; `none` asks the presence filter instead (`agent=missing`), which is
-        how a value the column *renders* as missing stays a value a reader can find (SPEC §12.4).
+        how a value the column *renders* as missing stays a value a reader can find (SPEC §14.4).
       */}
       <Select
         testId="report-filter-agent"

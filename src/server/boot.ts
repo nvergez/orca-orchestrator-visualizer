@@ -124,7 +124,7 @@ export async function boot(options: BootOptions): Promise<Booted> {
 }
 
 /**
- * `--archive <file>` — **the archived replay** (#74, ADR 0001): a saved run, opened offline.
+ * `--archive <file>` — **the archived replay** (#74, ADR 0005): a saved run, opened offline.
  *
  * Everything a live boot does is *absent* here, and the absences are the feature. No discovery,
  * because there is nothing to find. No `OrcaDatabase`, because a replay reads a file the user

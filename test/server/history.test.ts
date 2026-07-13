@@ -8,7 +8,7 @@ import { type Harness, serve } from './harness.ts';
 /**
  * Seam 1 (#12): the paged history transport of #69, over real HTTP against a real fixture
  * database — the run index (`GET /api/runs`), the selected-run snapshot (`GET /api/run/:id`),
- * and the two promises they divide between them (ADR 0002):
+ * and the two promises they divide between them (ADR 0004):
  *
  * - **The index is bounded and explicit.** The first page is the 50 most recently active
  *   summaries; older history is behind a cursor a client has to *follow* — reachable, never

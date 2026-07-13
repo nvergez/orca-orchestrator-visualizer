@@ -53,7 +53,7 @@ export type ReportView = {
   /**
    * Whether the row has a named agent at all. `missing` is what the Agent select's "none" option
    * asks for — the tasks no terminal is on record as holding, which is the same absence the
-   * column renders and so has to be one a reader can *find* (SPEC §12.4).
+   * column renders and so has to be one a reader can *find* (SPEC §14.4).
    */
   agent: ReportPresence;
   dispatch: ReportPresence;
@@ -134,7 +134,7 @@ export type Report = {
    * The *next page* failed. It carries no retry of its own — the cursor is untouched, so the
    * button is still standing and the way to try again is the way in was (`useHistory.loadOlder`
    * runs the same reasoning). What it must not do is fail **silently**: "older rows are explicit"
-   * (SPEC §12.4) is a promise a button that quietly did nothing would break.
+   * (SPEC §14.4) is a promise a button that quietly did nothing would break.
    */
   moreFailed: boolean;
 };

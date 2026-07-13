@@ -78,7 +78,7 @@ import { useIsMobile } from './viewport.tsx';
  * liveness bar becomes an *archived* one, and the export link has nothing to export — and changes
  * nothing else: the rail, the canvas, the gate strip, the conversation and the inspector are the
  * same components reading the same evidence, because a post-mortem you saved is still a
- * post-mortem (ADR 0001).
+ * post-mortem (ADR 0005).
  *
  * **Below `lg` the row folds into a column** (`docs/design/mobile.md`): the same three panels,
  * stacked — the rail a collapsible band on top, the canvas keeping the middle, the dock a
@@ -137,7 +137,7 @@ export type AppProps = {
    *
    * It is a *presentation* difference and deliberately nothing more: the rail, the canvas, the
    * gates, the conversation and the inspector are the same components reading the same evidence
-   * (ADR 0001 — "archived replay uses the ordinary selected-run presentation wherever possible").
+   * (ADR 0005 — "archived replay uses the ordinary selected-run presentation wherever possible").
    * What changes is exactly what would otherwise be a lie — the liveness bar becomes an *archived*
    * one, there is no stream to pulse a node, and there is nothing to export from an export.
    */
@@ -179,7 +179,7 @@ export function App({
   const turns = snapshot?.turns ?? NO_TURNS;
 
   // The freshest description of the selected run: its snapshot once loaded, the index summary
-  // until then. Both are the same wire shape, and the snapshot is the completer truth (ADR 0002).
+  // until then. Both are the same wire shape, and the snapshot is the completer truth (ADR 0004).
   const activeRun = snapshot?.run ?? selected;
 
   // The two pieces of state that are nobody's panel and everybody's business.
@@ -487,8 +487,8 @@ export function App({
                 <LoadingRun />
               ) : centre === 'timeline' ? (
                 // Every attempt, on the clock. It reads the selected-run snapshot and nothing else:
-                // ADR 0002 made that snapshot complete, which is *why* every retained attempt can be
-                // its own bar (SPEC §12.4). No second endpoint, and no second copy of the evidence.
+                // ADR 0004 made that snapshot complete, which is *why* every retained attempt can be
+                // its own bar (SPEC §14.4). No second endpoint, and no second copy of the evidence.
                 //
                 // **The tab decides the view, and nothing else may.** Falling back to the canvas when
                 // there is no run to draw would leave the timeline tab lit above a DAG — the toggle

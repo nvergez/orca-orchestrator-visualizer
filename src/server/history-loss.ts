@@ -16,7 +16,7 @@ import {
  * file *can* prove is a shape: rows it once held and no longer does. So each signal here names
  * the history surface that is missing and the structural evidence for it, and the wording built
  * on top says the shape "matches" a reset rather than claiming to know what caused it
- * (CONTEXT.md, ADR 0001). An empty answer means there is no safe history-loss claim to make.
+ * (CONTEXT.md, ADR 0003). An empty answer means there is no safe history-loss claim to make.
  *
  * Both detectors are *features*, and degrade like features (`FEATURES` in schema.ts): an Orca
  * missing a column a signal needs gets that signal suppressed and is told so in

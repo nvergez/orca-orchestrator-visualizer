@@ -20,7 +20,7 @@ import { type Harness, serve } from './harness.ts';
  * pre-#45 build did) lost the authoritative resolution and left the run blocked on screen
  * forever. So: one gate, two records — identity from the message, lifecycle from the row.
  *
- * Lifecycle state is not blocking effect (CONTEXT.md, ADR 0001). `status` is one of four facts
+ * Lifecycle state is not blocking effect (CONTEXT.md, ADR 0002). `status` is one of four facts
  * the database can actually prove — `pending | resolved | timeout | unanswered` — and
  * `blocking` is a separate, conservative claim: a pending row blocks; terminal states do not;
  * an unanswered ask blocks only while it names an existing task whose current status is

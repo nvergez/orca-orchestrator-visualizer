@@ -12,7 +12,7 @@ import { tempDbPath } from '../fixtures/temp-dir.ts';
 import { type Harness, serve } from './harness.ts';
 
 /**
- * **Evidence hints** (SPEC §12.4): explicitly uncertain agent-kind and repository labels, derived
+ * **Evidence hints** (SPEC §14.4): explicitly uncertain agent-kind and repository labels, derived
  * only from unambiguous high-confidence retained evidence, with provenance — and refused otherwise.
  *
  * The whole feature is its refusals, and the live database is why. Real specs say *"You are a
@@ -22,7 +22,7 @@ import { type Harness, serve } from './harness.ts';
  * `you are a <kind>` declaration, a delimited branch segment, the `workspaces/<project>/<worktree>`
  * layout — and a kind or project that does not survive as the *only* candidate produces no hint.
  *
- * Two seams, as SPEC §12.5 prescribes: the readers are pure functions with a dense error surface
+ * Two seams, as SPEC §14.5 prescribes: the readers are pure functions with a dense error surface
  * (unique / absent / malformed / ambiguous / archived evidence), and the aggregation is asserted
  * through the real HTTP snapshot, where the hint has to land on the wire without touching any
  * identity it rides beside.
@@ -65,7 +65,7 @@ function member(run: Run, handle: string): CastMember {
 
 describe('the allowlist', () => {
   it('is versioned data: the list cannot move without the version moving with it', () => {
-    // "A small, versioned allowlist" (SPEC §12.4) means which kinds a build recognises is an
+    // "A small, versioned allowlist" (SPEC §14.4) means which kinds a build recognises is an
     // auditable fact. This pins (version, kinds) as ONE pair: adding, removing or renaming a
     // kind fails here, and the fix is to change both lines together — bump the version, edit
     // the list — never one without the other.
@@ -498,7 +498,7 @@ describe('hints never touch identity', () => {
 
     const run = byHandle(runs, ORCHESTRATOR);
 
-    // The hint is a label riding beside identity, never identity (SPEC §12.4): the run is still
+    // The hint is a label riding beside identity, never identity (SPEC §14.4): the run is still
     // keyed on the handle alone, the cast is still numbered by first dispatch, and every task
     // still belongs to the member the dispatch rows say — whatever the evidence spells.
     expect(run.id).toBe(`run_${ORCHESTRATOR}`);
