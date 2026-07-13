@@ -9,16 +9,15 @@ import type { Task } from '../../shared/types.ts';
 import type { Pulse } from '../conversation/theme.ts';
 import { enter, NODE_IN, nodeDelay, SPRING } from '../motion.ts';
 import { relativeTime } from '../relative-time.ts';
+import { hasCurrentActivityEvidence, type WorkerHealth, taskWorkerHealth } from '../worker-health.ts';
 import {
   type AgentLook,
   GATE_THEME,
   glowOf,
-  isAlive,
   MONOGRAM_CLASS,
   NODE_HEIGHT,
   NODE_WIDTH,
   SELECTED_RING,
-  STALE_HEARTBEAT_MS,
   themeOf,
 } from './theme.ts';
 
@@ -78,7 +77,8 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   const theme = themeOf(task.status);
   const spotlight = useSpotlight();
 
-  const alive = isAlive(task.status);
+  const health = taskWorkerHealth(task, now);
+  const alive = hasCurrentActivityEvidence(health);
 
   return (
     <motion.div
@@ -91,6 +91,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       // that a heartbeat never did, and neither of those is a question about a colour.
       data-pulse={pulse?.type}
       data-alive={alive}
+      data-health={health.state}
       variants={NODE_IN}
       initial={enter('hidden')}
       // A *variant*, and not an `opacity-20` class: `shown` writes `opacity: 1` into the inline
@@ -191,7 +192,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
 
       <div className="relative line-clamp-2 text-[11.5px] leading-tight font-medium">{task.title}</div>
 
-      <LastSeen task={task} now={now} />
+      <LastSeen health={health} />
 
       <Handle type="source" position={Position.Bottom} className="!size-1.5 !border-0 !opacity-0" />
     </motion.div>
@@ -203,7 +204,7 @@ export function TaskNode({ data }: NodeProps<TaskFlowNode>) {
  *
  * It replaces the eight hex of the assignee handle that used to sit here. That chip was the
  * loudest object on the card, for a uuid you cannot read, cannot remember and would not act on —
- * and, worse, it was the *only* name the agent had, so "the failed node and the open gate are the
+ * and, worse, it was the *only* name the agent had, so "the failed node and the blocking gate are the
  * same agent" was a fact you had to work out by comparing two strings of hex. The monogram is one
  * glance, it is the same `A2` in the rail and in the conversation, and the handle itself has not
  * gone anywhere: it is in the tooltip, and in full.
@@ -249,16 +250,18 @@ function shadowOf(status: string, pulse: Pulse | null, dimmed: boolean): string 
 /**
  * The octagon — this task is not working, it is *waiting on you* (SPEC §7.5).
  *
- * Only while the gate is open: an answered question is history, and history belongs in the
- * inspector, not as a warning on a node that is getting on with its work. The gate the server
- * hands the node is already the right one — the open one, when the task has several.
+ * Only while the gate is **blocking** (#45): a resolved or timed-out question is history, and
+ * an unanswered ask whose task is not authoritatively blocked proves nothing about *now* —
+ * both belong in the inspector, not as a warning on a node that is getting on with its work.
+ * The gate the server hands the node is already the right one — the blocking one, when the
+ * task has several.
  *
- * The status colour underneath it stays whatever the row says. A `dispatched` task with an open
- * gate is still dispatched; the marker adds the reason it is not moving, and repainting the node
+ * The status colour underneath it stays whatever the row says. A `blocked` task with a blocking
+ * gate is still blocked; the marker adds the reason it is not moving, and repainting the node
  * would be inventing a status Orca never wrote.
  */
 function GateMarker({ task }: { task: Task }) {
-  if (task.gate?.status !== 'open') return null;
+  if (task.gate?.blocking !== true) return null;
 
   return (
     <Badge
@@ -328,14 +331,14 @@ function FailureCount({ task }: { task: Task }) {
  * dispatch the last heartbeat is just the moment the work stopped, and a badge would cry
  * wolf about a run that finished perfectly well.
  */
-function LastSeen({ task, now }: { task: Task; now: number }) {
-  const dispatch = task.dispatch;
-  if (dispatch?.status !== 'dispatched' || !dispatch.lastHeartbeatAt) return null;
+function LastSeen({ health }: { health: WorkerHealth }) {
+  if (health.state === 'inactive' || health.state === 'unknown') return null;
 
-  const silentFor = now - Date.parse(dispatch.lastHeartbeatAt);
-  if (Number.isNaN(silentFor)) return null;
-
-  const stale = silentFor > STALE_HEARTBEAT_MS;
+  const stale = health.state === 'stale';
+  const label =
+    health.heartbeat === 'received'
+      ? `last seen ${relativeTime(health.elapsedMs)} ago`
+      : `dispatched ${relativeTime(health.elapsedMs)} ago — no heartbeat yet`;
 
   return (
     <span
@@ -346,7 +349,7 @@ function LastSeen({ task, now }: { task: Task; now: number }) {
         stale && 'font-bold text-amber-700 opacity-100 dark:text-amber-400'
       )}
     >
-      last seen {relativeTime(silentFor)} ago
+      {label}
     </span>
   );
 }

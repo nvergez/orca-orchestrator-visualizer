@@ -126,6 +126,7 @@ function Bubble({
       </p>
 
       {turn.options !== undefined && turn.options.length > 0 && <Options turn={turn} />}
+      <GateState turn={turn} />
     </>
   );
 
@@ -168,37 +169,84 @@ function Bubble({
  * option a paragraph meant would be inventing the decision.
  */
 function Options({ turn }: { turn: Turn }) {
-  const picked = (option: string): boolean =>
-    turn.answer !== undefined && turn.answer.trim().toLowerCase() === option.trim().toLowerCase();
-
   return (
     <ul className="mt-2 flex flex-wrap gap-1.5">
       {turn.options!.map((option) => (
         <li
           key={option}
           data-testid="gate-option"
-          data-picked={picked(option)}
+          data-picked={isPicked(turn, option)}
           className={cn(
             'text-muted-foreground border-border rounded-md border px-2 py-0.5 text-[11px]',
-            picked(option) && 'bg-status-completed-soft text-status-completed-ink border-status-completed font-semibold'
+            isPicked(turn, option) && 'bg-status-completed-soft text-status-completed-ink border-status-completed font-semibold'
           )}
         >
           {option}
-          {picked(option) && ' ✓'}
+          {isPicked(turn, option) && ' ✓'}
         </li>
       ))}
-
-      {/* An open gate is not a gate with no answer yet — it is the reason the orchestration has
-          stopped. It says so where you are reading the question. */}
-      {turn.answer === undefined && (
-        <li
-          data-testid="gate-open"
-          className="bg-gate-soft text-gate-ink border-gate rounded-md border px-2 py-0.5 text-[11px] font-medium"
-        >
-          waiting for an answer
-        </li>
-      )}
     </ul>
+  );
+}
+
+/** Does the recorded answer really name this option? Guessing which one a paragraph meant would be inventing the decision. */
+function isPicked(turn: Turn, option: string): boolean {
+  return turn.answer !== undefined && turn.answer.trim().toLowerCase() === option.trim().toLowerCase();
+}
+
+/**
+ * The gate's fate, worded as the fact it is (#45) — beside the question, whether or not the
+ * question offered options, because half the live gate messages are hand-written escalations
+ * that offered none.
+ *
+ * "Blocking — waiting for an answer" follows the server's separate `blocking` fact, never the
+ * absence of a reply: `orchestration.ask` does not persist its timeout, so a reply-less message
+ * proves only that **no answer was recorded** (CONTEXT.md, "Unanswered Ask") — and the live
+ * database is full of finished runs wearing stale probes that a "waiting" label would turn back
+ * into blockers.
+ *
+ * A resolved gate's answer must reach this bubble too. A ticked option already says it; but a
+ * Coordinator twin's resolution lives only in the `decision_gates` row — no reply turn follows
+ * the question — and prose answers name no option. Without this line, exactly the resolution
+ * #45 exists to preserve would arrive on the wire and still never reach the screen.
+ */
+function GateState({ turn }: { turn: Turn }) {
+  if (turn.gateStatus === undefined) return null;
+
+  const quiet = 'text-muted-foreground border-border mt-2 w-fit rounded-md border px-2 py-0.5 text-[11px]';
+
+  if (turn.gateStatus === 'resolved') {
+    // The decision is history, dressed as quietly as history reads. Clamped like the strip's
+    // questions: a threaded prose answer can run long, and its own turn — when one exists —
+    // carries the whole of it.
+    if (turn.answer === undefined) return <p data-testid="gate-state" className={quiet}>resolved</p>;
+    if (turn.options?.some((option) => isPicked(turn, option))) return null; // the tick says it
+    return (
+      <p data-testid="gate-state" className={cn(quiet, 'w-full')}>
+        answered: <span className="line-clamp-3 whitespace-pre-line">{turn.answer}</span>
+      </p>
+    );
+  }
+
+  // The one loud state: the orange of a blocker, because this is why the orchestration has
+  // stopped.
+  if (turn.blocking) {
+    return (
+      <p
+        data-testid="gate-state"
+        className="bg-gate-soft text-gate-ink border-gate mt-2 w-fit rounded-md border px-2 py-0.5 text-[11px] font-medium"
+      >
+        blocking — waiting for an answer
+      </p>
+    );
+  }
+
+  // The raw status is the honest fallback: a non-blocking `pending` cannot leave the server
+  // today, but if that invariant ever breaks, its own name beats a claim about answers.
+  return (
+    <p data-testid="gate-state" className={quiet}>
+      {turn.gateStatus === 'timeout' ? 'timed out' : turn.gateStatus === 'unanswered' ? 'no answer recorded' : turn.gateStatus}
+    </p>
   );
 }
 

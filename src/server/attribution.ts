@@ -22,12 +22,14 @@ import { instantOf } from './time.ts';
  *    a run, because a message in the wrong run is a lie the user cannot see through, while a
  *    message in "All" is merely one they have to go and look for.
  *
- * **The window is `[startedAt, endedAt + IDLE_GAP_MS]`, and the grace on the tail is a
- * deliberate reading of SPEC §4.3–4.4, not an accident.** The spec fixes a run's window as
- * `startedAt → endedAt`, where `endedAt` is the last completion *or creation*. For a **live**
- * run there are no completions — so `endedAt` is its last task's *creation*, and every message
- * a running orchestration then sends arrives after it. Clamped hard, the window would
- * unattribute the live case, which is the case the conversation exists to serve.
+ * **The window is `[startedAt, lastActivityAt + IDLE_GAP_MS]` (SPEC §12.5), and the grace on
+ * the tail is deliberate, not an accident.** For a run still under way there are no completions —
+ * its newest evidence can be a dispatch or a heartbeat minutes old — and every message it sends
+ * arrives after that instant. Clamped hard, the window would unattribute the running case, which
+ * is the case the conversation exists to serve. The tail hangs from `lastActivityAt` — every
+ * task's and every attempt's newest readable evidence — and **never from attributed messages**:
+ * this window is what places task-id-less messages, so feeding them back in would be recursive,
+ * and a chain of weak handle matches could keep extending its own window (SPEC §12.2).
  *
  * The grace is the same six hours that cut an orchestrator's work into waves (`runs.ts`): already
  * this tool's answer to "how long can one terminal go quiet and still be doing the same thing",
@@ -147,7 +149,7 @@ export function buildAttribution(runs: Run[], tasks: Task[], assignees: Assignee
 
 function windowOf(run: Run): Window {
   const from = instantOf(run.startedAt);
-  const to = instantOf(run.endedAt);
+  const to = instantOf(run.lastActivityAt);
 
   return {
     runId: run.id,

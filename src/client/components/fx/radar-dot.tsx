@@ -4,12 +4,13 @@ import { cn } from '@/lib/utils';
  * *This is not finished.*
  *
  * The page's one repeating gesture, and it turns up in the three places that fact does: the
- * liveness pill in the top bar, a live run on the rail, and the status dot of a task an agent is
- * currently working inside. One component, so that a reader who learns what the ring means in the
- * rail already knows what it means on the canvas (SPEC §7.9).
+ * liveness pill in the top bar, an active run on the rail, and the status dot of a task an agent
+ * is currently working inside. One component, so that a reader who learns what the ring means in
+ * the rail already knows what it means on the canvas (SPEC §7.9).
  *
- * Two rings, out of phase, so it reads as a repeating *sweep* rather than a blink. A dead run's
- * dot is the same dot, and it holds perfectly still — which is the whole of the signal.
+ * Two rings, out of phase, so it reads as a repeating *sweep* rather than a blink. A silent or
+ * finished run's dot is the same dot, and it holds perfectly still — which is the whole of the
+ * signal.
  */
 
 export type RadarDotProps = {

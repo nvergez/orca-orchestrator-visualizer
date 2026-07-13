@@ -82,13 +82,15 @@ function run(over: Partial<Run> = {}): Run {
     handle: HANDLE,
     label: 'Ship the visualizer',
     startedAt: '2026-07-08T12:00:00.000Z',
+    lastActivityAt: '2026-07-08T13:00:00.000Z',
+    converged: true,
     endedAt: '2026-07-08T13:00:00.000Z',
     taskCount: 2,
     cast: [A1, A2],
     waves: [],
     statusCounts: { pending: 0, ready: 0, dispatched: 0, completed: 2, failed: 0, blocked: 0 },
     live: false,
-    hasOpenGates: false,
+    hasBlockingGates: false,
     edgeCount: 0,
     ...over,
   };
@@ -101,6 +103,7 @@ function otherRun(over: Partial<Run> = {}): Run {
     handle: OTHER_HANDLE,
     label: 'The other run',
     startedAt: '2026-07-07T12:00:00.000Z',
+    lastActivityAt: '2026-07-07T13:00:00.000Z',
     endedAt: '2026-07-07T13:00:00.000Z',
     taskCount: 1,
     cast: [],
@@ -135,7 +138,8 @@ function gate(over: Partial<Gate> = {}): Gate {
     taskId: TASK_A,
     question: 'Which driver: node:sqlite or better-sqlite3?',
     options: ['node:sqlite', 'better-sqlite3'],
-    status: 'open',
+    status: 'pending',
+    blocking: true,
     resolution: null,
     createdAt: '2026-07-08T12:05:00.000Z',
     ...over,
@@ -248,7 +252,7 @@ describe('the fold', () => {
       <App
         event={event({
           snapshot: {
-            runs: [run({ hasOpenGates: true }), otherRun()],
+            runs: [run({ hasBlockingGates: true }), otherRun()],
             tasks: [task({ gate: gate() }), task({ id: TASK_B, title: 'Another task' })],
             gates: [gate()],
             turns: [],
@@ -396,6 +400,7 @@ describe('the rail band', () => {
       handle: 'term_00c0ffee-1234-4321-8888-aabbccddeeff',
       label: 'A brand new run',
       startedAt: '2026-07-09T09:00:00.000Z',
+      lastActivityAt: '2026-07-09T09:30:00.000Z',
       endedAt: '2026-07-09T09:30:00.000Z',
       taskCount: 0,
       cast: [],
@@ -475,7 +480,7 @@ describe('the gate strip on the fold', () => {
       <App
         event={event({
           snapshot: {
-            runs: [run({ hasOpenGates: true }), otherRun()],
+            runs: [run({ hasBlockingGates: true }), otherRun()],
             tasks: [task(), task({ id: TASK_B, title: 'Another task' })],
             gates: [gate({ taskId: null, question: 'A question that runs to several paragraphs on a real database.' })],
             turns: [],
