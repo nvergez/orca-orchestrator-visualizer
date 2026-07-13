@@ -174,6 +174,47 @@ describe('GET /api/stream', () => {
     expect(push.id).toBe('3');
   });
 
+  it('cannot skip a message committed while a snapshot is choosing its cursor', async () => {
+    const dbPath = fixture();
+    writer = new FixtureWriter(dbPath);
+
+    let inserted = false;
+    harness = await serve(dbPath, {
+      afterMessagesRead() {
+        if (inserted) return;
+        inserted = true;
+        writer!.message({
+          fromHandle: CODER,
+          toHandle: COORDINATOR,
+          subject: 'Committed concurrently',
+          type: 'worker_done',
+          payload: { taskId: 'task_build' },
+          createdAt: AT,
+        });
+      },
+    });
+
+    // The writer commits after the snapshot has materialized sequence 1. That row may be sent
+    // now or later, but an event that omits it must not advertise a cursor that covers it.
+    const firstStream = await harness.stream();
+    const first = await firstStream.next();
+    await firstStream.close();
+
+    expect(first.event.messages.map((message) => message.sequence)).toEqual([1]);
+    expect(first.event.seq).toBe(1);
+    expect(first.id).toBe('1');
+
+    // A browser reconnects with exactly the id it received. The concurrent row remains above
+    // that Last-Event-ID and is delivered exactly once rather than disappearing behind it.
+    const resumedStream = await harness.stream(Number(first.id));
+    const resumed = await resumedStream.next();
+
+    expect(resumed.event.messages.map((message) => message.sequence)).toEqual([2]);
+    expect(resumed.event.messages.map((message) => message.subject)).toEqual(['Committed concurrently']);
+    expect(resumed.event.seq).toBe(2);
+    expect(resumed.id).toBe('2');
+  });
+
   it('does not go deaf when Last-Event-ID is ahead of the database — a restored or reset file', async () => {
     const dbPath = fixture();
     harness = await serve(dbPath);
@@ -200,10 +241,10 @@ describe('GET /api/stream', () => {
   });
 
   it('keeps streaming the DAG on an Orca whose message cursor this build cannot read (#21)', async () => {
-    // `messages.sequence` renamed or gone. `highWaterMark()` degrades to 0 rather than throwing
-    // (#21) — so `seq`, the value this whole resume story hangs on, is 0 on every event. The two
-    // halves have to degrade *together*: an event id of 0 against a feed that still believed in
-    // its cursor would replay the entire table on every push.
+    // `messages.sequence` renamed or gone. The message read and its derived cursor degrade to 0
+    // together (#21), so `seq`, the value this whole resume story hangs on, is 0 on every event.
+    // The two halves have to degrade *together*: an event id of 0 against a feed that still
+    // believed in its cursor would replay the entire table on every push.
     const dbPath = new FixtureBuilder({ omitColumns: { messages: ['sequence'] } })
       .task({ id: 'task_build', handle: CODER, title: 'Build it', status: 'dispatched', createdAt: AT })
       .task({ id: 'task_ship', handle: CODER, title: 'Ship it', status: 'ready', deps: ['task_build'], createdAt: AT })

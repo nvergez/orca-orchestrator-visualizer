@@ -54,8 +54,8 @@ export type MessageOptions = {
 export function readMessages(db: DatabaseSync, columns: Columns, { since, attribution }: MessageOptions): FeedMessage[] {
   // No `sequence` column is no cursor, and a feed with no order is not a feed. An Orca that
   // old degrades to the graph, which is the whole of "render what parses" (SPEC §5) — and it
-  // degrades in step with `highWaterMark`, which is guarded on this very same column, so the
-  // event id and the message log cannot disagree about whether there is a cursor.
+  // degrades in step with the cursor derived from these rows, so the event id and the message
+  // log cannot disagree about whether there is a cursor.
   if (!hasColumn(columns, MESSAGE_SEQUENCE)) return [];
 
   // Never a column that has not been confirmed (#21) — the same rule `selectPresent` enforces
