@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { type DatabaseDeps, OrcaDatabase } from '../../src/server/database.ts';
-import { createServer } from '../../src/server/server.ts';
+import { createServer, type ServerOptions } from '../../src/server/server.ts';
 import type { StreamEvent } from '../../src/shared/types.ts';
 import { openStream, type SseStream } from './sse.ts';
 
@@ -30,12 +30,17 @@ export type ServeOptions = DatabaseDeps & {
    * under test is the real one; only its period is small.
    */
   pollIntervalMs?: number;
+  /** The wake hint (#59) — the same dial `--watch` turns, deps and all. Absent = poll only. */
+  watch?: ServerOptions['watch'];
 };
 
 /** Serve a fixture database. `probe` fakes the process table so liveness is testable. */
-export async function serve(dbPath: string, { pollIntervalMs = 20, ...deps }: ServeOptions = {}): Promise<Harness> {
+export async function serve(
+  dbPath: string,
+  { pollIntervalMs = 20, watch, ...deps }: ServeOptions = {}
+): Promise<Harness> {
   const database = new OrcaDatabase(dbPath, deps);
-  const { server, close } = createServer({ database, pollIntervalMs, clientDir: '/nonexistent-bundle' });
+  const { server, close } = createServer({ database, pollIntervalMs, watch, clientDir: '/nonexistent-bundle' });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

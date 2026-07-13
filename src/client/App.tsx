@@ -11,6 +11,7 @@ import type { CastMember, Gate, Meta, Run, StreamEvent, Task, Turn } from '../sh
 import { HISTORY_LOSS_SENTENCES, livenessSentence, schemaSentence } from '../shared/wording.ts';
 import { Canvas } from './canvas/Canvas.tsx';
 import { GATE_THEME, themeOf } from './canvas/theme.ts';
+import { type Connection, CONNECTION_WORDING } from './connection.ts';
 import { Conversation } from './conversation/Conversation.tsx';
 import { useArrivals, usePulses } from './conversation/pulses.ts';
 import { exchangeCount, selectTurns } from './conversation/select.ts';
@@ -18,6 +19,7 @@ import { GateStrip } from './gates/GateStrip.tsx';
 import { fetchTaskDetail, type TaskLoader, useTaskDetail } from './inspector/detail.ts';
 import { Inspector } from './inspector/Inspector.tsx';
 import { EASE, enter, SPRING } from './motion.ts';
+import { relativeTime, useClock } from './relative-time.ts';
 import { RunRail } from './rail/RunRail.tsx';
 import { useRunSelection } from './rail/selection.ts';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
@@ -88,9 +90,21 @@ export type AppProps = {
    * the network lives at the edges (`Live.tsx`, `inspector/detail.ts`).
    */
   loadTask?: TaskLoader;
+  /**
+   * What the transport is doing right now (#57) — the `EventSource`'s story, told by `Live.tsx`
+   * and only *worn* here. It defaults to `connected` because a canned event in a test is a
+   * delivered one; the state a real error produces always arrives explicitly.
+   */
+  connection?: Connection;
+  /**
+   * When the snapshot in `event` was applied, in epoch ms of this machine's clock (#57) —
+   * null when no apply has been observed, and then the top bar claims no age at all rather
+   * than inventing one.
+   */
+  appliedAt?: number | null;
 };
 
-export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
+export function App({ event, loadTask = fetchTaskDetail, connection = 'connected', appliedAt = null }: AppProps) {
   const runs = event?.snapshot.runs ?? NO_RUNS;
   const { selected, select, newRunId } = useRunSelection(runs);
 
@@ -282,7 +296,7 @@ export function App({ event, loadTask = fetchTaskDetail }: AppProps) {
       <main className={FIELD_CLASS}>
         <Backdrop />
 
-        <TopBar meta={event.meta} />
+        <TopBar meta={event.meta} connection={connection} appliedAt={appliedAt} />
 
         <Notices meta={event.meta} />
 
@@ -479,7 +493,7 @@ function Backdrop() {
  * write (SPEC §1.2) — so the only control on it is the one that is about the reader and not the
  * data: the light the page is read in.
  */
-function TopBar({ meta }: { meta: Meta }) {
+function TopBar({ meta, connection, appliedAt }: { meta: Meta; connection: Connection; appliedAt: number | null }) {
   return (
     <motion.header
       initial={enter({ opacity: 0, y: -8 })}
@@ -511,7 +525,9 @@ function TopBar({ meta }: { meta: Meta }) {
 
       <Status meta={meta} />
 
-      <Source meta={meta} />
+      <StreamPill connection={connection} />
+
+      <Source meta={meta} appliedAt={appliedAt} />
 
       <ThemeToggle />
     </motion.header>
@@ -527,6 +543,15 @@ function TopBar({ meta }: { meta: Meta }) {
  * dispatched node's status dot both wear: on this page, a ring going out means *this is not
  * finished* (SPEC §7.9).
  */
+/**
+ * The top bar's pill — one shape for the two status pills standing beside each other, so they
+ * cannot drift apart (the doctrine of `chip.ts`: one class string, in one place). And one quiet
+ * state shared between them, because "nothing is wrong, nothing is news" should look the same
+ * whichever fact is saying it.
+ */
+const PILL_CLASS = 'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium';
+const PILL_QUIET_CLASS = 'text-muted-foreground bg-muted border-transparent';
+
 function Status({ meta }: { meta: Meta }) {
   const live = meta.liveness === 'live';
 
@@ -535,12 +560,11 @@ function Status({ meta }: { meta: Meta }) {
       role="status"
       data-state={meta.liveness}
       className={cn(
+        PILL_CLASS,
         // `max-lg:shrink` lets the pill compress and the sentence *wrap* — never truncate: the
         // wording is the spec's, and the words are content, not decoration.
-        'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium max-lg:min-w-0 max-lg:shrink',
-        live
-          ? 'bg-status-completed-soft text-status-completed-ink border-status-completed/50'
-          : 'text-muted-foreground bg-muted border-transparent'
+        'max-lg:min-w-0 max-lg:shrink',
+        live ? 'bg-status-completed-soft text-status-completed-ink border-status-completed/50' : PILL_QUIET_CLASS
       )}
       style={
         live
@@ -556,8 +580,34 @@ function Status({ meta }: { meta: Meta }) {
   );
 }
 
+/**
+ * What the *transport* is doing (#57) — beside the liveness pill, and deliberately not part of
+ * it: "is Orca writing to the database" and "is this page still receiving what the server reads
+ * from it" are independent facts, and the screen must be able to say any combination of them.
+ * The `EventSource` retries a dropped stream on its own (`Live.tsx`), so `reconnecting` is a
+ * narration and never a call to action — it wears the amber of work in flight, because that is
+ * what a retry is, and `connected` stays quiet: a healthy transport is not news.
+ */
+function StreamPill({ connection }: { connection: Connection }) {
+  return (
+    <p
+      role="status"
+      data-testid="stream-state"
+      data-state={connection}
+      className={cn(
+        PILL_CLASS,
+        connection === 'reconnecting'
+          ? 'bg-status-dispatched-soft text-status-dispatched-ink border-status-dispatched/50'
+          : PILL_QUIET_CLASS
+      )}
+    >
+      {CONNECTION_WORDING[connection]}
+    </p>
+  );
+}
+
 /** Always on screen, always true: the file, and the schema it turned out to be. */
-function Source({ meta }: { meta: Meta }) {
+function Source({ meta, appliedAt }: { meta: Meta; appliedAt: number | null }) {
   return (
     <dl className="text-muted-foreground ml-auto flex min-w-0 items-center gap-3 text-[11px]">
       {/* Long, and always worth having: the whole of it is in the tooltip, because "which
@@ -583,7 +633,46 @@ function Source({ meta }: { meta: Meta }) {
         <dt className="opacity-70">Last write</dt>
         <dd className="m-0 tabular-nums">{formatTime(meta.dbMtime)}</dd>
       </div>
+
+      {appliedAt !== null && <DataAge appliedAt={appliedAt} />}
     </dl>
+  );
+}
+
+/**
+ * How often the data age re-reads the wall clock (#57). The acceptance bar is "advances at
+ * least every 30 seconds without a new event"; 10 s keeps the readout feeling attended without
+ * waking the page often enough to matter.
+ */
+const DATA_AGE_TICK_MS = 10_000;
+
+/**
+ * How long ago this page applied its last snapshot (#57) — on a wall clock of its own, so it
+ * keeps advancing when the stream goes quiet. Which is the point: a quiet connected stream is
+ * a quiet orchestration, and the honest way to show one is a green pill beside a growing age.
+ *
+ * It measures the *apply*, nothing else. Not the connection (that is the pill's), not the
+ * database's last write (that is `Last write`, from the file's own mtime), and never a claim
+ * that anything is stale — the tooltip says so, because this is the number most tempting to
+ * misread. Rendered only when an apply has actually been observed (`appliedAt`, `Live.tsx`):
+ * before the first one there is no age to show, and nothing is shown.
+ *
+ * Its clock lives here, in the one component that reads it, so the ten-second tick re-renders
+ * this `<div>` and not the shell (`useClock`).
+ */
+function DataAge({ appliedAt }: { appliedAt: number }) {
+  const now = useClock(DATA_AGE_TICK_MS);
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-1.5"
+      title="How long ago this page applied a snapshot from the stream. A quiet stream is not a stale database — a growing age beside a connected stream just means nothing new was written."
+    >
+      <dt className="opacity-70">Data age</dt>
+      <dd className="m-0 tabular-nums" data-testid="data-age">
+        {relativeTime(now - appliedAt)}
+      </dd>
+    </div>
   );
 }
 

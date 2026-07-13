@@ -13,8 +13,11 @@ import type { Liveness, StreamEvent } from '../shared/types.ts';
  *   interchangeable, and confusing them is the bug this loop is written to make impossible:
  *   a `ready → dispatched` flip moves `data_version` and leaves `sequence` exactly where it
  *   was. Detect with one, resume with the other.
- * - **No `fs.watch` on the `-wal`.** It is deleted on clean Orca shutdown, its semantics
- *   vary per platform, and at a 5 s cadence it buys nothing.
+ * - **`fs.watch` never replaces any of this — it may only hurry it** (#59). By default there
+ *   is no watcher at all; `--watch` adds one (`wake.ts`) whose entire authority is to call
+ *   `tick()` early. A woken tick meets the same `data_version` gate a scheduled one does, so
+ *   a file event that committed nothing still costs one pragma and pushes nothing — and a
+ *   watcher that dies leaves this interval exactly as it was.
  * - **Liveness is the second half of the gate**, because it is the one thing that changes
  *   without the database changing. Quitting Orca cannot announce itself in the file — the
  *   process that writes the file is the one that just died — so a loop gated on

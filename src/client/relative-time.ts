@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 /**
  * How often the shared wall clock advances on its own, push or no push (SPEC §12.3).
@@ -60,6 +60,27 @@ export function useNow(pushed: unknown): number {
   useEffect(() => {
     tickWallClock();
   }, [pushed]);
+
+  return now;
+}
+
+/**
+ * **The instant that keeps moving when nothing arrives** — the other clock (#57).
+ *
+ * `useNow` re-reads on a push, which is right for ages measured against a list the stream just
+ * delivered: they were all true a moment ago, and the next push will true them up again. The
+ * data age in the top bar is the opposite creature — its entire job is to advance *because*
+ * nothing arrived, so a quiet stream reads as a quiet orchestration instead of a frozen "0s"
+ * quietly becoming a lie. So it ticks on its own interval, and only the component that shows
+ * it pays the re-render.
+ */
+export function useClock(everyMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(timer);
+  }, [everyMs]);
 
   return now;
 }

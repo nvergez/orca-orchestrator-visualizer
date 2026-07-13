@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_HOST, DEFAULT_POLL_INTERVAL_MS } from './cli.ts';
 import type { OrcaDatabase } from './database.ts';
 import { EventStream, type StreamClient } from './stream.ts';
+import { type WakeDeps, type WakeWatcher, watchForWakeHints } from './wake.ts';
 
 /** dist/server/server.js and dist/client/ are siblings once the package is built. */
 export const CLIENT_DIR = fileURLToPath(new URL('../client', import.meta.url));
@@ -54,6 +55,13 @@ export type ServerOptions = {
   pollIntervalMs?: number;
   /** Where the built frontend lives. Defaults to the bundle this package ships. */
   clientDir?: string;
+  /**
+   * The optional wake hint (#59, `--watch`): watch the database directory and run the normal
+   * tick early on a change. Absent means poll only; `{}` means watch with the defaults. What
+   * a wake may do is bounded by `EventStream.tick` itself — the `data_version` gate decides
+   * whether anything is queried or pushed, exactly as it does on the interval.
+   */
+  watch?: WakeDeps;
 };
 
 /**
@@ -78,8 +86,15 @@ export function createServer({
   database,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   clientDir = CLIENT_DIR,
+  watch,
 }: ServerOptions): Viz {
   const stream = new EventStream(database, pollIntervalMs);
+
+  // The watcher may only ever run the tick the interval was going to run anyway — earlier.
+  // Its failures are its own: setup or runtime trouble warns once inside `wake.ts` and leaves
+  // `stream` polling as if `--watch` had never been passed.
+  const watcher: WakeWatcher | null =
+    watch === undefined ? null : watchForWakeHints(database.path, () => stream.tick(), watch);
 
   const server = createHttpServer((req, res) => {
     const urlPath = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`).pathname;
@@ -123,6 +138,11 @@ export function createServer({
   return {
     server,
     async close() {
+      // The watcher goes down with the streams it existed to hurry: its fs handle and any
+      // debounce still in flight, released before the port. (A straggler wake would be
+      // harmless — a tick with no subscribers reads nothing — but "harmless" is not a
+      // lifecycle, and the caller is about to close the database out from under everything.)
+      watcher?.close();
       stream.close();
       await new Promise((resolve) => server.close(resolve));
     },

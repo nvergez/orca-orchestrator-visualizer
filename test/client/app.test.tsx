@@ -172,4 +172,29 @@ describe('<App>', () => {
 
     expect(screen.getByText(/connecting/i)).toBeVisible();
   });
+
+  it('renders the stream presentation it is handed, apart from the liveness sentence (#57)', () => {
+    // The transport can be down while Orca is very much alive — the two pills answer two
+    // different questions, and the shell must be able to say both at once.
+    render(<App event={event({ liveness: 'live' })} connection="reconnecting" />);
+
+    const pill = screen.getByTestId('stream-state');
+    expect(pill).toHaveAttribute('data-state', 'reconnecting');
+    expect(pill).toHaveTextContent(/reconnecting/i);
+    expect(screen.getByText(/connected to a running Orca/i)).toBeVisible();
+  });
+
+  it('shows how old the applied snapshot is when it was given an apply time (#57)', () => {
+    render(<App event={event()} appliedAt={Date.now() - 125_000} />);
+
+    expect(screen.getByTestId('data-age')).toHaveTextContent(/^2m$/);
+  });
+
+  it('claims no data age it was never handed (#57)', () => {
+    // A canned event with no apply instant — the shell shows the data, and simply does not
+    // invent a time it never observed.
+    render(<App event={event()} />);
+
+    expect(screen.queryByTestId('data-age')).toBeNull();
+  });
 });

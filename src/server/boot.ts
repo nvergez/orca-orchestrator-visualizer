@@ -65,7 +65,11 @@ export async function boot(options: BootOptions): Promise<Booted> {
   const database = new OrcaDatabase(dbPath, { probe });
 
   try {
-    const { server, close: stopServing } = createServer({ database, pollIntervalMs: cli.pollIntervalMs });
+    const { server, close: stopServing } = createServer({
+      database,
+      pollIntervalMs: cli.pollIntervalMs,
+      watch: cli.watch ? {} : undefined,
+    });
     await listen(server, cli);
 
     const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
@@ -77,6 +81,8 @@ export async function boot(options: BootOptions): Promise<Booted> {
     print(`          ${describeState(meta)}`);
     for (const line of describeHistoryLoss(meta)) print(`          ${line}`);
     for (const line of describeSchema(meta)) print(`          ${line}`);
+    // The wording keeps the hierarchy straight: the poll decides, the watch only hurries it.
+    if (cli.watch) print(`          watching for changes, to run the ${cli.pollIntervalMs} ms poll early`);
     print(`          listening on ${url}`);
 
     if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
