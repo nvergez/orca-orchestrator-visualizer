@@ -25,6 +25,7 @@ import { RunRail } from './rail/RunRail.tsx';
 import { localInstant } from './relative-time.ts';
 import { fetchReport, type ReportLoader } from './report/query.ts';
 import { Report } from './report/Report.tsx';
+import { Scoreboard } from './scoreboard/Scoreboard.tsx';
 import { FIELD_BACKDROP_STYLE, FIELD_CLASS, PANEL_CLASS, PANEL_TITLE_CLASS } from './surface.ts';
 import { useThemeMode } from './theme-mode.ts';
 import { CentreToggle, type CentreView } from './timeline/CentreToggle.tsx';
@@ -179,6 +180,11 @@ export function App({
   // It survives a change of run, because it is a *preference* about how this reader reads. Dropping
   // it on every rail click would be the tool overruling a choice the reader had just made.
   const [centre, setCentre] = useState<CentreView>('dag');
+
+  // The dock's third panel (#68): the scoreboard, over the conversation's slot. A view choice,
+  // not a selection — it survives a run change (it simply shows the new run's cast) and it
+  // waits out a task selection (the inspector wins the dock while a node is open).
+  const [scoreboardOpen, setScoreboardOpen] = useState(false);
 
   // The fold (SPEC §7.1, below `lg`). Whether each band is expanded is shell state for the same
   // reason the selections are: a node tap has to open the dock band and an agent tap has to fold
@@ -508,7 +514,15 @@ export function App({
                 : 'max-lg:h-12 max-lg:shrink-0'
             )}
           >
-            {isMobile && <DockHandle task={selectedTask} count={dockCount} open={dockOpen} onToggle={toggleDock} />}
+            {isMobile && (
+              <DockHandle
+                task={selectedTask}
+                scoreboard={scoreboardOpen}
+                count={dockCount}
+                open={dockOpen}
+                onToggle={toggleDock}
+              />
+            )}
 
             <div
               data-testid="dock-band-body"
@@ -542,6 +556,8 @@ export function App({
                   // the window widens into the desktop dock (mobile.md §4.11, §8 rule 3).
                   hoppedFrom={isMobile ? crossRunFrom : null}
                 />
+              ) : scoreboardOpen ? (
+                <Scoreboard run={selected} onClose={() => setScoreboardOpen(false)} />
               ) : (
                 <Conversation
                   turns={turns}
@@ -549,6 +565,7 @@ export function App({
                   selectedAgent={selectedAgent}
                   onClearAgent={() => setSelectedAgent(null)}
                   onSelectTask={showTask}
+                  onOpenScoreboard={() => setScoreboardOpen(true)}
                 />
               )}
             </div>
@@ -575,12 +592,15 @@ export function App({
  */
 function DockHandle({
   task,
+  scoreboard,
   count,
   open,
   onToggle,
 }: {
-  /** The selected task, or null while the dock holds the conversation. */
+  /** The selected task, or null while the dock holds the conversation or the scoreboard. */
   task: Task | null;
+  /** True while the dock's conversation slot holds the scoreboard instead (#68). */
+  scoreboard: boolean;
   /** Run-scoped exchange count (heartbeats excluded). */
   count: number;
   open: boolean;
@@ -599,6 +619,8 @@ function DockHandle({
           <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', themeOf(task.status).dot)} />
           <b className="min-w-0 truncate text-[13px] font-semibold">{task.title}</b>
         </>
+      ) : scoreboard ? (
+        <span className={PANEL_TITLE_CLASS}>Scoreboard</span>
       ) : (
         <>
           <span className={PANEL_TITLE_CLASS}>Conversation</span>

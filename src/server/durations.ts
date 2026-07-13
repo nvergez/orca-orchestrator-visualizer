@@ -30,8 +30,13 @@ const IN_FLIGHT_DISPATCH: DispatchStatus = 'dispatched';
 /**
  * A closed interval, when both endpoints can carry it: readable, and in order. `ms` is derived
  * from the same two instants it travels with, so the wire can never disagree with itself.
+ *
+ * Exported because the scoreboard's clocks are the same clocks (#68): an agent span and a time
+ * to first heartbeat are intervals with the same rules, and a second module deciding for itself
+ * what a backwards or unreadable endpoint means would be a second definition of honesty — one
+ * that could drift from this one.
  */
-function closed(clock: DurationClock, startAt: string, endAt: string): DurationObservation | undefined {
+export function closed(clock: DurationClock, startAt: string, endAt: string): DurationObservation | undefined {
   const start = instantOf(startAt);
   const end = instantOf(endAt);
 
@@ -43,8 +48,36 @@ function closed(clock: DurationClock, startAt: string, endAt: string): DurationO
 }
 
 /** An open interval: a readable start, and a client that will age it as "so far". */
-function open(clock: DurationClock, startAt: string): DurationObservation | undefined {
+export function open(clock: DurationClock, startAt: string): DurationObservation | undefined {
   return instantOf(startAt) === null ? undefined : { clock, startAt, complete: false };
+}
+
+/**
+ * The earliest — or latest — readable instant among some strings, kept beside the string it was
+ * read from. Unreadable values are *read past*, exactly as the run span reads past them: a
+ * garbage-stamped row neither dates the interval nor mints a 1970 ghost.
+ *
+ * Shared with the scoreboard (#68), which asks this question three times over — the first
+ * dispatch of an agent, its latest completion, its earliest heartbeat — and would otherwise
+ * spell the same scan three more times.
+ */
+export function earliest(instants: readonly (string | null)[]): string | null {
+  return pick(instants, (candidate, held) => candidate < held);
+}
+
+export function latest(instants: readonly (string | null)[]): string | null {
+  return pick(instants, (candidate, held) => candidate > held);
+}
+
+function pick(instants: readonly (string | null)[], wins: (candidate: number, held: number) => boolean): string | null {
+  let held: Reading | null = null;
+
+  for (const iso of instants) {
+    const at = instantOf(iso);
+    if (at !== null && (held === null || wins(at, held.at))) held = { at, iso: iso! };
+  }
+
+  return held?.iso ?? null;
 }
 
 /**

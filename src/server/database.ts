@@ -27,6 +27,7 @@ import { readMessages } from './messages.ts';
 import { buildReport, type ReportQuery } from './report.ts';
 import { inferRuns, type TaskWithHandle } from './runs.ts';
 import { inspectSchema, type SchemaReport } from './schema.ts';
+import { attachScoreboards } from './scoreboard.ts';
 import { openReadOnly } from './sqlite.ts';
 import type { PushResult } from './stream.ts';
 import { readTaskDetail } from './task-detail.ts';
@@ -221,10 +222,19 @@ export class OrcaDatabase {
     /** Memoized behind the getter below: merged at most once per read, and only if asked for. */
     let receipts: Map<string, ReceiptFact[]> | undefined;
 
+    // The scoreboard (#68): the cast, quantified. A second pass, like the gates above and for
+    // the same reason — the cast is cast while the runs are inferred, but its metrics need the
+    // attributed message log, which can only be read once the runs exist to attribute against.
+    const scored = attachScoreboards(gated.runs, { entries, messages, columns: this.schema.columns });
+
     return {
       liveness,
       evidence: {
-        runs: gated.runs,
+        // The scored runs, never `gated.runs` — the scoreboard rides on `run.cast[].score`, and
+        // both projections that serve a run to the client cut from this one list: the run index
+        // pages it (`pageRuns`) and the selected-run snapshot indexes it (`snapshotRun`). Handing
+        // either the unscored list would give one of them a cast with no metrics on it.
+        runs: scored,
         tasks: gated.tasks,
         // Oldest attempt first, as `tasks.ts` reads them — the selected-run snapshot's
         // append-only retry record (SPEC §12), and the same rows the cast was built from.
@@ -234,7 +244,7 @@ export class OrcaDatabase {
         // agents' replies out of `messages`, a gate and the answer threaded on it, and the final
         // report out of `tasks.result`. It is the whole of what this screen is for, and the client
         // does nothing to it but choose a scope.
-        turns: conversationOf({ entries, runs: gated.runs, gates: gated.gates, messages }),
+        turns: conversationOf({ entries, runs: scored, gates: gated.gates, messages }),
         // Empty in practice, and nothing above depends on it (SPEC §4.2, trap 3).
         coordinatorRuns: readCoordinatorRuns(this.db, this.schema.columns),
         // The recognized outcome facts of both evidence columns, per task (#67) — what the

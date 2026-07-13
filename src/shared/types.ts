@@ -78,8 +78,12 @@ export type Meta = {
  *   task with no completed dispatch clock; never presented as dispatch time.
  * - `run-span` — earliest readable task creation to latest readable completion/creation. It is
  *   wall-clock occupancy, not summed agent time.
+ * - `agent-span` — one cast member's first dispatch to its latest retained completion, across
+ *   every attempt it ever held (#68). Wall-clock occupancy again, never summed task time.
+ * - `first-heartbeat` — first dispatch to the earliest attributed heartbeat (#68). Closed by
+ *   construction: an agent with no retained heartbeat has no observation, never a zero.
  */
-export type DurationClock = 'dispatch' | 'task-span' | 'run-span';
+export type DurationClock = 'dispatch' | 'task-span' | 'run-span' | 'agent-span' | 'first-heartbeat';
 
 /**
  * A wall-clock span this tool can actually stand behind — and **absence is the honest value**:
@@ -100,6 +104,61 @@ export type DurationObservation = {
   complete: boolean;
   /** `endAt − startAt`, present only when complete — it must agree with the endpoints it rides with. */
   ms?: number;
+};
+
+/**
+ * One cast member's scoreboard row (#68, SPEC §12.4) — what the retained evidence says this
+ * agent cost and produced, and nothing the evidence does not say. Every field is **absent when
+ * the evidence cannot carry it**: a missing count is a column this Orca does not have, never a
+ * zero nobody measured, and a missing span or heartbeat time is unknown, never `0s`.
+ *
+ * There is deliberately no composite score, no rank and no winner anywhere in this shape: the
+ * agents were dispatched *different work*, and a single number over them would be a false
+ * equivalence (SPEC §12.6). The grid sorts by one fact at a time, and that is all.
+ */
+export type Scorecard = {
+  /**
+   * First dispatch → latest retained completion, across every attempt (`agent-span`). Open —
+   * "so far" — while an attempt is still in flight; absent when no endpoint can carry it.
+   */
+  span?: DurationObservation;
+  /**
+   * First dispatch → earliest attributed heartbeat (`first-heartbeat`). Absent when no
+   * heartbeat was retained — unknown is the honest value, and it is never rendered as zero.
+   */
+  firstHeartbeat?: DurationObservation;
+  /** Retained heartbeat rows this agent sent. Absent ⇒ the columns to count them are missing. */
+  heartbeats?: number;
+  /** Attributed non-heartbeat messages this agent sent — heartbeats have their own count above. */
+  messages?: number;
+  /** Attributed escalation messages this agent sent. Counted here *and* in `messages`. */
+  escalations?: number;
+  /**
+   * The maximum cumulative `failure_count` per task this agent held, summed across its tasks.
+   * The column is cumulative on retries, so summing rows would double-count: 2 then 3 on one
+   * task is three failures, not five. Absent ⇒ this Orca has no failure_count column.
+   */
+  failures?: number;
+  /**
+   * Deduplicated recognized receipt URLs (#67's readers): the worker_done payloads this agent
+   * sent, plus the results of tasks whose surviving attempt was this agent's.
+   *
+   * **An empty array and an absent one are different facts, and the difference is the feature.**
+   * `[]` means the receipts were read and named no link — a real zero. *Absent* means neither
+   * evidence source was readable at all (`RESULT_RECEIPT_COLUMN` / `COMPLETION_RECEIPT_COLUMNS`),
+   * so the links are **unknown** — and unknown must not sort, or render, as "produced nothing".
+   * That is the same rule the counts above keep, and an empty list for both would break it.
+   */
+  outcomeLinks?: string[];
+  /**
+   * How many recognized links the cap cut (`RECEIPT_PREVIEW_FACTS`). Absent when it cut none.
+   *
+   * The cap is not decoration: this object rides the snapshot that is re-sent whole every five
+   * seconds (SPEC §6.3), and the links are URLs *an agent typed into a result column* — the one
+   * ingredient here that grows without limit. A worker that names four hundred of them costs
+   * eight and a count, exactly as its turn does.
+   */
+  outcomeLinksOmitted?: number;
 };
 
 /**
@@ -124,6 +183,12 @@ export type CastMember = {
   taskCount: number;
   /** The latest heartbeat across its dispatches — the rail's "last seen 12s ago" (SPEC §4.6). */
   lastHeartbeatAt: string | null;
+  /**
+   * The scoreboard row (#68) — attached once the messages have been read (`scoreboard.ts`),
+   * which is *after* the cast is cast: the metrics need attributed messages, and attribution
+   * needs the runs the cast is part of. Optional so the pure cast derivation owes it nothing.
+   */
+  score?: Scorecard;
 };
 
 /**

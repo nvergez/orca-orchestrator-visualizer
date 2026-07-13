@@ -69,13 +69,22 @@ export type ConversationProps = {
   onClearAgent: () => void;
   /** Clicking a turn goes to the task it names — the other half of the canvas link (SPEC §7.6). */
   onSelectTask: (taskId: string) => void;
+  /** Swap the dock to the scoreboard (#68) — the cast, compared. The shell owns the swap. */
+  onOpenScoreboard: () => void;
 };
 
 type Scope = 'run' | 'unplaced';
 
 const NO_CAST: CastMember[] = [];
 
-export function Conversation({ turns, run, selectedAgent, onClearAgent, onSelectTask }: ConversationProps) {
+export function Conversation({
+  turns,
+  run,
+  selectedAgent,
+  onClearAgent,
+  onSelectTask,
+  onOpenScoreboard,
+}: ConversationProps) {
   const [scope, setScope] = useState<Scope>('run');
   const isMobile = useIsMobile();
 
@@ -160,6 +169,20 @@ export function Conversation({ turns, run, selectedAgent, onClearAgent, onSelect
           <span className="text-muted-foreground/70 ml-auto text-[11px] tabular-nums">
             {exchangeCount(shown)} {exchangeCount(shown) === 1 ? 'exchange' : 'exchanges'}
           </span>
+
+          {/* The way to the cast, compared (#68). It sits on the conversation and not in the
+              rail because it is a *dock* view: what it replaces is exactly this panel. */}
+          <button
+            type="button"
+            onClick={onOpenScoreboard}
+            title="Compare the cast, member by member"
+            className={cn(
+              'border-panel-border/70 text-muted-foreground cursor-pointer rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors',
+              'hover:text-foreground focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none'
+            )}
+          >
+            Scoreboard
+          </button>
         </div>
 
         {/* A segmented control, not two buttons in a row: the scope is one choice with two sides —

@@ -27,6 +27,8 @@ const CLOCK_NAMES: Record<DurationClock, string> = {
   dispatch: 'dispatch clock — dispatched → completed, from one attempt’s own row',
   'task-span': 'task span — created → completed; no completed dispatch clock was retained',
   'run-span': 'run span — earliest task creation → latest retained activity',
+  'agent-span': 'agent span — first dispatch → latest retained completion, across every attempt',
+  'first-heartbeat': 'time to first heartbeat — first dispatch → earliest attributed heartbeat',
 };
 
 /**

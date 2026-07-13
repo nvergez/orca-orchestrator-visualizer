@@ -95,7 +95,7 @@ describe('the tasks in a snapshot', () => {
     const event = await harness.snapshot();
 
     // **A budget on what a fetch of history costs**, and a feature that grows it has to come here
-    // and say so. Three have. The wire stopped re-sending this on every push (#69) — the tick
+    // and say so. Four have. The wire stopped re-sending this on every push (#69) — the tick
     // carries `affected` and the message delta, and the graph travels one selected run at a time —
     // but the bound still matters: it is what a client pays to read the *whole* corpus back through
     // the paged contracts, and `spec` text is still the thing that must not be in it.
@@ -116,14 +116,27 @@ describe('the tasks in a snapshot', () => {
     // and a count, never four hundred. The whole receipt stays on `GET /api/task/:id` with the
     // bodies.
     //
+    // The fourth is the scoreboard (#68): one small scorecard per cast member — a handful of
+    // counts, at most two duration observations, and *deduplicated* recognized URLs. Bounded by
+    // the cast size (a few agents per run), and the links by the same receipt recognition that
+    // bounds the turns above; nothing in it is text anybody typed.
+    //
+    // It is what last raised this ceiling, and this is it coming here to say so: **8.7 KB** on
+    // this corpus — 13 runs, 25 cast members, ~350 bytes each. That is the shape the paragraph
+    // above promises (per *agent*, not per message and not per character anybody typed), which is
+    // why the ceiling moves by that much and no more: 266.7 KB before the scorecards, 275.5 KB
+    // after, and the headroom left over is the same ~3% it was.
+    //
     // The defence still holds. A dispatch turn carries the **first 240 characters** of the spec and
     // says so (`BODY_PREVIEW_CHARS`); the other 3 KB never crosses the SQLite boundary, let alone
-    // the wire. The bodies are one click away, in full, on `GET /api/task/:id`.
+    // the wire. The bodies are one click away, in full, on `GET /api/task/:id`. The thing this
+    // number exists to catch is a body leak — 172 KB of `spec` text, twenty times the whole
+    // scoreboard — and a ceiling raised by 10 KB still catches it on the first tick.
     expect(event.snapshot.tasks).toHaveLength(76);
     expect(event.snapshot.gates).toHaveLength(53);
     expect(event.snapshot.turns.length).toBeGreaterThan(300);
 
-    expect(JSON.stringify(event.snapshot).length).toBeLessThan(275_000);
+    expect(JSON.stringify(event.snapshot).length).toBeLessThan(285_000);
 
     // …and the ceiling means nothing without the thing it is a ceiling *against*: every spec in this
     // corpus is longer than the cap, and not one full body is on the wire.

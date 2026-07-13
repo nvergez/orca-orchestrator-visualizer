@@ -52,6 +52,33 @@ const KIND_LOOK: Record<Exclude<ReceiptFact['kind'], 'link'>, { label: string; c
   file: { label: 'file path', captioned: false },
 };
 
+/**
+ * One recognized link, as the only control in this tool that is allowed to *be* a link: the
+ * value passed real URL validation in the shared reader (`shared/receipt.ts`), and a URL is
+ * exactly a claim about the network. It opens in a new tab and hands the receipt's page neither
+ * this window nor a referrer, because a receipt is untrusted text out of a database anyone can
+ * write to.
+ *
+ * Shared with the scoreboard (#68), whose outcome links are the same recognized facts read from
+ * the same receipts — and a second `<a>` with its own idea of `rel` would be a second, weaker
+ * answer to the same security question.
+ */
+export function ReceiptLink({ href, label, className }: { href: string; label?: string; className?: string }) {
+  return (
+    <a
+      data-testid="receipt-link"
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={href}
+      className={cn(CHIP_CLASS, 'max-w-full', className)}
+    >
+      <ExternalLink aria-hidden className="size-3 shrink-0" />
+      <span className="truncate">{label ?? href}</span>
+    </a>
+  );
+}
+
 export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId = 'receipt' }: ReceiptFactsProps) {
   if (facts.length === 0) return null;
 
@@ -72,17 +99,7 @@ export function ReceiptFacts({ facts, omitted = 0, showSources = false, testId =
           )}
 
           {fact.kind === 'link' ? (
-            <a
-              data-testid="receipt-link"
-              href={fact.value}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={fact.value}
-              className={cn(CHIP_CLASS, 'max-w-full')}
-            >
-              <ExternalLink aria-hidden className="size-3 shrink-0" />
-              <span className="truncate">{fact.value}</span>
-            </a>
+            <ReceiptLink href={fact.value} />
           ) : (
             // `min-w-0` for the reason the `<li>` above has it, one level further in: the chip
             // shares its line with the kind's caption ("completing agent"), and a flex item that
