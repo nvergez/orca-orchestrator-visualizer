@@ -547,6 +547,7 @@ Bodies in the message log are small (subjects and short bodies); ship them. `spe
 | Route | Purpose |
 |---|---|
 | `GET /` + `/assets/*` | The pre-built frontend, served from the package's `dist/` |
+| `GET /kiosk` | The **same document** as `/` — the DAG-free supervision wall (#62). A *route*, not a mode: no flag, no second process, no second bundle, and the server does not know what a kiosk is. The client reads the path and picks the screen (`client/route.ts`); which screens exist is one list on the server (`APP_ROUTES`), so an unknown path still 404s rather than silently rendering the wrong one. |
 | `GET /api/stream` | SSE (§6.2). Honors `Last-Event-ID`. |
 | `GET /api/task/:id` | Lazy detail: the **full** `spec` and `result`, and **all** `dispatch_contexts` rows ordered by `rowid` (not just the latest — #7 §8). It no longer carries the task's messages: that list was *the half of the exchange that got written down*, and `snapshot.turns` filtered by `taskId` carries all four sources of it (§4.7). A second copy of a truth is a second copy that can disagree with the first. |
 | `GET /api/snapshot` | *(Spec-level convenience:)* a one-shot `StreamEvent`, same code path. Costs nothing and makes the whole thing `curl`-debuggable. |

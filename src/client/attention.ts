@@ -1,7 +1,7 @@
 import { shortHandle } from '../shared/handles.ts';
 import { STALE_HEARTBEAT_MS } from '../shared/run-health.ts';
 import { type Gate, isTerminalStatus, type Run, type StreamEvent, type Task, type Turn } from '../shared/types.ts';
-import { relativeTime } from './relative-time.ts';
+import { elapsedSince as age, relativeTime } from './relative-time.ts';
 import { workerEvidenceByAgent } from './worker-health.ts';
 
 /**
@@ -87,7 +87,7 @@ export function deriveAttention(snapshot: Snapshot, now: number): AttentionItem[
   const labelOf = (runId: string | null): string | null => (runId === null ? null : (labels.get(runId) ?? null));
 
   return [
-    ...blockingGates(snapshot.gates, labelOf, now),
+    ...blockingGateItems(snapshot.gates, labelOf, now),
     ...staleWorkers(snapshot.runs, snapshot.tasks, now),
     ...retryRisks(snapshot.tasks, labelOf),
     ...escalations(snapshot.turns, tasksById, labelOf, now),
@@ -128,35 +128,42 @@ function byId(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** "3m ago", or nothing to measure with — the queue never says "NaN ago". */
-function age(at: string, now: number): number | null {
-  const instant = Date.parse(at);
-  return Number.isNaN(instant) ? null : Math.max(0, now - instant);
-}
-
 /**
- * Tier 1 — questions provably pausing work, oldest first. `blocking` is the whole criterion:
- * #45 already folded "a pending row blocks" and "an unanswered ask blocks only while its task
- * is blocked" into that one flag, and unanswered, resolved, timed-out and superseded questions
- * arrive with it false (SPEC §4.5).
+ * **Every question provably pausing work, oldest first** — the queue's first tier, and the one
+ * read of #45 anything else in the client is allowed to make.
+ *
+ * `blocking` is the whole criterion: #45 already folded "a pending row blocks" and "an unanswered
+ * ask blocks only while its task is blocked" into that one flag, and unanswered, resolved,
+ * timed-out and superseded questions arrive with it false (SPEC §4.5). A gate whose ask instant
+ * will not parse still blocks — the flag is not a timestamp — but it queues behind every gate that
+ * can prove its age, because it cannot claim to be the oldest.
+ *
+ * Exported because the kiosk tile names the oldest one blocking *its* run (#62), and a second
+ * `.filter(blocking).sort(oldest)` over there is exactly how the wall and the queue would come to
+ * disagree about which question has stopped an orchestration.
  */
-function blockingGates(gates: Gate[], labelOf: LabelOf, now: number): AttentionItem[] {
+export function blockingGates(gates: Gate[]): Gate[] {
   return gates
     .filter((gate) => gate.blocking)
-    .map((gate): AttentionItem => {
-      const waited = age(gate.createdAt, now);
-      return {
-        kind: 'blocking-gate',
-        id: `gate:${gate.id}`,
-        runId: gate.runId,
-        runLabel: labelOf(gate.runId),
-        taskId: gate.taskId,
-        at: gate.createdAt,
-        title: gate.question,
-        explanation: waited === null ? 'blocking — no readable ask instant' : `asked ${relativeTime(waited)} ago — blocking`,
-      };
-    })
-    .sort(byOldestThenId);
+    .sort((a, b) => byOldestThenId({ at: a.createdAt, id: a.id }, { at: b.createdAt, id: b.id }));
+}
+
+/** Tier 1 — the blocking gates, worded. They arrive ranked; the wording does not reorder them. */
+function blockingGateItems(gates: Gate[], labelOf: LabelOf, now: number): AttentionItem[] {
+  return blockingGates(gates).map((gate): AttentionItem => {
+    const waited = age(gate.createdAt, now);
+    return {
+      kind: 'blocking-gate',
+      id: `gate:${gate.id}`,
+      runId: gate.runId,
+      runLabel: labelOf(gate.runId),
+      taskId: gate.taskId,
+      at: gate.createdAt,
+      title: gate.question,
+      explanation:
+        waited === null ? 'blocking — no readable ask instant' : `asked ${relativeTime(waited)} ago — blocking`,
+    };
+  });
 }
 
 /**

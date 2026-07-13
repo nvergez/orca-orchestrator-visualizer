@@ -135,6 +135,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The route is read from the URL (#62), and jsdom keeps one `window` for the whole file — so a
+  // test that visits `/kiosk` must not leave the next one standing there.
+  window.history.pushState({}, '', '/');
 });
 
 describe('<Live>', () => {
@@ -341,5 +344,30 @@ describe('<Live> data age', () => {
     // Still connecting: the page has observed nothing, so it says nothing — a fabricated
     // "updated 0s ago" here would be the tool's first lie.
     expect(screen.queryByTestId('data-age')).toBeNull();
+  });
+
+  it('feeds the kiosk from the same stream when the URL names it (#62)', () => {
+    // One transport, two screens. The kiosk is a *route*, not a mode: the same `EventSource`, the
+    // same `StreamEvent`, the same connection facts riding alongside — which is the only reason
+    // the wall and the desk can be trusted to agree about what the database says.
+    window.history.pushState({}, '', '/kiosk');
+
+    render(<Live />);
+    stream().push(event());
+
+    expect(screen.getByTestId('kiosk')).toBeVisible();
+    expect(screen.getByTestId('kiosk-tile')).toHaveTextContent('Ship the visualizer');
+    // The DAG stayed home.
+    expect(screen.queryByTestId('task-node')).toBeNull();
+  });
+
+  it('is the shell at every other path', () => {
+    window.history.pushState({}, '', '/');
+
+    render(<Live />);
+    stream().push(event());
+
+    expect(screen.queryByTestId('kiosk')).toBeNull();
+    expect(screen.getByTestId('run-row')).toBeVisible();
   });
 });

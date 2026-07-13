@@ -106,6 +106,25 @@ export function relativeTime(elapsedMs: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
+/**
+ * **How long ago an instant was — or nothing at all.**
+ *
+ * The one place the client turns a wire string into an age, and the one place it decides what to
+ * do when the string is not an instant: `null`, never `NaN`, and never the epoch. A timestamp this
+ * tool could not normalize reaches the client verbatim (`server/time.ts`, SPEC §5), and every
+ * measurement made against one has to be able to say *I cannot measure this* — the attention
+ * queue's blocking gate that cannot prove its age, and the kiosk tile's silence that cannot say
+ * how long it has lasted. Both would otherwise print "NaN ago", which is the one thing worse than
+ * saying nothing.
+ *
+ * Future instants clamp to zero, exactly as run health does: modest clock skew is not a negative
+ * age, and it is certainly not a new state (SPEC §12.3).
+ */
+export function elapsedSince(at: string, now: number): number | null {
+  const instant = Date.parse(at);
+  return Number.isNaN(instant) ? null : Math.max(0, now - instant);
+}
+
 /** An instant on screen: what to show, what to put in its tooltip, and whether it read at all. */
 export type Age = {
   /** "3m ago" — or the raw column value, when that is all there is to say. */

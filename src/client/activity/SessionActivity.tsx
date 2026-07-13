@@ -53,8 +53,15 @@ export type SessionActivityProps = {
   event: StreamEvent | null;
   /** Every task in the database, so an entry can tell a live destination from a deleted one. */
   tasks: Task[];
-  /** Clicking an entry goes to the task it names — the same seam a gate click uses. */
-  onSelectTask: (taskId: string) => void;
+  /**
+   * Clicking an entry goes to the task it names — the same seam a gate click uses.
+   *
+   * **Omitted on the kiosk** (#62): there is no inspector to open it into, so every entry takes
+   * the unlinked path a deleted task's entry already takes. The ticker still *ticks* — what a
+   * wall display owes its reader is that the page is alive and the work is moving, and that is
+   * a thing you watch, not a thing you click.
+   */
+  onSelectTask?: (taskId: string) => void;
 };
 
 export function SessionActivity({ event, tasks, onSelectTask }: SessionActivityProps) {
@@ -95,7 +102,9 @@ export function SessionActivity({ event, tasks, onSelectTask }: SessionActivityP
           .map((entry) => {
             const taskId = entry.taskId;
             const onSelect =
-              taskId !== null && tasks.some((task) => task.id === taskId) ? () => onSelectTask(taskId) : null;
+              onSelectTask !== undefined && taskId !== null && tasks.some((task) => task.id === taskId)
+                ? () => onSelectTask(taskId)
+                : null;
             return <Entry key={entry.id} entry={entry} now={now} onSelect={onSelect} />;
           })}
       </ul>

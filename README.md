@@ -130,6 +130,19 @@ explanation rather than silently misread.
 It follows your system's light or dark theme, and the toggle in the top right overrides that and
 is remembered.
 
+### `/kiosk` — the wall
+
+Open `http://127.0.0.1:4269/kiosk` and you get the same data with the DAG taken away: one tile per
+**unfinished** orchestration — is anything still moving in it, how its worst worker is doing, and
+how long its oldest blocking question has held the work — beside the same "needs attention" queue
+the main screen shows, in the same order, for the same reasons.
+
+It is a route, not a mode. There is no second process to start and no flag to pass; it is the
+server you are already running, and the page never asks for fullscreen, so you can put it on a
+spare monitor beside anything else. There is nothing on it to click: it is for the wall, and it
+keeps itself up to date — a run crosses into *silent* and a failure ages out of the queue on the
+clock alone, whether or not the database says a word.
+
 ## What it infers, and where that can be wrong
 
 orca-viz reads a database that was designed for a coordinator, not for a viewer, and it is

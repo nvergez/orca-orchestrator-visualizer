@@ -264,8 +264,12 @@
   /* A silent run's dot (SPEC §12.3). It borrows the page's amber deliberately — the hue that
      already means "attention, not a verdict" — but under its own name, because a run's health
      is not a task's status and a class that said `dispatched` over a silent run would be
-     naming the wrong concept. */
+     naming the wrong concept.
+
+     The ink is the same borrowing, for the surface that says it in *words* rather than in a dot
+     (the kiosk tile, #62): a readable weight of the same amber, still under the run's own name. */
   --color-run-silent: var(--status-dispatched);
+  --color-run-silent-ink: var(--status-dispatched-ink);
 
   --color-gate: var(--gate);
   --color-gate-soft: var(--gate-soft);
