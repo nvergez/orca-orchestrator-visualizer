@@ -9,6 +9,7 @@ import { localInstant } from '../relative-time.ts';
 import { PANEL_CLASS, PANEL_TITLE_CLASS } from '../surface.ts';
 import {
   deriveTimeline,
+  type MarkerGate,
   placeBar,
   placeInstant,
   type TimelineBar,
@@ -404,6 +405,35 @@ const MARKERS = {
 } as const;
 
 /**
+ * **History is quiet** — the ink a gate wears once it can no longer stop anything.
+ *
+ * The same ruling the inspector already makes about the same fact: *a blocking question is the
+ * colour of a blocker; everything else is history* (`Inspector`'s `GateQA`). The octagon is the one
+ * glyph in this tool that means **the work has stopped and a human is needed**, and it is worn by
+ * the node, the strip and the rail *only* while `blocking` is true. Painting every gate this run
+ * ever asked in the blocker's orange made a finished run look like a run in trouble.
+ *
+ * The shape does not change — an octagon is *a gate*, everywhere, and a second gate glyph would
+ * fragment the one thing this page is careful about. Only the colour, which is what was making the
+ * claim.
+ */
+const SETTLED_GATE = 'text-muted-foreground/70';
+
+/**
+ * What became of the question — the inspector's four fates (`GateFate`), said in one line.
+ *
+ * It is a *clause*, not the noun: the marker stands at the instant the gate was **opened**, which is
+ * the only instant a gate has (`decision_gates` records no answered-at), so "gate answered · 16:20"
+ * would date the answer to the asking. The marker says when it was asked and then what came of it.
+ */
+function fateOf(gate: MarkerGate): string {
+  if (gate.blocking) return 'blocking — waiting for an answer';
+  if (gate.status === 'resolved') return 'answered';
+  if (gate.status === 'timeout') return 'timed out — no decision was recorded';
+  return 'no answer recorded';
+}
+
+/**
  * A point marker: a gate's question, an escalation, or the instant a task was **recorded** complete.
  *
  * All three are instants Orca actually wrote down. What is deliberately *not* here is every status
@@ -413,6 +443,11 @@ const MARKERS = {
  *
  * A marker that names no task — 32 of the 53 live gates name none — still shows. It simply does not
  * open anything, because there is nothing for it to open.
+ *
+ * **A gate is drawn in the colour of what it is still doing, not of what it once was** (`fateOf`).
+ * Every gate the run ever asked keeps its instant here — that is what a post-mortem is — but only
+ * one that is *blocking now* wears the blocker's orange, exactly as on the node, the strip and the
+ * rail. The rest are history, and history is quiet.
  */
 function Marker({
   marker,
@@ -426,13 +461,25 @@ function Marker({
   onShow?: () => void;
 }) {
   const { icon: Icon, className, noun } = MARKERS[marker.kind];
-  const label = `${noun} · ${localInstant(marker.at)}${marker.label === '' ? '' : ` · ${marker.label}`}`;
+  const settled = marker.gate !== undefined && !marker.gate.blocking;
+
+  // One sentence, composed once: when it was recorded, what it said, and — for a gate — what became
+  // of it. The tooltip and the accessible name are the same string, so they cannot drift.
+  const label = [
+    noun,
+    localInstant(marker.at),
+    marker.label === '' ? null : marker.label,
+    marker.gate === undefined ? null : fateOf(marker.gate),
+  ]
+    .filter((part) => part !== null)
+    .join(' · ');
 
   return (
     <button
       type="button"
       data-testid="timeline-marker"
       data-kind={marker.kind}
+      data-blocking={marker.gate === undefined ? undefined : marker.gate.blocking}
       data-task={marker.taskId ?? undefined}
       disabled={onShow === undefined}
       onClick={onShow}
@@ -440,7 +487,7 @@ function Marker({
       aria-label={label}
       className={cn(
         'absolute flex size-4 -translate-x-1/2 items-center justify-center',
-        className,
+        settled ? SETTLED_GATE : className,
         onShow === undefined ? 'cursor-default' : 'cursor-pointer'
       )}
       style={{ left: `${placeInstant(marker.at, axis)}%`, top }}

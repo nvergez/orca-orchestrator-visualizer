@@ -1,4 +1,4 @@
-import { agentOfTurn, type DurationObservation, type RunSnapshot, type Task } from '../../shared/types.ts';
+import { agentOfTurn, type DurationObservation, type Gate, type RunSnapshot, type Task } from '../../shared/types.ts';
 import { instantOf } from '../relative-time.ts';
 
 /**
@@ -98,6 +98,23 @@ export type TimelineBar = {
   row: number;
 };
 
+/**
+ * A gate's **two separate facts**, carried onto its marker (ADR 0002, `server/gates.ts`).
+ *
+ * `status` is the recorded lifecycle — what the database proves became of the question. `blocking`
+ * is its *present* effect: whether the work is stopped on it **now**. Every other view in the tool
+ * draws the octagon from the second one and words the rest as history (`TaskNode`'s marker returns
+ * null unless `blocking`; the strip only raises for blockers; the inspector's `GateFate` says what
+ * became of the others). The timeline kept neither, so it drew a question answered forty minutes
+ * ago in the blocker's own orange — the one glyph on this page that means *stopped, a human is
+ * needed*.
+ *
+ * The instant stays on the axis either way, because it *happened*: this is a post-mortem, and "a
+ * gate opened here" is exactly the kind of recorded instant it exists to show. What these two say
+ * is whether it is still shouting.
+ */
+export type MarkerGate = { status: Gate['status']; blocking: boolean };
+
 /** A recorded instant, on the lane of whoever the evidence says it belongs to. */
 export type TimelineMarker = {
   id: string;
@@ -106,6 +123,11 @@ export type TimelineMarker = {
   taskId: string | null;
   /** What it says on hover — the question, the subject, or the task that was recorded complete. */
   label: string;
+  /**
+   * Gate markers only. Absent ⇒ this marker is a plain recorded instant with no present effect —
+   * an escalation and a completion already happened, and neither can be stopping anything now.
+   */
+  gate?: MarkerGate;
 };
 
 export type TimelineLane = {
@@ -364,6 +386,10 @@ export function deriveTimeline(snapshot: Omit<RunSnapshot, 'meta'>): TimelineMod
       at: gate.createdAt,
       taskId: gate.taskId,
       label: gate.question,
+      // Both facts, straight off the wire and neither derived here: whether the run is stopped on
+      // this question is the server's ruling (SPEC §4.5), and a second reading of it in the client
+      // would be a second answer that can disagree with the strip's.
+      gate: { status: gate.status, blocking: gate.blocking },
     });
   }
 

@@ -532,6 +532,40 @@ describe('the markers: recorded instants, and not one more', () => {
 
     expect(lane?.markers.map((marker) => marker.kind)).toEqual(['gate']);
   });
+
+  it('carries a gate’s lifecycle and its present blocking effect, which are two facts', () => {
+    // ADR 0002: `status` is what the database proves became of the question, `blocking` is whether
+    // the work is stopped on it *now*. A marker that kept neither could only draw every gate the
+    // same — and the timeline was the one view doing exactly that.
+    const snapshot = snapshotOf({
+      gates: [
+        gate({ id: 'msg_open', createdAt: at(20) }),
+        gate({ id: 'msg_done', createdAt: at(22), status: 'resolved', blocking: false, resolution: 'yes' }),
+      ],
+    });
+
+    const markers = deriveTimeline(snapshot).lanes.flatMap((lane) => lane.markers);
+
+    expect(markers.filter((marker) => marker.kind === 'gate').map((marker) => marker.gate)).toEqual([
+      { status: 'pending', blocking: true },
+      { status: 'resolved', blocking: false },
+    ]);
+  });
+
+  it('hangs no blocking fact on the markers that cannot block — an escalation, a completion', () => {
+    // Both already happened. `gate` is absent rather than false: "this marker has no present effect
+    // to report" and "this gate is no longer blocking" are different sentences.
+    const snapshot = snapshotOf({
+      turns: [turn({ id: 'msg:9', kind: 'escalation', at: at(25), subject: 'Blocked: no credits' })],
+    });
+
+    const markers = deriveTimeline(snapshot).lanes.flatMap((lane) => lane.markers);
+
+    expect(markers.map((marker) => [marker.kind, marker.gate])).toEqual([
+      ['escalation', undefined],
+      ['completion', undefined],
+    ]);
+  });
 });
 
 describe('the window: what the axis is allowed to span', () => {
@@ -788,5 +822,43 @@ describe('the timeline on screen', () => {
     const lanes = screen.getAllByTestId('timeline-lane');
     expect(lanes.find((lane) => lane.dataset.lane === FIRST)).toHaveAttribute('data-dimmed', 'false');
     expect(lanes.find((lane) => lane.dataset.lane === SECOND)).toHaveAttribute('data-dimmed', 'true');
+  });
+
+  it('wears the blocker’s orange only for the gate that is blocking now — history is quiet', () => {
+    // The bug a finished run showed: every gate it had ever asked stood on the axis in the one
+    // colour that means *the work has stopped and a human is needed*, so two long-answered
+    // questions read as two unexplained alarms. The node, the strip and the rail all draw the
+    // octagon from `blocking` alone (ADR 0002) — this is the view that was not.
+    render(
+      <CannedApp
+        event={{
+          ...TIMELINE_EVENT,
+          snapshot: {
+            ...TIMELINE_EVENT.snapshot,
+            gates: [
+              gate({ id: 'msg_open', createdAt: at(20) }),
+              gate({ id: 'msg_done', createdAt: at(22), status: 'resolved', blocking: false, resolution: 'yes' }),
+            ],
+          },
+        }}
+        attempts={TIMELINE_ATTEMPTS}
+      />
+    );
+    const timeline = showTimeline();
+
+    const gates = within(timeline)
+      .getAllByTestId('timeline-marker')
+      .filter((marker) => marker.dataset.kind === 'gate');
+
+    const blocking = gates.find((marker) => marker.dataset.blocking === 'true')!;
+    const settled = gates.find((marker) => marker.dataset.blocking === 'false')!;
+
+    expect(blocking).toHaveClass('text-gate');
+    expect(settled).not.toHaveClass('text-gate');
+
+    // And it says which it is, rather than leaving the reader to infer it from a colour. The
+    // instant is still the *asking* — a gate has no answered-at — so the fate is a clause after it.
+    expect(blocking).toHaveAttribute('aria-label', expect.stringContaining('blocking — waiting for an answer'));
+    expect(settled.getAttribute('aria-label')).toMatch(/^gate opened · .* · Ship it\? · answered$/);
   });
 });
