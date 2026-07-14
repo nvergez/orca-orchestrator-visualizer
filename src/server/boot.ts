@@ -18,6 +18,7 @@ import { StartupError } from './errors.ts';
 import type { ProcessProbe } from './liveness.ts';
 import type { ReadMounts } from './network-fs.ts';
 import { createReplayServer, createServer } from './server.ts';
+import { resolveTailnetAddress, type RunTailscaleCommand, runTailscaleCommand } from './tailnet.ts';
 import { toolVersion } from './version.ts';
 
 /**
@@ -40,10 +41,26 @@ export type BootOptions = {
   isTTY?: boolean;
   print?: (line: string) => void;
   openBrowser?: (url: string) => void;
+  /** The `tailscale` CLI, for `--tailscale` (#102). Never spawned while the flag is off. */
+  runTailscale?: RunTailscaleCommand;
 };
 
 /** A running orca-viz — or null, when the command was one that just prints and exits. */
 export type Booted = { url: string; close(): Promise<void> } | null;
+
+/** Where the server listens, once `--tailscale` has had its say. Both boots take the same one. */
+type Bind = { port: number; host: string };
+
+/**
+ * The one thing `--tailscale` owes the terminal that the URL cannot say for itself.
+ *
+ * orca-viz has no authentication. On loopback that is a non-fact — the boundary is the machine.
+ * The moment the bind leaves loopback it is the *whole* security model, it lives in Tailscale's
+ * ACLs rather than in this tool, and a person putting their agents' prompts on a network deserves
+ * to be told which fence is actually holding them.
+ */
+const TAILNET_NOTICE =
+  'tailnet only: no authentication — every device on your tailnet can read this, so your Tailscale ACLs are the access control';
 
 export async function boot(options: BootOptions): Promise<Booted> {
   const { argv, isTTY = process.stdout.isTTY ?? false, print = console.log } = options;
@@ -69,11 +86,20 @@ export async function boot(options: BootOptions): Promise<Booted> {
     return null;
   }
 
+  // Where to listen, decided **before** anything is opened or discovered (#102). `--tailscale`
+  // asks Tailscale for this machine's address, and a Tailscale that cannot answer ends the boot
+  // here — with no database opened, no port held, and nothing bound. The commands above this line
+  // print and exit, so `--tailscale --help` spawns nothing: the flag is not a request to serve.
+  const bind: Bind = {
+    port: cli.port,
+    host: cli.tailscale ? await resolveTailnetAddress(options.runTailscale ?? runTailscaleCommand) : cli.host,
+  };
+
   // **The fork in the whole tool** (#74). Everything below this line opens a database, discovers
   // one, polls it and reports how alive it is. A replay does none of those things — so it does
   // not run any of them, rather than running them against nothing.
   if (cli.archive !== undefined) {
-    return await replay(cli.archive, cli, { print, openBrowser, isTTY, env, platform });
+    return await replay(cli.archive, cli, bind, { print, openBrowser, isTTY, env, platform });
   }
 
   const dbPath = resolveDatabase(context);
@@ -88,9 +114,9 @@ export async function boot(options: BootOptions): Promise<Booted> {
       // and no `orca` command can run. `{}` is the real CLI with its defaults.
       enrichment: cli.orcaEnrichment ? {} : undefined,
     });
-    await listen(server, cli);
+    await listen(server, bind);
 
-    const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
+    const url = `http://${displayHost(bind.host)}:${(server.address() as AddressInfo).port}`;
 
     // Always say what you are reading (SPEC §3). It is a few lines, and it is the difference
     // between trusting this tool and wondering about it.
@@ -104,6 +130,7 @@ export async function boot(options: BootOptions): Promise<Booted> {
     // Said out loud because it is the one thing this tool does beyond reading a file: it
     // will spawn `orca worktree ps` / `orca terminal list` — reads, on their own timer.
     if (cli.orcaEnrichment) print('          live Orca context: on (orca worktree ps, read-only, while Orca runs)');
+    if (cli.tailscale) print(`          ${TAILNET_NOTICE}`);
     print(`          listening on ${url}`);
 
     if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
@@ -135,14 +162,14 @@ export async function boot(options: BootOptions): Promise<Booted> {
  * cannot open is a sentence in the terminal — with what is wrong and what to do — rather than a
  * blank browser tab pointed at a port (`loadArchiveFile`).
  */
-async function replay(path: string, cli: Options, terminal: Terminal): Promise<Booted> {
+async function replay(path: string, cli: Options, bind: Bind, terminal: Terminal): Promise<Booted> {
   const { print, openBrowser, isTTY, env, platform } = terminal;
   const { artifact, archive, compatibility } = loadArchiveFile(path);
 
   const { server, close } = createReplayServer({ artifact });
-  await listen(server, cli);
+  await listen(server, bind);
 
-  const url = `http://${displayHost(cli.host)}:${(server.address() as AddressInfo).port}`;
+  const url = `http://${displayHost(bind.host)}:${(server.address() as AddressInfo).port}`;
 
   print(`orca-viz  replaying ${path}`);
   print(`          ${describeArchive(archive)}`);
@@ -153,6 +180,9 @@ async function replay(path: string, cli: Options, terminal: Terminal): Promise<B
   // What the *source* database's schema cost this evidence, months ago — the same list the live
   // boot prints, because it is the same fact and the archive is what still remembers it.
   for (const line of describeSchema(archive.provenance.source)) print(`          ${line}`);
+  // An archive is a *file of the same sentences* — task specs, prompts, message bodies. Putting
+  // it on the tailnet exposes precisely what a live database would, so it is owed the same line.
+  if (cli.tailscale) print(`          ${TAILNET_NOTICE}`);
   print(`          listening on ${url}`);
 
   if (shouldOpenBrowser({ open: cli.open, isTTY, env, platform })) openBrowser(url);
@@ -189,7 +219,7 @@ function describeArchive({ run, tasks, provenance }: RunArchive): string {
  * just opened a browser at, and any bookmark of it — so a taken port is an error the user
  * gets to decide about.
  */
-function listen(server: Server, { port, host }: Options): Promise<void> {
+function listen(server: Server, { port, host }: Bind): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {

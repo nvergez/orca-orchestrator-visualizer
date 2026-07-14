@@ -18,6 +18,12 @@ export type Options = {
   listDbs: boolean;
   port: number;
   host: string;
+  /**
+   * `--tailscale` (#102): bind this machine's tailnet address instead of loopback — resolved from
+   * Tailscale itself, at boot, and a hard error if it cannot be (`tailnet.ts`). Excludes `--host`:
+   * the two answer the same question.
+   */
+  tailscale: boolean;
   /** The poll loop's cadence (SPEC §6.1) — how often the SSE stream looks for a change. */
   pollIntervalMs: number;
   /** `--watch` (#59): also watch the database directory, to wake that poll early on a change. */
@@ -51,6 +57,11 @@ Options:
                          URL orca-viz just opened for you.
   --host <host>          Address to bind (default ${DEFAULT_HOST}). Loopback by design: the
                          database holds your task specs, agent prompts and message bodies.
+  --tailscale            Bind this machine's tailnet address instead (tailscale ip -4), so you
+                         can watch the run from another device on your tailnet — and from
+                         nowhere else. A Tailscale that cannot answer is an error, never a
+                         fall back to loopback or to 0.0.0.0. Excludes --host. orca-viz has no
+                         authentication: your Tailscale ACLs are the access control.
   --poll-interval <ms>   How often to re-read the database (default ${DEFAULT_POLL_INTERVAL_MS}).
   --watch                Also watch the database directory, and run the normal poll early
                          when a file changes. A hint, never a source: the poll stays
@@ -105,6 +116,17 @@ export function parseOptions(argv: string[]): Options {
     }
   }
 
+  // Same rule, the other pair (#102): `--tailscale` resolves the bind address from Tailscale and
+  // `--host` names one, so together they are two answers to a question that has one. Refusing is
+  // the only reading that cannot surprise: silently preferring either would bind an address the
+  // user did not ask for — and one of the two candidates is always the one they were avoiding.
+  if ((values.tailscale ?? false) && values.host !== undefined) {
+    throw new StartupError(
+      '--tailscale and --host cannot be used together.',
+      '--tailscale binds the address Tailscale gives this machine; --host binds the one you name. Pass one.'
+    );
+  }
+
   return {
     db: values.db,
     archive: values.archive,
@@ -112,6 +134,7 @@ export function parseOptions(argv: string[]): Options {
     // 0 is legal and means "any free port" — the OS picks and orca-viz prints what it got.
     port: values.port === undefined ? DEFAULT_PORT : integerOption('--port', values.port, { min: 0, max: 65535 }),
     host: values.host ?? DEFAULT_HOST,
+    tailscale: values.tailscale ?? false,
     pollIntervalMs:
       values['poll-interval'] === undefined
         ? DEFAULT_POLL_INTERVAL_MS
@@ -130,6 +153,7 @@ const OPTION_SPEC = {
   'list-dbs': { type: 'boolean' },
   port: { type: 'string' },
   host: { type: 'string' },
+  tailscale: { type: 'boolean' },
   'poll-interval': { type: 'string' },
   watch: { type: 'boolean' },
   'orca-enrichment': { type: 'boolean' },
