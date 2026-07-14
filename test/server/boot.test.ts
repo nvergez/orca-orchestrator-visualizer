@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { boot, type BootOptions, type Booted } from '../../src/server/boot.ts';
 import { nodeVersionError } from '../../src/server/node-support.ts';
+import { isTailnetAddress, type RunTailscaleCommand } from '../../src/server/tailnet.ts';
 import { FixtureBuilder } from '../fixtures/builder.ts';
 import { tempDbPath, tempDir } from '../fixtures/temp-dir.ts';
 import { FixtureWriter } from '../fixtures/writer.ts';
@@ -17,6 +19,16 @@ import { openStream } from './sse.ts';
  */
 
 const AT = new Date('2026-07-08T12:00:00Z');
+
+/**
+ * This machine's own tailnet address, when it is on a tailnet at all (#102). It is what lets one
+ * test below bind `--tailscale` for real instead of describing it — and `null` is not a failure,
+ * it is a CI box, so that test skips there rather than lying about what it proved.
+ */
+const LOCAL_TAILNET_ADDRESS =
+  Object.values(networkInterfaces())
+    .flat()
+    .find((iface) => iface?.family === 'IPv4' && isTailnetAddress(iface.address))?.address ?? null;
 
 let booted: Booted;
 
@@ -58,7 +70,17 @@ describe('--help and --version', () => {
 
     expect(booted).toBeNull();
     const help = lines.join('\n');
-    for (const flag of ['--db', '--list-dbs', '--port', '--host', '--poll-interval', '--watch', '--no-open', '--version']) {
+    for (const flag of [
+      '--db',
+      '--list-dbs',
+      '--port',
+      '--host',
+      '--tailscale',
+      '--poll-interval',
+      '--watch',
+      '--no-open',
+      '--version',
+    ]) {
       expect(help).toContain(flag);
     }
   });
@@ -322,6 +344,113 @@ describe('booting', () => {
 
   it('rejects a poll interval that is not a duration', async () => {
     await expect(run(['--db', fixtureDb(), '--poll-interval', '-5'])).rejects.toThrow(/--poll-interval/);
+  });
+});
+
+describe('--tailscale (#102)', () => {
+  /** A scripted `tailscale`, and a record of whether it was ever asked anything at all. */
+  function tailscale(answer: string | Error): { runTailscale: RunTailscaleCommand; calls: number } {
+    const spy = { calls: 0 };
+    return {
+      get calls() {
+        return spy.calls;
+      },
+      runTailscale: () => {
+        spy.calls += 1;
+        return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+      },
+    };
+  }
+
+  it('never spawns tailscale while the flag is off', async () => {
+    const cli = tailscale('100.64.0.1\n');
+
+    await run(['--db', fixtureDb(), '--port', '0'], { runTailscale: cli.runTailscale });
+
+    // The same rule --orca-enrichment lives by: an opt-in that is off runs no command, ever.
+    expect(cli.calls).toBe(0);
+  });
+
+  it('binds the address Tailscale gives this machine', async () => {
+    // A tailnet address that is real enough to pass the CGNAT check and cannot be assigned to this
+    // machine, so the bind fails at the OS — which is exactly what proves the address *reached*
+    // the bind. A test that could bind it would be a test running on someone's tailnet.
+    const cli = tailscale('100.127.255.254\n');
+
+    await expect(run(['--db', fixtureDb(), '--port', '0', '--tailscale'], { runTailscale: cli.runTailscale })).rejects.toThrow(
+      /100\.127\.255\.254/
+    );
+    expect(cli.calls).toBe(1);
+  });
+
+  it('refuses --host beside it, and asks Tailscale nothing', async () => {
+    const cli = tailscale('100.64.0.1\n');
+
+    await expect(
+      run(['--db', fixtureDb(), '--port', '0', '--tailscale', '--host', '0.0.0.0'], { runTailscale: cli.runTailscale })
+    ).rejects.toThrow(/--tailscale and --host/);
+
+    // Two answers to one question is not a request that gets half-honoured — and the half it would
+    // have honoured here is the one the user was trying to avoid.
+    expect(cli.calls).toBe(0);
+  });
+
+  it('binds nothing at all when Tailscale cannot answer', async () => {
+    const cli = tailscale(new Error('Tailscale is stopped.'));
+
+    await expect(
+      run(['--db', fixtureDb(), '--port', '0', '--tailscale'], { runTailscale: cli.runTailscale })
+    ).rejects.toThrow(/Tailscale is stopped\./);
+
+    // Not loopback (the URL you came for stops working), not 0.0.0.0 (your agents' prompts go to
+    // the café). No database opened, no port held: the boot ends here.
+    expect(booted).toBeNull();
+  });
+
+  it('refuses an answer that is not a tailnet address', async () => {
+    const cli = tailscale('0.0.0.0\n');
+
+    await expect(
+      run(['--db', fixtureDb(), '--port', '0', '--tailscale'], { runTailscale: cli.runTailscale })
+    ).rejects.toThrow(/100\.64\.0\.0\/10/);
+  });
+
+  it('says nothing about authentication on loopback, where its absence is a non-fact', async () => {
+    const { lines } = await run(['--db', fixtureDb(), '--port', '0']);
+
+    expect(lines.join('\n')).not.toMatch(/no authentication/i);
+  });
+
+  // The whole path, against a real tailnet interface: resolve, bind, print, serve. It needs a
+  // machine that is actually on a tailnet, so it skips where there is none (CI) rather than
+  // faking one — the test above already proves in CI that the resolved address reaches the bind.
+  it.skipIf(LOCAL_TAILNET_ADDRESS === null)(
+    'serves on the tailnet address, and says there is no auth behind it',
+    async () => {
+      const { lines, booted } = await run(['--db', fixtureDb(), '--port', '0', '--tailscale'], {
+        runTailscale: () => Promise.resolve(`${LOCAL_TAILNET_ADDRESS}\n`),
+      });
+
+      expect(booted!.url).toContain(LOCAL_TAILNET_ADDRESS!);
+
+      const snapshot = (await (await fetch(`${booted!.url}/api/snapshot`)).json()) as { meta?: unknown };
+      expect(snapshot.meta).toBeDefined();
+
+      // The moment the bind leaves loopback, "orca-viz has no authentication" stops being a
+      // technicality and becomes the security model — one that belongs to Tailscale, not to us.
+      expect(lines.join('\n')).toMatch(/no authentication/i);
+      expect(lines.join('\n')).toMatch(/ACLs/);
+    }
+  );
+
+  it('spawns nothing for a command that only prints', async () => {
+    const cli = tailscale('100.64.0.1\n');
+
+    const { lines } = await run(['--tailscale', '--help'], { runTailscale: cli.runTailscale });
+
+    // `--tailscale --help` is not a request to serve, so it is not a reason to go ask Tailscale.
+    expect(cli.calls).toBe(0);
+    expect(lines.join('\n')).toContain('--tailscale');
   });
 });
 

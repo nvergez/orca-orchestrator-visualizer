@@ -30,8 +30,11 @@ expectation, not an apology — see [Surviving an Orca update](#surviving-an-orc
 what the tool does when it meets a schema it was not built for, which is never to crash and
 never to lie about it.
 
-It binds to loopback only. Your task specs, agent prompts and message bodies are in that
-database, and they are not served to the network.
+It binds to loopback. Your task specs, agent prompts and message bodies are in that database,
+and nothing is served to any network unless you say so — and saying so is a deliberate act with
+its own flag ([`--tailscale`](#watching-a-run-from-another-device), or a `--host` you chose).
+There is no authentication behind either, so what you widen, you widen to everyone who can reach
+it.
 
 ## Requirements
 
@@ -60,6 +63,7 @@ npx orca-viz@latest --port 8080 --no-open
 | `--list-dbs` | Print every candidate database, in the order orca-viz would choose them, with its liveness, schema version and mtime. Then exit. |
 | `--port <n>` | Port to listen on (default `4269`). A port that is already taken is an error, **not** a hop to another one — a hunted port would break the URL orca-viz just opened and any bookmark of it. |
 | `--host <host>` | Address to bind (default `127.0.0.1`). Loopback by design; see the warning above before changing it. |
+| `--tailscale` | Bind this machine's **tailnet address** instead of loopback, so you can watch the run from another device on your tailnet — and from nowhere else. See [Watching a run from another device](#watching-a-run-from-another-device). Excludes `--host`. |
 | `--poll-interval <ms>` | How often to re-read the database (default `5000`). |
 | `--watch` | Also watch the database directory, and run that poll early when a file changes — a change usually surfaces in under a second instead of within the poll interval. A hint, never a source: the poll stays authoritative, no delivery latency is promised on any platform, and if watching fails orca-viz warns once and carries on polling. |
 | `--orca-enrichment` | Also show what a live worker is *doing right now* — its worktree, branch and current tool call — by asking the `orca` CLI (`worktree ps`, `terminal list`: two **read-only** commands, on their own timer, only while Orca is running). **Off by default.** Context attaches only on an exact terminal-handle match — never guessed from names or timing — and if the CLI is slow, gone or unreadable the database view is untouched and the tool says the context is unavailable. |
@@ -93,6 +97,50 @@ you are looking at.
 **Local disks only.** The database is in WAL mode, and WAL does not work over a network
 filesystem. Pointing `--db` at NFS, SMB, sshfs, or `/mnt/c` from WSL is refused with an
 explanation rather than silently misread.
+
+### Watching a run from another device
+
+The run you most want to watch is often on a machine you are not sitting at. WAL is why you
+cannot simply mount the database and read it from your laptop — so the answer is the other one:
+**run orca-viz on the machine Orca runs on, and browse to it from the device you are holding.**
+
+Your tailnet is the sane way to do that, and there are two of them.
+
+**`--tailscale` — the flag.** orca-viz asks Tailscale for this machine's address and binds *that
+interface only*:
+
+```sh
+npx orca-viz@latest --tailscale --no-open
+#   listening on http://100.x.y.z:4269
+```
+
+It resolves the address with one read-only command (`tailscale ip -4`), and a Tailscale that
+cannot answer — not installed, stopped, logged out — **ends the boot**. It never falls back: not
+to loopback, which would silently break the URL you came for, and not to `0.0.0.0`, which would
+silently serve your task specs and your agents' prompts to whatever café you are sitting in. It
+also refuses to bind any address outside Tailscale's `100.64.0.0/10`, so there is no answer the
+flag can be given that widens your exposure.
+
+**`tailscale serve` — the recipe.** Leave orca-viz on loopback and let Tailscale proxy it:
+
+```sh
+npx orca-viz@latest --no-open
+tailscale serve --bg 4269      # https://<machine>.<tailnet>.ts.net
+```
+
+More setup, and one thing the flag cannot give you: **HTTPS**, and therefore a *secure context* —
+which is where `navigator.clipboard` lives. Over plain `http://` to a non-localhost address, the
+browser has no clipboard to offer and the "copy id" buttons quietly do nothing. If that annoys
+you, this is the fix.
+
+orca-viz does not run `tailscale serve` for you, and will not. That command writes state into
+`tailscaled` that **outlives this process** — a tool whose whole promise is that it never writes
+should not be a tool that can leave a live network exposure behind it on a crash. Running it is
+your call to make, and yours to undo (`tailscale serve --https=443 off`).
+
+**Neither one authenticates anybody.** orca-viz has no login, no token, and no access control:
+every device on your tailnet can read everything the database holds. Your Tailscale ACLs are the
+fence. And do not reach for `tailscale funnel` — that is the public internet.
 
 ## What it shows
 
